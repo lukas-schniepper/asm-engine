@@ -779,30 +779,35 @@ def show_data_ui():
                     elapsed = time.time() - start_time
                     remaining = (elapsed / (idx + 1)) * (len(tickers_in_db_update) - idx - 1) if idx > 0 else 0
 
+                    # Show ticker being processed BEFORE calling update
+                    status_text.info(f"📡 Verarbeite {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
+
                     result = dm.update_ticker_data(tickers=[tk_str])
 
-                    # Show detailed loading and saving info
-                    if tk_str in result.get('details', {}):
-                        detail = result['details'][tk_str]
+                    # Show detailed result info AFTER update completes
+                    details = result.get('details', {})
+                    if tk_str in details:
+                        detail = details[tk_str]
                         if detail.get('status') == 'success':
-                            saved_info = detail.get('saved', '')
-                            if remaining > 0:
-                                status_text.info(f"✅ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {saved_info} | ⏱️ ~{remaining/60:.1f} min verbleibend")
-                            else:
-                                status_text.info(f"✅ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {saved_info}")
+                            saved_info = detail.get('saved', 'Daten gespeichert')
+                            status_text.info(f"✅ {tk_str}: {saved_info} | ⏱️ ~{remaining/60:.1f} min verbleibend")
+                            updated_count += 1
                         elif detail.get('status') == 'skipped':
                             reason = detail.get('reason', 'Keine neuen Daten')
-                            status_text.info(f"⏭️ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {reason}")
+                            status_text.info(f"⏭️ {tk_str}: {reason} | ⏱️ ~{remaining/60:.1f} min verbleibend")
+                            skipped_count += 1
+                        elif detail.get('status') == 'loading':
+                            # This shouldn't happen, but show loading info if present
+                            load_info = detail.get('info', '')
+                            status_text.info(f"📥 {tk_str}: Lade {load_info}")
                     else:
-                        if remaining > 0:
-                            status_text.info(f"📡 {tk_str} ({idx+1}/{len(tickers_in_db_update)}) | ⏱️ ~{remaining/60:.1f} min")
+                        # Fallback if no details returned
+                        if result.get('updated'):
+                            status_text.info(f"✅ {tk_str}: Aktualisiert | ⏱️ ~{remaining/60:.1f} min verbleibend")
+                            updated_count += 1
                         else:
-                            status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
-
-                    if result.get('updated'):
-                        updated_count += 1
-                    else:
-                        skipped_count += 1
+                            status_text.info(f"⏭️ {tk_str}: Übersprungen | ⏱️ ~{remaining/60:.1f} min verbleibend")
+                            skipped_count += 1
 
                     # Update stats every 10 tickers
                     if (idx + 1) % 10 == 0:

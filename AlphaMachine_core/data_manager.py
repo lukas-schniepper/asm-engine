@@ -140,10 +140,12 @@ class StockDataManager:
                 )
             except Exception as e_eod:
                 print(f"Fehler bei EODHD API für {ticker_str_upper}: {e_eod}")
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': f'API Fehler: {str(e_eod)[:50]}'}
                 self.skipped_tickers.append(ticker_str_upper); continue
 
             if raw.empty:
                 print(f"Keine neuen Daten von EODHD für {ticker_str_upper} seit {start_date_for_yf} gefunden.")
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Keine neuen Daten'}
                 self.skipped_tickers.append(ticker_str_upper); continue
             
             if isinstance(raw.columns, pd.MultiIndex):
@@ -155,18 +157,25 @@ class StockDataManager:
             expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
             if not all(col in raw.columns for col in expected_cols):
                 print(f"WARNUNG: Fehlende Spalten für {ticker_str_upper}: {raw.columns.tolist()}. Überspringe.")
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Fehlende Datenspalten'}
                 self.skipped_tickers.append(ticker_str_upper); continue
-            
+
             df = raw[expected_cols].copy()
             df.dropna(subset=['Close', 'Volume'], inplace=True)
-            df = df[df['Volume'] > 0] 
-            if df.empty: continue
+            df = df[df['Volume'] > 0]
+            if df.empty:
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Keine validen Daten nach Filterung'}
+                self.skipped_tickers.append(ticker_str_upper)
+                continue
 
             df.reset_index(inplace=True)
             date_col_name = None
             if 'Date' in df.columns: date_col_name = 'Date'
             elif 'Datetime' in df.columns: date_col_name = 'Datetime' # yfinance gibt manchmal 'Datetime' zurück
-            if not date_col_name: self.skipped_tickers.append(ticker_str_upper); continue
+            if not date_col_name:
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Fehlende Datumsspalte'}
+                self.skipped_tickers.append(ticker_str_upper)
+                continue
             
             df.rename(columns={date_col_name: 'trade_date_dt_col'}, inplace=True)
             df['ticker'] = ticker_str_upper
