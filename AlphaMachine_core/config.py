@@ -7,21 +7,24 @@ _THIS_DIR = Path(__file__).resolve().parent
 
 print("DEBUG [config.py]: Lese DATABASE_URL...")
 
-# Versuche, DATABASE_URL aus st.secrets zu lesen
-# ANNAHME: Dein Schlüssel in .streamlit/secrets.toml ist direkt "DATABASE_URL"
-# FALLS ER z.B. unter [database] -> url ist, ändere es zu: st.secrets.get("database", {}).get("url")
-DATABASE_URL_FROM_SECRETS = st.secrets.get("DATABASE_URL")
-
-# Fallback auf OS-Umgebungsvariable (nützlich für Tests außerhalb von Streamlit)
+# Prüfe ZUERST OS-Umgebungsvariable (für GitHub Actions, CLI-Scripts)
 DATABASE_URL_FROM_OS_ENV = os.getenv("DATABASE_URL")
 
+# Dann versuche st.secrets (für Streamlit App)
+DATABASE_URL_FROM_SECRETS = None
+try:
+    DATABASE_URL_FROM_SECRETS = st.secrets.get("DATABASE_URL")
+except Exception:
+    # st.secrets kann fehlschlagen außerhalb von Streamlit - das ist ok
+    pass
+
 DATABASE_URL = None # Initialisiere
-if DATABASE_URL_FROM_SECRETS:
-    DATABASE_URL = DATABASE_URL_FROM_SECRETS
-    print("DEBUG [config.py]: DATABASE_URL wurde aus st.secrets verwendet.")
-elif DATABASE_URL_FROM_OS_ENV:
+if DATABASE_URL_FROM_OS_ENV:
     DATABASE_URL = DATABASE_URL_FROM_OS_ENV
     print("DEBUG [config.py]: DATABASE_URL wurde aus OS Umgebungsvariable (os.getenv) verwendet.")
+elif DATABASE_URL_FROM_SECRETS:
+    DATABASE_URL = DATABASE_URL_FROM_SECRETS
+    print("DEBUG [config.py]: DATABASE_URL wurde aus st.secrets verwendet.")
 
 if not DATABASE_URL:
     error_msg = (
@@ -37,7 +40,12 @@ if not DATABASE_URL:
 print(f"INFO [config.py]: DATABASE_URL erfolgreich initialisiert (Auszug): ...{DATABASE_URL[-20:]}") # Zeige etwas mehr von der URL zum Prüfen
 
 # API_KEY analog behandeln, falls nötig
-API_KEY = st.secrets.get("API_KEY", os.getenv("API_KEY"))
+API_KEY = os.getenv("API_KEY")
+if not API_KEY:
+    try:
+        API_KEY = st.secrets.get("API_KEY")
+    except Exception:
+        pass
 if not API_KEY:
     print("WARNUNG [config.py]: API_KEY nicht gefunden.")
 
@@ -86,7 +94,11 @@ BENCHMARK_TICKERS = ["SPY"]
 
 # === Risikomanagement ===
 # Hole "enabled" auch aus Secrets, falls es zur Laufzeit änderbar sein soll, sonst Default hier
-risk_overlay_enabled_secret = st.secrets.get("RISK_OVERLAY_ENABLED", True) 
+risk_overlay_enabled_secret = True
+try:
+    risk_overlay_enabled_secret = st.secrets.get("RISK_OVERLAY_ENABLED", True)
+except Exception:
+    pass
 
 RISK_OVERLAY = {
     "enabled": risk_overlay_enabled_secret, 
