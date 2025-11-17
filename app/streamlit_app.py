@@ -764,13 +764,40 @@ def show_data_ui():
             
             if not tickers_in_db_update: st.info("Keine Ticker in DB zum Updaten.")
             else:
-                st.info(f"Update für {len(tickers_in_db_update)} Ticker startet..."); progress_bar = st.progress(0.0); status_text = st.empty(); updated_count = 0
+                import time
+                start_time = time.time()
+                estimated_time = len(tickers_in_db_update) * 0.5 / 60  # 0.5s per ticker
+                st.info(f"🔄 Update für {len(tickers_in_db_update)} Ticker startet...")
+                st.info(f"⏱️ Geschätzte Dauer: ~{estimated_time:.1f} Minuten")
+                progress_bar = st.progress(0.0)
+                status_text = st.empty()
+                stats_text = st.empty()
+                updated_count = 0
+                skipped_count = 0
+
                 for idx, tk_str in enumerate(tickers_in_db_update):
-                    status_text.info(f"📡 Lade Preise für {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
-                    success_list = dm.update_ticker_data(tickers=[tk_str]); 
-                    if success_list: updated_count += 1
+                    elapsed = time.time() - start_time
+                    if idx > 0:
+                        remaining = (elapsed / idx) * (len(tickers_in_db_update) - idx)
+                        status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)}) | ⏱️ Verbleibend: ~{remaining/60:.1f} min")
+                    else:
+                        status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
+
+                    success_list = dm.update_ticker_data(tickers=[tk_str])
+                    if success_list:
+                        updated_count += 1
+                    else:
+                        skipped_count += 1
+
+                    # Update stats every 10 tickers
+                    if (idx + 1) % 10 == 0:
+                        stats_text.info(f"✅ Aktualisiert: {updated_count} | ⏭️ Übersprungen: {skipped_count}")
+
                     progress_bar.progress((idx + 1) / len(tickers_in_db_update))
-                status_text.success(f"✅ Preisupdate abgeschlossen. {updated_count} von {len(tickers_in_db_update)} Ticker hatten neue Daten/wurden aktualisiert.")
+
+                total_time = time.time() - start_time
+                status_text.success(f"✅ Update abgeschlossen in {total_time/60:.1f} Minuten")
+                stats_text.success(f"📊 Aktualisiert: {updated_count} | Übersprungen: {skipped_count} | Gesamt: {len(tickers_in_db_update)}")
         return 
 
     # --- View/Delete Mode ---
