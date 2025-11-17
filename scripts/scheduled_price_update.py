@@ -12,9 +12,9 @@ from pathlib import Path
 # Add parent directory to path to import AlphaMachine modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from AlphaMachine_core.data_manager import DataManager
+from AlphaMachine_core.data_manager import StockDataManager
 from AlphaMachine_core.models import TickerPeriod
-from AlphaMachine_core.database import get_session
+from AlphaMachine_core.db import get_session
 from sqlmodel import select
 
 
@@ -42,10 +42,10 @@ def main():
     print(f"   EODHD_API_KEY: {eodhd_key[:10]}...{eodhd_key[-4:]}")
 
     try:
-        # Initialize DataManager
-        print("\n📊 Initializing DataManager...")
-        dm = DataManager()
-        print("✅ DataManager initialized successfully")
+        # Initialize StockDataManager
+        print("\n📊 Initializing StockDataManager...")
+        dm = StockDataManager()
+        print("✅ StockDataManager initialized successfully")
 
         # Get all tickers from database
         print("\n🔍 Fetching tickers from database...")
