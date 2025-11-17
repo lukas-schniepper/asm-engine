@@ -1,0 +1,43 @@
+name: Update Ticker Prices
+
+on:
+  schedule:
+    # Monday at 02:00 Swiss time (01:00 UTC in winter, 00:00 UTC in summer)
+    # Using 01:00 UTC as compromise (Switzerland is UTC+1 in winter, UTC+2 in summer)
+    - cron: '0 1 * * 1'  # Monday 01:00 UTC = 02:00 CET (winter) / 03:00 CEST (summer)
+    # Thursday at 02:00 Swiss time
+    - cron: '0 1 * * 4'  # Thursday 01:00 UTC = 02:00 CET (winter) / 03:00 CEST (summer)
+
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Update all ticker prices
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          python scripts/scheduled_price_update.py
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Price update failed on $(date)"
+          echo "Check logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
