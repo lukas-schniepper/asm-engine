@@ -777,21 +777,36 @@ def show_data_ui():
 
                 for idx, tk_str in enumerate(tickers_in_db_update):
                     elapsed = time.time() - start_time
-                    if idx > 0:
-                        remaining = (elapsed / idx) * (len(tickers_in_db_update) - idx)
-                        status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)}) | ⏱️ Verbleibend: ~{remaining/60:.1f} min")
-                    else:
-                        status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
+                    remaining = (elapsed / (idx + 1)) * (len(tickers_in_db_update) - idx - 1) if idx > 0 else 0
 
-                    success_list = dm.update_ticker_data(tickers=[tk_str])
-                    if success_list:
+                    result = dm.update_ticker_data(tickers=[tk_str])
+
+                    # Show detailed loading and saving info
+                    if tk_str in result.get('details', {}):
+                        detail = result['details'][tk_str]
+                        if detail.get('status') == 'success':
+                            saved_info = detail.get('saved', '')
+                            if remaining > 0:
+                                status_text.info(f"✅ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {saved_info} | ⏱️ ~{remaining/60:.1f} min verbleibend")
+                            else:
+                                status_text.info(f"✅ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {saved_info}")
+                        elif detail.get('status') == 'skipped':
+                            reason = detail.get('reason', 'Keine neuen Daten')
+                            status_text.info(f"⏭️ {tk_str} ({idx+1}/{len(tickers_in_db_update)}): {reason}")
+                    else:
+                        if remaining > 0:
+                            status_text.info(f"📡 {tk_str} ({idx+1}/{len(tickers_in_db_update)}) | ⏱️ ~{remaining/60:.1f} min")
+                        else:
+                            status_text.info(f"📡 Lade {tk_str} ({idx+1}/{len(tickers_in_db_update)})...")
+
+                    if result.get('updated'):
                         updated_count += 1
                     else:
                         skipped_count += 1
 
                     # Update stats every 10 tickers
                     if (idx + 1) % 10 == 0:
-                        stats_text.info(f"✅ Aktualisiert: {updated_count} | ⏭️ Übersprungen: {skipped_count}")
+                        stats_text.info(f"📊 Aktualisiert: {updated_count} | Übersprungen: {skipped_count}")
 
                     progress_bar.progress((idx + 1) / len(tickers_in_db_update))
 

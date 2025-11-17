@@ -96,7 +96,7 @@ class StockDataManager:
                 session.commit()
         return created_tickers
 
-    def update_ticker_data(self, tickers: Optional[List[str]] = None, history_start: str = '1990-01-01') -> List[str]:
+    def update_ticker_data(self, tickers: Optional[List[str]] = None, history_start: str = '1990-01-01') -> Dict[str, Any]:
         target_tickers_list: List[str]
         if tickers is None:
             with get_session() as session:
@@ -108,6 +108,7 @@ class StockDataManager:
         history_dt = pd.to_datetime(history_start).date()
         today = dt.date.today()
         updated_tickers_list: List[str] = []
+        ticker_details: Dict[str, Dict[str, Any]] = {}  # Store details per ticker
 
         for ticker_str_upper in target_tickers_list:
             last_date_in_db: Optional[dt.date] = None
@@ -123,11 +124,14 @@ class StockDataManager:
             start_date_for_yf = (last_date_in_db + dt.timedelta(days=1)) if last_date_in_db else history_dt
             
             if start_date_for_yf > today:
+                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Bereits aktuell'}
                 continue
 
             # Calculate expected days
             expected_days = len(pd.bdate_range(start_date_for_yf, today))
-            print(f"📡 Lade {ticker_str_upper}: {start_date_for_yf} bis {today} (~{expected_days} Handelstage)")
+            load_info = f"{start_date_for_yf} bis {today} (~{expected_days} Handelstage)"
+            ticker_details[ticker_str_upper] = {'status': 'loading', 'info': load_info}
+            print(f"📡 Lade {ticker_str_upper}: {load_info}")
             try:
                 raw = self.eodhd_client.get_eod_data(
                     ticker=ticker_str_upper,
@@ -174,7 +178,9 @@ class StockDataManager:
             with get_session() as session:
                 first_date = new_df['trade_date'].min()
                 last_date = new_df['trade_date'].max()
-                print(f"✅ {ticker_str_upper}: {len(new_df)} Tage von {first_date} bis {last_date} -> DB")
+                saved_info = f"{len(new_df)} Tage von {first_date} bis {last_date}"
+                ticker_details[ticker_str_upper].update({'status': 'success', 'saved': saved_info})
+                print(f"✅ {ticker_str_upper}: {saved_info} -> DB")
                 objs_to_add = []
                 for _, r in new_df.iterrows():
                     try:
@@ -195,7 +201,13 @@ class StockDataManager:
             self._update_ticker_info(ticker_str_upper)
             updated_tickers_list.append(ticker_str_upper)
             time.sleep(0.25) # Etwas längere Pause
-        return updated_tickers_list
+
+        return {
+            'updated': updated_tickers_list,
+            'skipped': self.skipped_tickers,
+            'total': len(target_tickers_list),
+            'details': ticker_details
+        }
 
     def _update_ticker_info(self, ticker: str) -> bool:
         print(f"Versuche Ticker-Info für {ticker} zu aktualisieren...")
