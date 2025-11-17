@@ -259,26 +259,59 @@ class EODHDHttpClient:
 
     def get_ticker_info(self, ticker: str) -> Dict[str, Any]:
         """
-        Fetch ticker fundamental data (sector, industry, etc.)
+        Fetch ticker fundamental data from EODHD Fundamentals API
 
-        Note: EODHD fundamentals API requires separate endpoint
-        Endpoint: GET https://eodhd.com/api/fundamentals/{SYMBOL}
-
-        For now, returns minimal info as ticker metadata is not critical
-        for backtesting functionality.
+        API Endpoint: GET https://eodhd.com/api/fundamentals/{SYMBOL}
 
         Args:
             ticker: Stock ticker
 
         Returns:
-            Dictionary with ticker information (minimal implementation)
+            Dictionary with ticker information matching yfinance format
         """
-        # Full implementation would call:
-        # https://eodhd.com/api/fundamentals/{SYMBOL}?api_token={KEY}
+        eodhd_symbol = self._transform_ticker(ticker)
 
-        # For MVP, return placeholder values
-        # This data is only used for TickerInfo table, not for backtesting
+        endpoint = f"{self.BASE_URL}/fundamentals/{eodhd_symbol}"
+        params = {
+            'api_token': self.api_key
+        }
 
+        try:
+            response = self.session.get(endpoint, params=params, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Extract general info
+                general = data.get('General', {})
+
+                # Transform to yfinance-compatible format
+                return {
+                    'sector': general.get('Sector', 'Unknown'),
+                    'industry': general.get('Industry', 'Unknown'),
+                    'currency': general.get('CurrencyCode', 'USD'),
+                    'country': general.get('CountryISO', 'US'),
+                    'exchange': general.get('Exchange', 'US'),
+                    'quoteType': general.get('Type', 'Common Stock'),
+                    'marketCap': general.get('MarketCapitalization', None),
+                    'fullTimeEmployees': general.get('FullTimeEmployees', None),
+                    'website': general.get('WebURL', None)
+                }
+
+            elif response.status_code == 404:
+                print(f"⚠️ Fundamentals not found for {ticker} ({eodhd_symbol})")
+                return self._get_placeholder_info()
+
+            else:
+                print(f"⚠️ Failed to fetch fundamentals for {ticker}: HTTP {response.status_code}")
+                return self._get_placeholder_info()
+
+        except Exception as e:
+            print(f"⚠️ Error fetching fundamentals for {ticker}: {e}")
+            return self._get_placeholder_info()
+
+    def _get_placeholder_info(self) -> Dict[str, Any]:
+        """Return placeholder info when fundamentals API fails"""
         return {
             'sector': 'Unknown',
             'industry': 'Unknown',

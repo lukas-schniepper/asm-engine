@@ -125,7 +125,9 @@ class StockDataManager:
             if start_date_for_yf > today:
                 continue
 
-            print(f"Lade EODHD-Daten für {ticker_str_upper} von {start_date_for_yf} bis {today + dt.timedelta(days=1)}")
+            # Calculate expected days
+            expected_days = len(pd.bdate_range(start_date_for_yf, today))
+            print(f"📡 Lade {ticker_str_upper}: {start_date_for_yf} bis {today} (~{expected_days} Handelstage)")
             try:
                 raw = self.eodhd_client.get_eod_data(
                     ticker=ticker_str_upper,
@@ -170,7 +172,9 @@ class StockDataManager:
             if new_df.empty: continue
 
             with get_session() as session:
-                print(f"Füge {len(new_df)} neue Preisdatensätze für {ticker_str_upper} zur DB hinzu...")
+                first_date = new_df['trade_date'].min()
+                last_date = new_df['trade_date'].max()
+                print(f"✅ {ticker_str_upper}: {len(new_df)} Tage von {first_date} bis {last_date} -> DB")
                 objs_to_add = []
                 for _, r in new_df.iterrows():
                     try:
