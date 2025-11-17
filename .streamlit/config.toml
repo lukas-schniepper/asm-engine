@@ -1,0 +1,19 @@
+[server]
+# Increase timeout for long-running data updates
+# With 700+ tickers, updates can take 10+ minutes
+maxUploadSize = 200
+enableXsrfProtection = true
+enableCORS = false
+
+# Increase script execution timeout
+# Default is 10 minutes, we need more for large ticker updates
+maxMessageSize = 200
+
+[browser]
+# Keep connection alive during long operations
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+
+[runner]
+# Increase script timeout to 30 minutes for large data updates
+fastReruns = true
