@@ -47,7 +47,72 @@ def get_overlay():
         return RiskOverlay(CFG.RISK_OVERLAY["config_path"])
     return None
 
-init_db() 
+init_db()
+
+# ---------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------
+
+def convert_single_ticker_pricedata_to_ohlcv_df(
+    price_data_dicts: List[Dict[str, Any]],
+    ticker: str,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp
+) -> pd.DataFrame:
+    """
+    Convert list of PriceData dicts to OHLCV DataFrame for charting.
+
+    Args:
+        price_data_dicts: List of dicts with keys: ticker, trade_date, open, high, low, close, volume
+        ticker: Ticker symbol (for filtering)
+        start_date: Start date for filtering
+        end_date: End date for filtering
+
+    Returns:
+        DataFrame with DatetimeIndex and columns: Open, High, Low, Close, Volume
+    """
+    if not price_data_dicts:
+        return pd.DataFrame()
+
+    # Filter for the specific ticker
+    ticker_data = [d for d in price_data_dicts if d.get('ticker') == ticker]
+
+    if not ticker_data:
+        return pd.DataFrame()
+
+    # Convert to DataFrame
+    df = pd.DataFrame(ticker_data)
+
+    # Convert trade_date to datetime and set as index
+    df['trade_date'] = pd.to_datetime(df['trade_date'])
+    df = df.set_index('trade_date')
+
+    # Rename columns to standard OHLCV format
+    column_mapping = {
+        'open': 'Open',
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume'
+    }
+    df = df.rename(columns=column_mapping)
+
+    # Select only OHLCV columns
+    ohlcv_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    available_cols = [col for col in ohlcv_cols if col in df.columns]
+    df = df[available_cols]
+
+    # Convert to numeric
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Filter by date range
+    df = df[(df.index >= start_date) & (df.index <= end_date)]
+
+    # Sort by date
+    df = df.sort_index()
+
+    return df
 
 # ---------------------------------------------------------------
 # Helper Funktion zur Formatierung von Zahlen
