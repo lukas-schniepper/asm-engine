@@ -90,3 +90,4 @@ watchdog==6.0.0 ; python_version >= "3.10" and python_version < "4.0" and platfo
 sqlmodel
 psycopg[binary]
 yfinance==0.2.56 ; python_version >= "3.10" and python_version < "4.0"
+-e .
