@@ -635,8 +635,13 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             if nav_df.empty:
                 continue
 
-            nav_series = nav_df["nav"]
-            returns = nav_series.pct_change()
+            # Use pre-computed daily_return from database (accounts for overlay allocation)
+            # This is important for overlay variants where return = raw_return * allocation
+            if "daily_return" in nav_df.columns:
+                returns = nav_df["daily_return"]
+            else:
+                # Fallback to pct_change if daily_return not available
+                returns = nav_df["nav"].pct_change()
 
             # Group by month
             monthly_data = {}
@@ -678,107 +683,64 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     st.markdown("---")
 
     # Build DataFrame for display - grouped by portfolio with variant sub-columns
-    # Create multi-level column structure
-    table_data = []
+    portfolios_with_data = [p for p in selected_portfolio_names if p in portfolio_data]
 
+    # Helper function to color values
+    def color_value(val):
+        if val is None or val == "-" or val == "•":
+            return "color: #666"
+        try:
+            num = float(str(val).replace("%", ""))
+            if num > 0:
+                return "color: #22c55e; font-weight: 600"
+            elif num < 0:
+                return "color: #ef4444; font-weight: 600"
+        except (ValueError, TypeError):
+            pass
+        return ""
+
+    # Build monthly returns table
+    monthly_table_data = []
     for month in all_months:
         row = {"Month": f"{month} (MTD)" if month == current_month else month}
 
-        for portfolio_name in selected_portfolio_names:
-            if portfolio_name not in portfolio_data:
-                continue
+        for portfolio_name in portfolios_with_data:
             port_variants = portfolio_data[portfolio_name]
             clean_pname = clean_name(portfolio_name)
 
             for variant in selected_variants:
                 if variant not in port_variants:
-                    col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
-                    row[col_name] = None
                     continue
-
-                col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
                 if month in port_variants[variant]:
-                    row[col_name] = port_variants[variant][month]["total"]
+                    val = port_variants[variant][month]["total"] * 100
+                    row[col_name] = f"{val:.2f}%"
                 else:
-                    row[col_name] = None
+                    row[col_name] = "•"
 
-        table_data.append(row)
+        monthly_table_data.append(row)
 
-    if not table_data:
+    if not monthly_table_data:
         st.info("No data to display.")
         return
 
-    df = pd.DataFrame(table_data)
+    monthly_df = pd.DataFrame(monthly_table_data)
 
-    # Create styled HTML table with grouped headers
-    portfolios_with_data = [p for p in selected_portfolio_names if p in portfolio_data]
+    # Style the monthly dataframe
+    value_cols = [c for c in monthly_df.columns if c != "Month"]
+    styled_monthly = monthly_df.style.applymap(
+        color_value, subset=value_cols
+    ).set_properties(**{"text-align": "center"}, subset=value_cols)
 
-    # Build HTML table
-    html = ['<style>']
-    html.append('''
-        .compact-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-        .compact-table th, .compact-table td { padding: 4px 8px; text-align: center; border-bottom: 1px solid #333; }
-        .compact-table th { background: #1a1a2e; }
-        .compact-table .portfolio-header { border-bottom: 2px solid #444; font-weight: 700; font-size: 14px; }
-        .compact-table .variant-header { font-weight: 500; font-size: 12px; color: #888; }
-        .compact-table .month-col { text-align: left; font-weight: 600; min-width: 90px; }
-        .compact-table .positive { color: #22c55e; font-weight: 600; }
-        .compact-table .negative { color: #ef4444; font-weight: 600; }
-        .compact-table .no-data { color: #666; }
-        .compact-table tr:hover { background: rgba(255,255,255,0.05); }
-    ''')
-    html.append('</style>')
+    st.markdown("##### Monthly Returns")
+    st.dataframe(styled_monthly, use_container_width=True, hide_index=True, height=min(400, 35 * len(monthly_df) + 38))
 
-    html.append('<table class="compact-table">')
-
-    # Header row 1: Portfolio names (spanning variant columns)
-    html.append('<tr>')
-    html.append('<th class="portfolio-header month-col"></th>')
-    for portfolio_name in portfolios_with_data:
-        num_variants = len([v for v in selected_variants if v in portfolio_data[portfolio_name]])
-        if num_variants > 0:
-            html.append(f'<th class="portfolio-header" colspan="{num_variants}">{clean_name(portfolio_name)}</th>')
-    html.append('</tr>')
-
-    # Header row 2: Variant names
-    html.append('<tr>')
-    html.append('<th class="variant-header month-col">Month</th>')
-    for portfolio_name in portfolios_with_data:
-        for variant in selected_variants:
-            if variant in portfolio_data[portfolio_name]:
-                html.append(f'<th class="variant-header">{variant_abbrev.get(variant, variant)}</th>')
-    html.append('</tr>')
-
-    # Data rows
-    for _, row in df.iterrows():
-        html.append('<tr>')
-        html.append(f'<td class="month-col">{row["Month"]}</td>')
-
-        for portfolio_name in portfolios_with_data:
-            clean_pname = clean_name(portfolio_name)
-            for variant in selected_variants:
-                if variant not in portfolio_data[portfolio_name]:
-                    continue
-                col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
-                if col_name in row and row[col_name] is not None:
-                    val = row[col_name] * 100
-                    css_class = "positive" if val > 0 else "negative"
-                    html.append(f'<td class="{css_class}">{val:.2f}%</td>')
-                else:
-                    html.append('<td class="no-data">•</td>')
-
-        html.append('</tr>')
-
-    html.append('</table>')
-
-    st.markdown(''.join(html), unsafe_allow_html=True)
-
-    # Expandable daily details section
+    # Daily details section
     st.markdown("---")
     st.markdown("##### Daily Details")
 
     selected_month = st.selectbox(
-        "Select month to view daily returns:",
+        "Select month:",
         options=all_months,
         format_func=lambda x: f"{x} (MTD)" if x == current_month else x,
         key="daily_details_month",
@@ -803,7 +765,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                     for variant in selected_variants:
                         if variant not in portfolio_data[portfolio_name]:
                             continue
-                        col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                        col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
                         if selected_month in portfolio_data[portfolio_name][variant]:
                             day_ret = next(
                                 (d["return"] for d in portfolio_data[portfolio_name][variant][selected_month]["days"] if d["date"] == day),
@@ -819,7 +781,11 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
             if daily_table_data:
                 daily_df = pd.DataFrame(daily_table_data)
-                st.dataframe(daily_df, use_container_width=True, hide_index=True, height=250)
+                value_cols = [c for c in daily_df.columns if c != "Date"]
+                styled_daily = daily_df.style.applymap(
+                    color_value, subset=value_cols
+                ).set_properties(**{"text-align": "center"}, subset=value_cols)
+                st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=min(300, 35 * len(daily_df) + 38))
         else:
             st.info("No daily data available for this month.")
 
