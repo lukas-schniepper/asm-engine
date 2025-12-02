@@ -115,14 +115,22 @@ def _render_performance_tracker():
     # Sidebar controls
     st.sidebar.header("Portfolio Selection")
 
-    # Portfolio selector - sorted alphabetically
-    portfolio_options = {p.name: p.id for p in sorted(portfolios, key=lambda x: x.name)}
-    selected_portfolio_name = st.sidebar.selectbox(
+    # Helper to clean portfolio name for display
+    def clean_display_name(name: str) -> str:
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
+    # Portfolio selector - sorted alphabetically, display clean names
+    sorted_portfolios = sorted(portfolios, key=lambda x: x.name)
+    portfolio_id_map = {p.name: p.id for p in sorted_portfolios}
+    display_to_actual = {clean_display_name(p.name): p.name for p in sorted_portfolios}
+
+    selected_display_name = st.sidebar.selectbox(
         "Select Portfolio",
-        options=list(portfolio_options.keys()),
+        options=list(display_to_actual.keys()),
         index=0,
     )
-    selected_portfolio_id = portfolio_options[selected_portfolio_name]
+    selected_portfolio_name = display_to_actual[selected_display_name]
+    selected_portfolio_id = portfolio_id_map[selected_portfolio_name]
 
     # Get portfolio details
     portfolio = tracker.get_portfolio(selected_portfolio_id)
