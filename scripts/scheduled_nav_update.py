@@ -44,6 +44,25 @@ from typing import Optional
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# Load secrets from .streamlit/secrets.toml if not already in environment
+def _load_secrets():
+    """Load secrets from .streamlit/secrets.toml into environment variables."""
+    secrets_path = project_root / ".streamlit" / "secrets.toml"
+    if secrets_path.exists():
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+
+        with open(secrets_path, "rb") as f:
+            secrets = tomllib.load(f)
+
+        for key, value in secrets.items():
+            if key not in os.environ and isinstance(value, str):
+                os.environ[key] = value
+
+_load_secrets()
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -246,6 +265,22 @@ def run_daily_update(
     import pandas as pd
 
     price_df = pd.DataFrame(price_dicts)
+
+    # If no price data, try to fetch it from EODHD
+    if price_df.empty:
+        logger.info("No cached price data found, fetching from EODHD...")
+        try:
+            dm.update_ticker_data(list(all_tickers))
+            # Retry getting price data
+            price_dicts = dm.get_price_data(
+                list(all_tickers),
+                min_date.strftime("%Y-%m-%d"),
+                max_date.strftime("%Y-%m-%d"),
+            )
+            price_df = pd.DataFrame(price_dicts)
+        except Exception as e:
+            logger.error(f"Failed to fetch price data: {e}")
+
     if price_df.empty:
         logger.error("No price data available")
         return {"success": False, "error": "No price data"}

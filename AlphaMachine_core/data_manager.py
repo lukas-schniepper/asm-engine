@@ -52,7 +52,7 @@ class StockDataManager:
             )
 
         self.eodhd_client = EODHDHttpClient(api_key)
-        print("✅ EODHD HTTP client initialized successfully")
+        print("SUCCESS: EODHD HTTP client initialized successfully")
 
         # Initialize EODHD HTTP client
         api_key = os.getenv('EODHD_API_KEY')
@@ -71,7 +71,7 @@ class StockDataManager:
             )
 
         self.eodhd_client = EODHDHttpClient(api_key)
-        print("✅ EODHD HTTP client initialized successfully")
+        print("SUCCESS: EODHD HTTP client initialized successfully")
 
     def add_tickers_for_period(self, tickers: List[str], period_start_date: str, period_end_date: Optional[str] = None, source_name: str = "manual") -> List[str]:
         start = pd.to_datetime(period_start_date).date()
@@ -131,7 +131,7 @@ class StockDataManager:
             expected_days = len(pd.bdate_range(start_date_for_yf, today))
             load_info = f"{start_date_for_yf} bis {today} (~{expected_days} Handelstage)"
             ticker_details[ticker_str_upper] = {'status': 'loading', 'info': load_info}
-            print(f"📡 Lade {ticker_str_upper}: {load_info}")
+            print(f"LOADING: {ticker_str_upper}: {load_info}")
             try:
                 raw = self.eodhd_client.get_eod_data(
                     ticker=ticker_str_upper,
@@ -189,7 +189,7 @@ class StockDataManager:
                 last_date = new_df['trade_date'].max()
                 saved_info = f"{len(new_df)} Tage von {first_date} bis {last_date}"
                 ticker_details[ticker_str_upper].update({'status': 'success', 'saved': saved_info})
-                print(f"✅ {ticker_str_upper}: {saved_info} -> DB")
+                print(f"OK: {ticker_str_upper}: {saved_info} -> DB")
                 objs_to_add = []
                 for _, r in new_df.iterrows():
                     try:
@@ -224,7 +224,7 @@ class StockDataManager:
             info = self.eodhd_client.get_ticker_info(ticker)
 
             if not info:
-                print(f"⚠️ Keine Info von EODHD für {ticker} erhalten.")
+                print(f"WARNING: Keine Info von EODHD fuer {ticker} erhalten.")
                 return False
             
             data_to_update: Dict[str, Any] = {
@@ -264,7 +264,7 @@ class StockDataManager:
                 session.commit()
             return True
         except Exception as e: # Breiterer Exception-Fang für yfinance-Info-Probleme
-            print(f"⚠️ Fehler _update_ticker_info für {ticker}: {e}")
+            print(f"WARNING: Fehler _update_ticker_info fuer {ticker}: {e}")
             return False
 
     def get_periods(self, month: str, source: str) -> List[Dict[str, Any]]:
