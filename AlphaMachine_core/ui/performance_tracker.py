@@ -810,7 +810,23 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
     # Sort portfolios alphabetically
     all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
-    portfolio_options = {p.name: p.id for p in all_portfolios_sorted}
+
+    # Helper to clean portfolio name
+    def clean_name(name: str) -> str:
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
+    # Default portfolio filter keywords
+    default_keywords = ["SA_LargeCaps", "SA_MidCaps", "SPY", "TR10_LargeCapsX", "TR10", "TopWeights", "TW30"]
+
+    # Determine default selected portfolios
+    def matches_default(name: str) -> bool:
+        for keyword in default_keywords:
+            if keyword.lower() in name.lower():
+                return True
+        return False
+
+    default_selected = [p.name for p in all_portfolios_sorted if matches_default(p.name)]
+    all_portfolio_names = [p.name for p in all_portfolios_sorted]
 
     # Controls
     col1, col2 = st.columns(2)
@@ -836,14 +852,25 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         else:
             start_date, end_date = default_start, sidebar_end_date
 
-    # Helper to clean portfolio name
-    def clean_name(name: str) -> str:
-        return name.replace("_EqualWeight", "").replace("_", " ")
+    # Portfolio filter
+    selected_portfolios = st.multiselect(
+        "Select Portfolios",
+        options=all_portfolio_names,
+        default=default_selected if default_selected else all_portfolio_names[:5],
+        key="scraper_view_portfolios",
+    )
 
-    # Collect daily returns for all portfolios
+    if not selected_portfolios:
+        st.warning("Please select at least one portfolio.")
+        return
+
+    # Filter to selected portfolios
+    filtered_portfolios = [p for p in all_portfolios_sorted if p.name in selected_portfolios]
+
+    # Collect daily returns for selected portfolios
     returns_data = {}
 
-    for portfolio in all_portfolios_sorted:
+    for portfolio in filtered_portfolios:
         nav_df = tracker.get_nav_series(portfolio.id, selected_variant, start_date, end_date)
 
         if nav_df.empty:
@@ -896,23 +923,25 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
     # Style function for color coding
     def color_returns(val):
-        """Color cells based on return value - orange/yellow for positive, blue for negative."""
+        """Color cells based on return value - green for positive, red for negative."""
         if val == "" or val == "Portfolio":
             return ""
         try:
             num = float(val.replace("%", ""))
             if num > 5:
-                return "background-color: #ff8c00; color: white"  # Dark orange
+                return "background-color: #1e7b1e; color: white"  # Dark green
             elif num > 2:
-                return "background-color: #ffa500; color: black"  # Orange
+                return "background-color: #28a745; color: white"  # Green
             elif num > 0:
-                return "background-color: #fff3cd; color: black"  # Light yellow
+                return "background-color: #90EE90; color: black"  # Light green
+            elif num == 0:
+                return "background-color: #f8f9fa; color: black"  # Neutral gray
             elif num > -2:
-                return "background-color: #cce5ff; color: black"  # Light blue
+                return "background-color: #ffcccb; color: black"  # Light red
             elif num > -5:
-                return "background-color: #66b3ff; color: black"  # Medium blue
+                return "background-color: #dc3545; color: white"  # Red
             else:
-                return "background-color: #0066cc; color: white"  # Dark blue
+                return "background-color: #8b0000; color: white"  # Dark red
         except (ValueError, AttributeError):
             return ""
 
@@ -932,7 +961,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         axis=1
     )
 
-    # Calculate height based on number of rows
+    # Calculate height based on number of rows (no cap to avoid scrollbar)
     height = 35 * len(display_df) + 40
 
     # Display the table
@@ -940,7 +969,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         styled_df,
         use_container_width=True,
         hide_index=True,
-        height=min(height, 600),  # Cap at 600px
+        height=height,
     )
 
     # Show summary stats
