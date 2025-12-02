@@ -1,18 +1,24 @@
 # Daily NAV Update Workflow
 #
 # This workflow updates daily NAV for all tracked portfolios.
-# Runs after US market close (21:00 UTC = 4:00 PM ET / 5:00 PM ET during DST)
+# Runs after price update (01:00 UTC) to ensure fresh prices are available.
+#
+# Schedule:
+# - Price update: 00:00 UTC (3 hours after market close, Mon-Sat)
+# - NAV update: 01:00 UTC (after prices are updated, Mon-Sat)
 #
 # Prerequisites:
 # - DATABASE_URL secret must be set
 # - AWS credentials for S3 access (optional, will use cache if unavailable)
+# - EODHD_API_KEY secret (for backup price fetching)
 
 name: Daily NAV Update
 
 on:
   schedule:
-    # Run at 21:00 UTC Monday-Friday (after US market close)
-    - cron: '0 21 * * 1-5'
+    # Run at 01:00 UTC Monday-Saturday (after price update at 00:00 UTC)
+    # Saturday run processes Friday's trading day
+    - cron: '0 1 * * 1-6'
   workflow_dispatch:
     # Allow manual trigger with optional parameters
     inputs:
@@ -56,6 +62,7 @@ jobs:
       - name: Run NAV update
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'eu-central-1' }}
@@ -123,6 +130,7 @@ jobs:
       - name: Run backfill
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'eu-central-1' }}

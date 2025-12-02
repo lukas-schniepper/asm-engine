@@ -2,11 +2,11 @@ name: Update Ticker Prices
 
 on:
   schedule:
-    # Monday at 02:00 Swiss time (01:00 UTC in winter, 00:00 UTC in summer)
-    # Using 01:00 UTC as compromise (Switzerland is UTC+1 in winter, UTC+2 in summer)
-    - cron: '0 1 * * 1'  # Monday 01:00 UTC = 02:00 CET (winter) / 03:00 CEST (summer)
-    # Thursday at 02:00 Swiss time
-    - cron: '0 1 * * 4'  # Thursday 01:00 UTC = 02:00 CET (winter) / 03:00 CEST (summer)
+    # Run daily Monday-Saturday at 00:00 UTC (about 3 hours after US market close)
+    # This gives EODHD plenty of time to process end-of-day data
+    # Saturday run captures Friday's closing prices
+    # NY market closes at 21:00 UTC (winter) / 20:00 UTC (summer)
+    - cron: '0 0 * * 1-6'
 
   # Allow manual trigger from GitHub Actions UI
   workflow_dispatch:
