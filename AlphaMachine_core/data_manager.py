@@ -1,12 +1,12 @@
 # AlphaMachine_core/data_manager.py
 import time
 import datetime as dt
-# # # # import yfinance as yf  # Replaced with EODHD  # Replaced with EODHD  # Replaced with EODHD 
 import pandas as pd
 import os
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlmodel import select
-from sqlalchemy import func 
+from sqlalchemy import func
 
 from AlphaMachine_core.models import TickerPeriod, TickerInfo, PriceData
 from AlphaMachine_core.data_sources.eodhd_http_client import EODHDHttpClient
@@ -15,44 +15,6 @@ from AlphaMachine_core.db import get_session
 class StockDataManager:
     def __init__(self):
         self.skipped_tickers: List[str] = []
-
-        # Initialize EODHD HTTP client
-        api_key = os.getenv('EODHD_API_KEY')
-        if not api_key:
-            # Try Streamlit secrets as fallback
-            try:
-                import streamlit as st
-                api_key = st.secrets.get('EODHD_API_KEY')
-            except:
-                pass
-
-        if not api_key:
-            raise ValueError(
-                "EODHD_API_KEY not found in environment or Streamlit secrets. "
-                "Please add to .streamlit/secrets.toml"
-            )
-
-        self.eodhd_client = EODHDHttpClient(api_key)
-        print("SUCCESS: EODHD HTTP client initialized successfully")
-
-        # Initialize EODHD HTTP client
-        api_key = os.getenv('EODHD_API_KEY')
-        if not api_key:
-            # Try Streamlit secrets as fallback
-            try:
-                import streamlit as st
-                api_key = st.secrets.get('EODHD_API_KEY')
-            except:
-                pass
-
-        if not api_key:
-            raise ValueError(
-                "EODHD_API_KEY not found in environment or Streamlit secrets. "
-                "Please add to .streamlit/secrets.toml"
-            )
-
-        self.eodhd_client = EODHDHttpClient(api_key)
-        print("SUCCESS: EODHD HTTP client initialized successfully")
 
         # Initialize EODHD HTTP client
         api_key = os.getenv('EODHD_API_KEY')
@@ -96,7 +58,20 @@ class StockDataManager:
                 session.commit()
         return created_tickers
 
-    def update_ticker_data(self, tickers: Optional[List[str]] = None, history_start: str = '1990-01-01') -> Dict[str, Any]:
+    def update_ticker_data(self, tickers: Optional[List[str]] = None, history_start: str = '1990-01-01', max_workers: int = 10) -> Dict[str, Any]:
+        """
+        Update ticker data with optimizations:
+        - Batch DB query for last dates (single query instead of per-ticker)
+        - Skip up-to-date tickers early
+        - Parallel API calls using ThreadPoolExecutor
+        - Batch DB inserts
+        - Skip ticker info updates (can be run separately)
+
+        Args:
+            tickers: List of tickers to update (None = all in DB)
+            history_start: Start date for new tickers
+            max_workers: Number of parallel API workers (default 10)
+        """
         target_tickers_list: List[str]
         if tickers is None:
             with get_session() as session:
@@ -105,111 +80,186 @@ class StockDataManager:
         else:
             target_tickers_list = [t.upper() for t in tickers]
 
+        if not target_tickers_list:
+            return {'updated': [], 'skipped': [], 'total': 0, 'details': {}}
+
         history_dt = pd.to_datetime(history_start).date()
         today = dt.date.today()
         updated_tickers_list: List[str] = []
-        ticker_details: Dict[str, Dict[str, Any]] = {}  # Store details per ticker
+        ticker_details: Dict[str, Dict[str, Any]] = {}
+        self.skipped_tickers = []  # Reset for this run
 
-        for ticker_str_upper in target_tickers_list:
-            last_date_in_db: Optional[dt.date] = None
-            with get_session() as session:
-                result = session.exec(
-                    select(PriceData.trade_date)
-                    .where(PriceData.ticker == ticker_str_upper)
-                    .order_by(PriceData.trade_date.desc())
-                ).first()
-                if result:
-                    last_date_in_db = result 
-            
-            start_date_for_yf = (last_date_in_db + dt.timedelta(days=1)) if last_date_in_db else history_dt
-            
-            if start_date_for_yf > today:
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Bereits aktuell'}
-                continue
+        # OPTIMIZATION 1: Batch query for all last dates in one DB call
+        print(f"📊 Checking last dates for {len(target_tickers_list)} tickers...")
+        last_dates: Dict[str, dt.date] = {}
+        with get_session() as session:
+            # Get max trade_date per ticker in a single query
+            stmt = (
+                select(PriceData.ticker, func.max(PriceData.trade_date))
+                .where(PriceData.ticker.in_(target_tickers_list))
+                .group_by(PriceData.ticker)
+            )
+            results = session.exec(stmt).all()
+            for ticker, max_date in results:
+                if max_date:
+                    last_dates[ticker] = max_date
 
-            # Calculate expected days
-            expected_days = len(pd.bdate_range(start_date_for_yf, today))
-            load_info = f"{start_date_for_yf} bis {today} (~{expected_days} Handelstage)"
-            ticker_details[ticker_str_upper] = {'status': 'loading', 'info': load_info}
-            print(f"LOADING: {ticker_str_upper}: {load_info}")
+        # OPTIMIZATION 2: Filter out up-to-date tickers BEFORE making API calls
+        tickers_to_update: List[Tuple[str, dt.date]] = []
+        for ticker in target_tickers_list:
+            last_date = last_dates.get(ticker)
+            start_date = (last_date + dt.timedelta(days=1)) if last_date else history_dt
+
+            if start_date > today:
+                ticker_details[ticker] = {'status': 'skipped', 'reason': 'Already up-to-date'}
+                self.skipped_tickers.append(ticker)
+            else:
+                tickers_to_update.append((ticker, start_date))
+                expected_days = len(pd.bdate_range(start_date, today))
+                ticker_details[ticker] = {
+                    'status': 'pending',
+                    'info': f"{start_date} to {today} (~{expected_days} trading days)"
+                }
+
+        print(f"⏭️  Skipping {len(self.skipped_tickers)} up-to-date tickers")
+        print(f"🔄 Updating {len(tickers_to_update)} tickers...")
+
+        if not tickers_to_update:
+            return {
+                'updated': [],
+                'skipped': self.skipped_tickers,
+                'total': len(target_tickers_list),
+                'details': ticker_details
+            }
+
+        # OPTIMIZATION 3: Parallel API calls using ThreadPoolExecutor
+        def fetch_ticker_data(args: Tuple[str, dt.date]) -> Tuple[str, Optional[pd.DataFrame], Optional[str]]:
+            """Fetch data for a single ticker. Returns (ticker, df, error)."""
+            ticker, start_date = args
             try:
                 raw = self.eodhd_client.get_eod_data(
-                    ticker=ticker_str_upper,
-                    start_date=start_date_for_yf.strftime('%Y-%m-%d'),
+                    ticker=ticker,
+                    start_date=start_date.strftime('%Y-%m-%d'),
                     end_date=(today + dt.timedelta(days=1)).strftime('%Y-%m-%d')
                 )
-            except Exception as e_eod:
-                print(f"Fehler bei EODHD API für {ticker_str_upper}: {e_eod}")
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': f'API Fehler: {str(e_eod)[:50]}'}
-                self.skipped_tickers.append(ticker_str_upper); continue
+                if raw.empty:
+                    return (ticker, None, 'No new data')
+                return (ticker, raw, None)
+            except Exception as e:
+                return (ticker, None, f'API error: {str(e)[:50]}')
 
-            if raw.empty:
-                print(f"Keine neuen Daten von EODHD für {ticker_str_upper} seit {start_date_for_yf} gefunden.")
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Keine neuen Daten'}
-                self.skipped_tickers.append(ticker_str_upper); continue
-            
-            if isinstance(raw.columns, pd.MultiIndex):
-                if ticker_str_upper in raw.columns.get_level_values(1):
-                    raw = raw.xs(ticker_str_upper, axis=1, level=1)
-                else: 
-                    raw.columns = raw.columns.droplevel(0) # Annahme: oberstes Level kann weg, wenn Ticker nicht im 2. ist
+        fetched_data: Dict[str, pd.DataFrame] = {}
 
-            expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in raw.columns for col in expected_cols):
-                print(f"WARNUNG: Fehlende Spalten für {ticker_str_upper}: {raw.columns.tolist()}. Überspringe.")
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Fehlende Datenspalten'}
-                self.skipped_tickers.append(ticker_str_upper); continue
+        print(f"🚀 Fetching data with {max_workers} parallel workers...")
+        start_time = time.time()
 
-            df = raw[expected_cols].copy()
-            df.dropna(subset=['Close', 'Volume'], inplace=True)
-            df = df[df['Volume'] > 0]
-            if df.empty:
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Keine validen Daten nach Filterung'}
-                self.skipped_tickers.append(ticker_str_upper)
-                continue
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_ticker_data, args): args[0] for args in tickers_to_update}
+            completed = 0
+            for future in as_completed(futures):
+                ticker = futures[future]
+                completed += 1
+                try:
+                    ticker_result, df, error = future.result()
+                    if error:
+                        ticker_details[ticker_result] = {'status': 'skipped', 'reason': error}
+                        self.skipped_tickers.append(ticker_result)
+                    elif df is not None:
+                        fetched_data[ticker_result] = df
+                        ticker_details[ticker_result]['status'] = 'fetched'
+                except Exception as e:
+                    ticker_details[ticker] = {'status': 'skipped', 'reason': f'Error: {str(e)[:50]}'}
+                    self.skipped_tickers.append(ticker)
 
-            df.reset_index(inplace=True)
-            date_col_name = None
-            if 'Date' in df.columns: date_col_name = 'Date'
-            elif 'Datetime' in df.columns: date_col_name = 'Datetime' # yfinance gibt manchmal 'Datetime' zurück
-            if not date_col_name:
-                ticker_details[ticker_str_upper] = {'status': 'skipped', 'reason': 'Fehlende Datumsspalte'}
-                self.skipped_tickers.append(ticker_str_upper)
-                continue
-            
-            df.rename(columns={date_col_name: 'trade_date_dt_col'}, inplace=True)
-            df['ticker'] = ticker_str_upper
-            df['trade_date'] = pd.to_datetime(df['trade_date_dt_col']).dt.date
+                # Progress update every 50 tickers
+                if completed % 50 == 0:
+                    elapsed = time.time() - start_time
+                    print(f"   Progress: {completed}/{len(tickers_to_update)} ({elapsed:.1f}s)")
 
-            new_df = df 
-            if new_df.empty: continue
+        fetch_time = time.time() - start_time
+        print(f"✅ Fetched {len(fetched_data)} tickers in {fetch_time:.1f}s")
 
-            with get_session() as session:
-                first_date = new_df['trade_date'].min()
-                last_date = new_df['trade_date'].max()
-                saved_info = f"{len(new_df)} Tage von {first_date} bis {last_date}"
-                ticker_details[ticker_str_upper].update({'status': 'success', 'saved': saved_info})
-                print(f"OK: {ticker_str_upper}: {saved_info} -> DB")
-                objs_to_add = []
-                for _, r in new_df.iterrows():
-                    try:
-                        if pd.isna(r['Open']) or pd.isna(r['High']) or pd.isna(r['Low']) or pd.isna(r['Close']) or pd.isna(r['Volume']):
-                            continue
-                        objs_to_add.append(PriceData(
-                            ticker=str(r['ticker']), trade_date=r['trade_date'], 
-                            open=float(r['Open']), high=float(r['High']),
-                            low=float(r['Low']), close=float(r['Close']),
-                            volume=int(r['Volume'])
-                        ))
-                    except Exception as e_pd_conv:
-                        print(f"Fehler Konvertierung PriceData Record ({ticker_str_upper}, Datum {r.get('trade_date')}): {e_pd_conv}")
-                
-                if objs_to_add: session.add_all(objs_to_add); session.commit()
-                else: print(f"Keine validen Objekte für {ticker_str_upper} zum Hinzufügen.")
-            
-            self._update_ticker_info(ticker_str_upper)
-            updated_tickers_list.append(ticker_str_upper)
-            time.sleep(0.25) # Etwas längere Pause
+        # OPTIMIZATION 4: Process and batch insert all data
+        if fetched_data:
+            print(f"💾 Saving data to database...")
+            save_start = time.time()
+
+            all_price_objects: List[PriceData] = []
+
+            for ticker, raw in fetched_data.items():
+                try:
+                    # Handle MultiIndex columns if present
+                    if isinstance(raw.columns, pd.MultiIndex):
+                        if ticker in raw.columns.get_level_values(1):
+                            raw = raw.xs(ticker, axis=1, level=1)
+                        else:
+                            raw.columns = raw.columns.droplevel(0)
+
+                    expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    if not all(col in raw.columns for col in expected_cols):
+                        ticker_details[ticker] = {'status': 'skipped', 'reason': 'Missing data columns'}
+                        self.skipped_tickers.append(ticker)
+                        continue
+
+                    df = raw[expected_cols].copy()
+                    df.dropna(subset=['Close', 'Volume'], inplace=True)
+                    df = df[df['Volume'] > 0]
+
+                    if df.empty:
+                        ticker_details[ticker] = {'status': 'skipped', 'reason': 'No valid data after filtering'}
+                        self.skipped_tickers.append(ticker)
+                        continue
+
+                    df.reset_index(inplace=True)
+                    date_col_name = 'Date' if 'Date' in df.columns else 'Datetime' if 'Datetime' in df.columns else None
+
+                    if not date_col_name:
+                        ticker_details[ticker] = {'status': 'skipped', 'reason': 'Missing date column'}
+                        self.skipped_tickers.append(ticker)
+                        continue
+
+                    df['ticker'] = ticker
+                    df['trade_date'] = pd.to_datetime(df[date_col_name]).dt.date
+
+                    # Create PriceData objects
+                    for _, r in df.iterrows():
+                        try:
+                            if pd.isna(r['Open']) or pd.isna(r['High']) or pd.isna(r['Low']) or pd.isna(r['Close']) or pd.isna(r['Volume']):
+                                continue
+                            all_price_objects.append(PriceData(
+                                ticker=ticker,
+                                trade_date=r['trade_date'],
+                                open=float(r['Open']),
+                                high=float(r['High']),
+                                low=float(r['Low']),
+                                close=float(r['Close']),
+                                volume=int(r['Volume'])
+                            ))
+                        except Exception:
+                            pass
+
+                    first_date = df['trade_date'].min()
+                    last_date = df['trade_date'].max()
+                    saved_info = f"{len(df)} days from {first_date} to {last_date}"
+                    ticker_details[ticker] = {'status': 'success', 'saved': saved_info}
+                    updated_tickers_list.append(ticker)
+
+                except Exception as e:
+                    ticker_details[ticker] = {'status': 'skipped', 'reason': f'Processing error: {str(e)[:50]}'}
+                    self.skipped_tickers.append(ticker)
+
+            # Batch insert all price data in one transaction
+            if all_price_objects:
+                with get_session() as session:
+                    session.add_all(all_price_objects)
+                    session.commit()
+                print(f"✅ Saved {len(all_price_objects)} price records for {len(updated_tickers_list)} tickers")
+
+            save_time = time.time() - save_start
+            print(f"💾 Database save completed in {save_time:.1f}s")
+
+        total_time = time.time() - start_time
+        print(f"\n⏱️  Total update time: {total_time:.1f}s")
 
         return {
             'updated': updated_tickers_list,
