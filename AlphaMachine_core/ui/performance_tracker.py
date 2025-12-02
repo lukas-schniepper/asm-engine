@@ -962,7 +962,8 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     )
 
     # Calculate height based on number of rows (no cap to avoid scrollbar)
-    height = 35 * len(display_df) + 40
+    # Add extra buffer for header row and padding
+    height = 38 * (len(display_df) + 1) + 20
 
     # Display the table
     st.dataframe(
