@@ -951,40 +951,44 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         except (ValueError, AttributeError):
             return ""
 
-    # Apply styling
+    # Apply styling to value columns only
     value_cols = [c for c in display_df.columns if c != "Portfolio"]
-    styled_df = display_df.style.map(
-        color_returns, subset=value_cols
-    ).set_properties(
-        **{"text-align": "center"}, subset=value_cols
-    ).set_properties(
-        **{"text-align": "left", "font-weight": "bold"}, subset=["Portfolio"]
+
+    # Split into portfolio names and data columns
+    portfolio_col = display_df[["Portfolio"]]
+    data_cols = display_df[value_cols]
+
+    # Style the data columns
+    styled_data = data_cols.style.map(color_returns).set_properties(
+        **{"text-align": "center"}
+    )
+
+    # Style the portfolio column
+    styled_portfolio = portfolio_col.style.set_properties(
+        **{"text-align": "left", "font-weight": "bold"}
     )
 
     # Calculate height based on number of rows (no cap to avoid scrollbar)
-    # Add extra buffer for header row and padding
     height = 38 * (len(display_df) + 1) + 20
 
-    # Add CSS to freeze the Portfolio column
-    st.markdown("""
-        <style>
-        [data-testid="stDataFrame"] td:first-child,
-        [data-testid="stDataFrame"] th:first-child {
-            position: sticky;
-            left: 0;
-            background-color: white;
-            z-index: 1;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # Display as two columns side by side - Portfolio frozen on left
+    col_portfolio, col_data = st.columns([1, 8])
 
-    # Display the table
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        hide_index=True,
-        height=height,
-    )
+    with col_portfolio:
+        st.dataframe(
+            styled_portfolio,
+            use_container_width=True,
+            hide_index=True,
+            height=height,
+        )
+
+    with col_data:
+        st.dataframe(
+            styled_data,
+            use_container_width=True,
+            hide_index=True,
+            height=height,
+        )
 
     # Show summary stats
     st.markdown("---")
