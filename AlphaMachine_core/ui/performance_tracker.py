@@ -906,10 +906,6 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     # Sort columns (dates) chronologically
     df = df.reindex(sorted(df.columns), axis=1)
 
-    # Add total row (sum of all portfolios)
-    total_row = df.sum(axis=0)
-    df.loc["Gesamtsumme"] = total_row
-
     # Format column headers as short dates (e.g., "Nov. 03")
     date_labels = {}
     for col in df.columns:
@@ -965,15 +961,22 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         **{"text-align": "left", "font-weight": "bold"}, subset=["Portfolio"]
     )
 
-    # Make the last row (Gesamtsumme) bold
-    styled_df = styled_df.apply(
-        lambda x: ["font-weight: bold" if x.name == len(display_df) - 1 else "" for _ in x],
-        axis=1
-    )
-
     # Calculate height based on number of rows (no cap to avoid scrollbar)
     # Add extra buffer for header row and padding
     height = 38 * (len(display_df) + 1) + 20
+
+    # Add CSS to freeze the Portfolio column
+    st.markdown("""
+        <style>
+        [data-testid="stDataFrame"] td:first-child,
+        [data-testid="stDataFrame"] th:first-child {
+            position: sticky;
+            left: 0;
+            background-color: white;
+            z-index: 1;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
     # Display the table
     st.dataframe(
