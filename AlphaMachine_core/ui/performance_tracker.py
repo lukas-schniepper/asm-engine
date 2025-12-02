@@ -77,8 +77,23 @@ def _render_performance_tracker():
         create_monthly_returns_heatmap,
     )
 
-    # Inject custom CSS
+    # Inject custom CSS with reduced header spacing
     st.markdown(get_dashboard_css(), unsafe_allow_html=True)
+    st.markdown("""
+        <style>
+        .block-container {
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+        }
+        header[data-testid="stHeader"] {
+            height: 2.5rem;
+        }
+        h1 {
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
     # Page header
     st.title("Portfolio Performance Tracker")

@@ -64,6 +64,7 @@ engine = create_engine(DATABASE_URL, echo=False)
 from AlphaMachine_core.tracking.models import (
     PortfolioDefinition,
     PortfolioDailyNAV,
+    OverlaySignal,
     Variants,
 )
 from AlphaMachine_core.tracking.s3_adapter import S3DataLoader
@@ -208,6 +209,100 @@ def backfill_nav_from_allocation_history(
     return nav_count
 
 
+def backfill_overlay_signals(
+    model: str,
+    dry_run: bool = False,
+) -> int:
+    """
+    Backfill overlay signals from S3 allocation_history.csv.
+
+    The allocation history contains allocation and signal data that we
+    can use to populate the overlay_signals table.
+
+    Returns:
+        Number of signal records created
+    """
+    print(f"  Loading {model} allocation history for signals...")
+    df = load_allocation_history(model)
+
+    if df.empty:
+        print(f"    No data found for {model}")
+        return 0
+
+    # Sort by date
+    df = df.sort_values("date").reset_index(drop=True)
+
+    if dry_run:
+        print(f"    [DRY RUN] Would create {len(df)} signal records for {model}")
+        return len(df)
+
+    signal_count = 0
+
+    with Session(engine) as session:
+        prev_allocation = None
+
+        for _, row in df.iterrows():
+            trade_date = row["date"]
+            if isinstance(trade_date, str):
+                trade_date = pd.to_datetime(trade_date).date()
+            elif hasattr(trade_date, "date"):
+                trade_date = trade_date.date()
+
+            # Check if exists
+            existing = session.exec(
+                select(OverlaySignal)
+                .where(OverlaySignal.trade_date == trade_date)
+                .where(OverlaySignal.model == model)
+            ).first()
+
+            if existing:
+                prev_allocation = float(row.get("allocation", 1.0) or 1.0)
+                continue
+
+            # Get allocation values
+            allocation = float(row.get("allocation", 1.0) or 1.0)
+            target_allocation = float(row.get("target_allocation", allocation) or allocation)
+
+            # Determine if trade was required
+            if prev_allocation is not None:
+                trade_required = abs(allocation - prev_allocation) > 0.05
+            else:
+                trade_required = bool(row.get("trade_executed", False))
+
+            # Build signals dict from available columns
+            signals = {}
+            impacts = {}
+
+            # Common signal columns in S3 data
+            signal_cols = ["rsi_avg", "volatility_regime", "stress_category",
+                          "momentum_strength", "spy_pct", "cash_pct"]
+            for col in signal_cols:
+                if col in row and pd.notna(row[col]):
+                    signals[col] = float(row[col]) if isinstance(row[col], (int, float)) else str(row[col])
+
+            signal_record = OverlaySignal(
+                trade_date=trade_date,
+                model=model,
+                target_allocation=Decimal(str(round(target_allocation, 4))),
+                actual_allocation=Decimal(str(round(allocation, 4))),
+                trade_required=trade_required,
+                signals=signals if signals else None,
+                impacts=impacts if impacts else None,
+            )
+            session.add(signal_record)
+            signal_count += 1
+            prev_allocation = allocation
+
+            # Commit in batches
+            if signal_count % 500 == 0:
+                session.commit()
+                print(f"      Committed {signal_count} signal records...")
+
+        session.commit()
+
+    return signal_count
+
+
 def backfill_spy_raw_nav(
     portfolio_id: int,
     dry_run: bool = False,
@@ -327,11 +422,20 @@ def main():
         print(f"    Skipped TrendRegimeV2: {e}")
         trend_count = 0
 
+    # Backfill overlay signals
+    print("\n[5] Backfilling overlay signals...")
+    conservative_signals = backfill_overlay_signals("conservative", args.dry_run)
+    print(f"    Created {conservative_signals} Conservative signal records")
+
+    trend_signals = backfill_overlay_signals("trend_regime_v2", args.dry_run)
+    print(f"    Created {trend_signals} TrendRegimeV2 signal records")
+
     print("\n" + "=" * 60)
     print("Backfill complete!")
     print(f"  RAW: {raw_count} records")
     print(f"  Conservative: {conservative_count} records")
     print(f"  TrendRegimeV2: {trend_count} records")
+    print(f"  Signals: {conservative_signals + trend_signals} records")
     print("=" * 60)
 
     return 0
