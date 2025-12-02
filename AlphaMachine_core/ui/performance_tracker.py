@@ -602,29 +602,30 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             key="multi_portfolio_end_date",
         )
 
-    # Build returns data for each portfolio+variant combination
-    # Key format: "PortfolioName (Variant)" or just "PortfolioName" if only one variant
-    portfolio_returns = {}
-    column_keys = []  # Track the order of columns
+    # Helper to clean portfolio name (remove _EqualWeight suffix)
+    def clean_name(name: str) -> str:
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
+    # Variant abbreviations for compact display
+    variant_abbrev = {
+        "raw": "Raw",
+        "conservative": "Cons.",
+        "trend_regime_v2": "Trend",
+    }
+
+    # Build returns data organized by portfolio -> variant
+    # Structure: {portfolio_name: {variant: {month: {total, days}}}}
+    portfolio_data = {}
 
     for portfolio_name in selected_portfolio_names:
         portfolio_id = portfolio_options[portfolio_name]
+        portfolio_data[portfolio_name] = {}
 
         for variant in selected_variants:
-            # Use selected end_date to include current month if selected
             nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
 
             if nav_df.empty:
                 continue
-
-            # Create column key
-            if len(selected_variants) == 1:
-                col_key = portfolio_name
-            else:
-                variant_short = get_variant_display_name(variant)[:4]  # e.g., "Raw", "Cons", "Tren"
-                col_key = f"{portfolio_name} ({variant_short})"
-
-            column_keys.append(col_key)
 
             nav_series = nav_df["nav"]
             returns = nav_series.pct_change()
@@ -650,102 +651,169 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                     monthly_total *= (1 + r)
                 monthly_data[month_key]["total"] = monthly_total - 1
 
-            portfolio_returns[col_key] = monthly_data
+            portfolio_data[portfolio_name][variant] = monthly_data
 
-    if not portfolio_returns:
+    # Filter out portfolios with no data
+    portfolio_data = {k: v for k, v in portfolio_data.items() if v}
+
+    if not portfolio_data:
         st.warning("No NAV data available for the selected portfolios and variants.")
         return
 
     # Get all months across all portfolios
     all_months = set()
-    for data in portfolio_returns.values():
-        all_months.update(data.keys())
+    for port_variants in portfolio_data.values():
+        for variant_data in port_variants.values():
+            all_months.update(variant_data.keys())
     all_months = sorted(all_months, reverse=True)
 
-    # Display comparison table with expandable rows
     st.markdown("---")
 
-    # Build subtitle showing selected variants
-    if len(selected_variants) == 1:
-        variant_str = get_variant_display_name(selected_variants[0])
-    else:
-        variant_str = ", ".join(get_variant_display_name(v) for v in selected_variants)
-    st.markdown(f"#### Monthly Returns ({variant_str})")
+    # Build DataFrame for display - grouped by portfolio with variant sub-columns
+    # Create multi-level column structure
+    table_data = []
 
-    # Create header columns - use column_keys for display
-    num_cols = len(column_keys)
-    if num_cols == 0:
+    for month in all_months:
+        row = {"Month": f"{month} (MTD)" if month == current_month else month}
+
+        for portfolio_name in selected_portfolio_names:
+            if portfolio_name not in portfolio_data:
+                continue
+            port_variants = portfolio_data[portfolio_name]
+            clean_pname = clean_name(portfolio_name)
+
+            for variant in selected_variants:
+                if variant not in port_variants:
+                    col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                    row[col_name] = None
+                    continue
+
+                col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                if month in port_variants[variant]:
+                    row[col_name] = port_variants[variant][month]["total"]
+                else:
+                    row[col_name] = None
+
+        table_data.append(row)
+
+    if not table_data:
         st.info("No data to display.")
         return
 
-    cols = st.columns([2] + [2] * num_cols)
-    cols[0].markdown("**Month**")
-    for i, col_key in enumerate(column_keys):
-        # Truncate long names for header
-        display_name = col_key[:20] if len(col_key) > 20 else col_key
-        cols[i + 1].markdown(f"**{display_name}**")
+    df = pd.DataFrame(table_data)
 
-    # Display each month with expander for daily details
-    for month in all_months:
-        cols = st.columns([2] + [2] * num_cols)
+    # Create styled HTML table with grouped headers
+    portfolios_with_data = [p for p in selected_portfolio_names if p in portfolio_data]
 
-        # Month label with expander - mark current month as MTD
-        with cols[0]:
-            month_label = f"{month}"
-            if month == current_month:
-                month_label += " (MTD)"
-            expanded = st.checkbox(month_label, key=f"expand_{month}")
+    # Build HTML table
+    html = ['<style>']
+    html.append('''
+        .compact-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+        .compact-table th, .compact-table td { padding: 4px 8px; text-align: center; border-bottom: 1px solid #333; }
+        .compact-table th { background: #1a1a2e; }
+        .compact-table .portfolio-header { border-bottom: 2px solid #444; font-weight: 700; font-size: 14px; }
+        .compact-table .variant-header { font-weight: 500; font-size: 12px; color: #888; }
+        .compact-table .month-col { text-align: left; font-weight: 600; min-width: 90px; }
+        .compact-table .positive { color: #22c55e; font-weight: 600; }
+        .compact-table .negative { color: #ef4444; font-weight: 600; }
+        .compact-table .no-data { color: #666; }
+        .compact-table tr:hover { background: rgba(255,255,255,0.05); }
+    ''')
+    html.append('</style>')
 
-        # Portfolio returns for this month
-        for i, col_key in enumerate(column_keys):
-            with cols[i + 1]:
-                if col_key in portfolio_returns and month in portfolio_returns[col_key]:
-                    monthly_ret = portfolio_returns[col_key][month]["total"]
-                    color = COLORS["positive"] if monthly_ret > 0 else COLORS["negative"]
-                    st.markdown(
-                        f'<span style="color: {color}; font-weight: 600;">{monthly_ret*100:.2f}%</span>',
-                        unsafe_allow_html=True,
-                    )
+    html.append('<table class="compact-table">')
+
+    # Header row 1: Portfolio names (spanning variant columns)
+    html.append('<tr>')
+    html.append('<th class="portfolio-header month-col"></th>')
+    for portfolio_name in portfolios_with_data:
+        num_variants = len([v for v in selected_variants if v in portfolio_data[portfolio_name]])
+        if num_variants > 0:
+            html.append(f'<th class="portfolio-header" colspan="{num_variants}">{clean_name(portfolio_name)}</th>')
+    html.append('</tr>')
+
+    # Header row 2: Variant names
+    html.append('<tr>')
+    html.append('<th class="variant-header month-col">Month</th>')
+    for portfolio_name in portfolios_with_data:
+        for variant in selected_variants:
+            if variant in portfolio_data[portfolio_name]:
+                html.append(f'<th class="variant-header">{variant_abbrev.get(variant, variant)}</th>')
+    html.append('</tr>')
+
+    # Data rows
+    for _, row in df.iterrows():
+        html.append('<tr>')
+        html.append(f'<td class="month-col">{row["Month"]}</td>')
+
+        for portfolio_name in portfolios_with_data:
+            clean_pname = clean_name(portfolio_name)
+            for variant in selected_variants:
+                if variant not in portfolio_data[portfolio_name]:
+                    continue
+                col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                if col_name in row and row[col_name] is not None:
+                    val = row[col_name] * 100
+                    css_class = "positive" if val > 0 else "negative"
+                    html.append(f'<td class="{css_class}">{val:.2f}%</td>')
                 else:
-                    st.markdown("-")
+                    html.append('<td class="no-data">•</td>')
 
-        # Show daily details if expanded
-        if expanded:
-            st.markdown(f"**Daily returns for {month}:**")
+        html.append('</tr>')
 
-            # Get all days for this month across all columns
-            all_days = set()
-            for col_key in column_keys:
-                if col_key in portfolio_returns and month in portfolio_returns[col_key]:
-                    for d in portfolio_returns[col_key][month]["days"]:
+    html.append('</table>')
+
+    st.markdown(''.join(html), unsafe_allow_html=True)
+
+    # Expandable daily details section
+    st.markdown("---")
+    st.markdown("##### Daily Details")
+
+    selected_month = st.selectbox(
+        "Select month to view daily returns:",
+        options=all_months,
+        format_func=lambda x: f"{x} (MTD)" if x == current_month else x,
+        key="daily_details_month",
+    )
+
+    if selected_month:
+        # Get all days for this month across all portfolios
+        all_days = set()
+        for port_variants in portfolio_data.values():
+            for variant_data in port_variants.values():
+                if selected_month in variant_data:
+                    for d in variant_data[selected_month]["days"]:
                         all_days.add(d["date"])
-            all_days = sorted(all_days)
+        all_days = sorted(all_days)
 
-            # Create daily data table
+        if all_days:
             daily_table_data = []
             for day in all_days:
-                row = {"Date": day}
-                for col_key in column_keys:
-                    # Use shorter column names for the table
-                    short_name = col_key[:18] if len(col_key) > 18 else col_key
-                    if col_key in portfolio_returns and month in portfolio_returns[col_key]:
-                        day_ret = next(
-                            (d["return"] for d in portfolio_returns[col_key][month]["days"] if d["date"] == day),
-                            None,
-                        )
-                        if day_ret is not None:
-                            row[short_name] = f"{day_ret*100:.2f}%"
+                row = {"Date": day[-5:]}  # Show only MM-DD
+                for portfolio_name in portfolios_with_data:
+                    clean_pname = clean_name(portfolio_name)
+                    for variant in selected_variants:
+                        if variant not in portfolio_data[portfolio_name]:
+                            continue
+                        col_name = f"{clean_pname}|{variant_abbrev.get(variant, variant)}"
+                        if selected_month in portfolio_data[portfolio_name][variant]:
+                            day_ret = next(
+                                (d["return"] for d in portfolio_data[portfolio_name][variant][selected_month]["days"] if d["date"] == day),
+                                None,
+                            )
+                            if day_ret is not None:
+                                row[col_name] = f"{day_ret*100:.2f}%"
+                            else:
+                                row[col_name] = "-"
                         else:
-                            row[short_name] = "-"
-                    else:
-                        row[short_name] = "-"
+                            row[col_name] = "-"
                 daily_table_data.append(row)
 
             if daily_table_data:
                 daily_df = pd.DataFrame(daily_table_data)
-                st.dataframe(daily_df, use_container_width=True, hide_index=True)
-
-            st.markdown("---")
+                st.dataframe(daily_df, use_container_width=True, hide_index=True, height=250)
+        else:
+            st.info("No daily data available for this month.")
 
 
 def _render_monthly_returns_tab(nav_data):
