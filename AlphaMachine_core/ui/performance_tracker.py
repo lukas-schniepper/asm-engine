@@ -785,7 +785,8 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 styled_daily = daily_df.style.applymap(
                     color_value, subset=value_cols
                 ).set_properties(**{"text-align": "center"}, subset=value_cols)
-                st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=min(300, 35 * len(daily_df) + 38))
+                # Show full month without scrollbar (up to 31 days)
+                st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=35 * len(daily_df) + 38)
         else:
             st.info("No daily data available for this month.")
 
