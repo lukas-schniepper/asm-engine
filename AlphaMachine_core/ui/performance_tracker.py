@@ -815,13 +815,23 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     def clean_name(name: str) -> str:
         return name.replace("_EqualWeight", "").replace("_", " ")
 
-    # Default portfolio filter keywords
-    default_keywords = ["SA_LargeCaps", "SA_MidCaps", "SPY", "TR10_LargeCapsX", "TR10", "TopWeights", "TW30"]
+    # Default portfolio filter keywords (multiple variations to catch different naming)
+    default_keywords = [
+        "SA_LargeCaps", "SA-LargeCaps", "SA LargeCaps", "SALargeCaps",
+        "SA_MidCaps", "SA-MidCaps", "SA MidCaps", "SAMidCaps",
+        "SPY",
+        "TR10_LargeCapsX", "TR10-LargeCapsX", "TR10 LargeCapsX",
+        "TR10",
+        "TopWeights", "Topweights",
+        "TW30",
+    ]
 
     # Determine default selected portfolios
     def matches_default(name: str) -> bool:
+        name_lower = name.lower().replace("_", "").replace("-", "").replace(" ", "")
         for keyword in default_keywords:
-            if keyword.lower() in name.lower():
+            keyword_normalized = keyword.lower().replace("_", "").replace("-", "").replace(" ", "")
+            if keyword_normalized in name_lower:
                 return True
         return False
 
