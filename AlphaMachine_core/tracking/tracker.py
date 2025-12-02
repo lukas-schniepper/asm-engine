@@ -239,6 +239,7 @@ class PortfolioTracker:
         holdings: list[PortfolioHolding],
         prices: dict[str, float],
         previous_nav: Optional[float] = None,
+        previous_prices: Optional[dict[str, float]] = None,
     ) -> float:
         """
         Calculate raw NAV (100% equity) from holdings and prices.
@@ -247,6 +248,7 @@ class PortfolioTracker:
             holdings: List of PortfolioHolding
             prices: Dict mapping ticker to current price
             previous_nav: Previous day's NAV (used if holdings have no shares)
+            previous_prices: Previous day's prices (for day-over-day return calculation)
 
         Returns:
             NAV value
@@ -268,11 +270,25 @@ class PortfolioTracker:
 
         # Calculate weighted return
         total_return = 0.0
+        holdings_with_weight = 0
+
         for h in holdings:
-            if h.weight and h.entry_price:
-                current_price = prices.get(h.ticker, float(h.entry_price))
-                position_return = (current_price / float(h.entry_price)) - 1
-                total_return += float(h.weight) * position_return
+            if h.weight:
+                ticker = h.ticker
+                current_price = prices.get(ticker)
+
+                # Get previous price: from previous_prices, entry_price, or current price
+                if previous_prices and ticker in previous_prices:
+                    prev_price = previous_prices[ticker]
+                elif h.entry_price:
+                    prev_price = float(h.entry_price)
+                else:
+                    prev_price = current_price  # No change if no baseline
+
+                if current_price and prev_price and prev_price > 0:
+                    position_return = (current_price / prev_price) - 1
+                    total_return += float(h.weight) * position_return
+                    holdings_with_weight += 1
 
         return previous_nav * (1 + total_return)
 
@@ -424,15 +440,30 @@ class PortfolioTracker:
         # Calculate and record overlay variants
         for model_name in OVERLAY_REGISTRY.keys():
             try:
-                adjusted_nav, allocation, signals, impacts = self.overlay_adapter.apply_overlay(
+                # Get allocation for today from overlay model
+                _, allocation, signals, impacts = self.overlay_adapter.apply_overlay(
                     model=model_name,
                     raw_nav=raw_nav,
                     trade_date=trade_date,
                 )
 
-                # For overlay variants, calculate return relative to previous overlay NAV
-                # For simplicity, we'll use the same daily return and adjust for allocation
+                # Get previous overlay NAV from database
+                prev_overlay_nav_df = self.get_nav_series(
+                    portfolio_id, model_name,
+                    end_date=trade_date - timedelta(days=1)  # Get NAV up to yesterday
+                )
+
+                if prev_overlay_nav_df.empty:
+                    # First day - start at initial NAV
+                    prev_overlay_nav = initial_nav
+                else:
+                    prev_overlay_nav = prev_overlay_nav_df["nav"].iloc[-1]
+
+                # Calculate overlay return: raw daily return scaled by allocation
                 overlay_daily_return = daily_return * allocation
+
+                # Calculate new overlay NAV: previous overlay NAV * (1 + overlay return)
+                adjusted_nav = prev_overlay_nav * (1 + overlay_daily_return)
 
                 overlay_cumulative = (adjusted_nav / initial_nav) - 1 if initial_nav else 0.0
                 self.record_nav(

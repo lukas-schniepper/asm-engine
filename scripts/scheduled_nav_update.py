@@ -104,6 +104,7 @@ def update_portfolio_nav(
     portfolio,
     trade_date: date,
     price_data: dict[str, float],
+    prev_price_data: Optional[dict[str, float]] = None,
 ) -> bool:
     """
     Update NAV for a single portfolio on a specific date.
@@ -113,6 +114,7 @@ def update_portfolio_nav(
         portfolio: PortfolioDefinition object
         trade_date: Trading date
         price_data: Dict mapping ticker to price
+        prev_price_data: Dict mapping ticker to previous day's price
 
     Returns:
         True if successful, False otherwise
@@ -134,7 +136,7 @@ def update_portfolio_nav(
         prev_nav_df = tracker.get_nav_series(
             portfolio.id,
             Variants.RAW,
-            end_date=trade_date - timedelta(days=7),  # Look back a week
+            end_date=trade_date - timedelta(days=1),  # Get NAV up to yesterday
         )
 
         if prev_nav_df.empty:
@@ -144,8 +146,8 @@ def update_portfolio_nav(
             previous_raw_nav = prev_nav_df["nav"].iloc[-1]
             initial_nav = prev_nav_df["nav"].iloc[0]
 
-        # Calculate raw NAV
-        raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav)
+        # Calculate raw NAV using current and previous prices
+        raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)
 
         # Update NAV for all variants
         results = tracker.update_daily_nav(
@@ -287,6 +289,17 @@ def run_daily_update(
 
     price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
 
+    # Also get previous day prices for return calculation
+    prev_min_date = min_date - timedelta(days=7)  # Look back a week for previous prices
+    prev_price_dicts = dm.get_price_data(
+        list(all_tickers),
+        prev_min_date.strftime("%Y-%m-%d"),
+        max_date.strftime("%Y-%m-%d"),
+    )
+    prev_price_df = pd.DataFrame(prev_price_dicts)
+    if not prev_price_df.empty:
+        prev_price_df["trade_date"] = pd.to_datetime(prev_price_df["trade_date"]).dt.date
+
     # Process each date
     for process_date in dates_to_process:
         logger.info(f"\nProcessing date: {process_date}")
@@ -299,9 +312,20 @@ def run_daily_update(
             logger.warning(f"No price data for {process_date}")
             continue
 
+        # Get previous day's prices
+        prev_date = process_date - timedelta(days=1)
+        # Find the most recent trading day with prices
+        prev_prices_data = {}
+        if not prev_price_df.empty:
+            prev_dates = prev_price_df[prev_price_df["trade_date"] < process_date]
+            if not prev_dates.empty:
+                latest_prev_date = prev_dates["trade_date"].max()
+                prev_day_prices = prev_price_df[prev_price_df["trade_date"] == latest_prev_date]
+                prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
+
         # Update each portfolio
         for portfolio in portfolios:
-            success = update_portfolio_nav(tracker, portfolio, process_date, price_data)
+            success = update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
             if success:
                 stats["successful_updates"] += 1
             else:
