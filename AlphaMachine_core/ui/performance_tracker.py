@@ -115,8 +115,8 @@ def _render_performance_tracker():
     # Sidebar controls
     st.sidebar.header("Portfolio Selection")
 
-    # Portfolio selector
-    portfolio_options = {p.name: p.id for p in portfolios}
+    # Portfolio selector - sorted alphabetically
+    portfolio_options = {p.name: p.id for p in sorted(portfolios, key=lambda x: x.name)}
     selected_portfolio_name = st.sidebar.selectbox(
         "Select Portfolio",
         options=list(portfolio_options.keys()),
@@ -507,11 +507,11 @@ def _render_signals_tab(tracker, start_date, end_date):
             st.info("No trades executed in the selected period.")
 
 
-def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
+def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_end_date):
     """Render the Multi-Portfolio Comparison tab with expandable month/day returns."""
     from ..tracking import Variants
     from .styles import format_percentage, get_variant_display_name, VARIANT_COLORS, COLORS
-    from datetime import date
+    from datetime import date, timedelta
     import pandas as pd
 
     st.markdown("### Multi-Portfolio Returns Comparison")
@@ -524,16 +524,18 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
         st.warning("No portfolios available.")
         return
 
+    # Sort portfolios alphabetically
+    all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
+    portfolio_options = {p.name: p.id for p in all_portfolios_sorted}
+
     # Multi-select for portfolios and variants side by side
     col1, col2 = st.columns(2)
-
-    portfolio_options = {p.name: p.id for p in all_portfolios}
 
     with col1:
         selected_portfolio_names = st.multiselect(
             "Select Portfolios",
             options=list(portfolio_options.keys()),
-            default=list(portfolio_options.keys())[:3],  # Default first 3
+            default=list(portfolio_options.keys())[:3] if len(portfolio_options) >= 3 else list(portfolio_options.keys()),
             help="Select portfolios to compare",
         )
 
@@ -555,9 +557,50 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
         st.info("Please select at least one variant.")
         return
 
-    # Always use today's date to include current/running month
+    # Find the date range available across all selected portfolios
+    # This ensures the date picker allows selecting dates that have data
+    all_min_dates = []
+    all_max_dates = []
+
+    for portfolio_name in selected_portfolio_names:
+        portfolio_id = portfolio_options[portfolio_name]
+        for variant in selected_variants:
+            nav_df = tracker.get_nav_series(portfolio_id, variant)
+            if not nav_df.empty:
+                all_min_dates.append(nav_df.index.min().date())
+                all_max_dates.append(nav_df.index.max().date())
+
+    if not all_min_dates or not all_max_dates:
+        st.warning("No NAV data available for the selected portfolios and variants.")
+        return
+
+    # Use the earliest min date and latest max date across all selected portfolios
+    available_min_date = min(all_min_dates)
+    available_max_date = max(all_max_dates)
     today = date.today()
     current_month = today.strftime("%Y-%m")
+
+    # Independent date range selector for this tab
+    st.markdown("---")
+    date_col1, date_col2 = st.columns(2)
+
+    with date_col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=max(available_min_date, available_max_date - timedelta(days=365)),
+            min_value=available_min_date,
+            max_value=available_max_date,
+            key="multi_portfolio_start_date",
+        )
+
+    with date_col2:
+        end_date = st.date_input(
+            "End Date",
+            value=available_max_date,
+            min_value=available_min_date,
+            max_value=available_max_date,
+            key="multi_portfolio_end_date",
+        )
 
     # Build returns data for each portfolio+variant combination
     # Key format: "PortfolioName (Variant)" or just "PortfolioName" if only one variant
@@ -568,8 +611,8 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
         portfolio_id = portfolio_options[portfolio_name]
 
         for variant in selected_variants:
-            # Use today as end_date to always include current month
-            nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, today)
+            # Use selected end_date to include current month if selected
+            nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
 
             if nav_df.empty:
                 continue
