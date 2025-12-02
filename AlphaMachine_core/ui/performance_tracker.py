@@ -840,8 +840,8 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         )
 
     with col2:
-        # Default to last 30 days
-        default_start = max(sidebar_start_date, sidebar_end_date - timedelta(days=30))
+        # Default to Oct 1, 2025 until today
+        default_start = date(2025, 10, 1)
         date_range = st.date_input(
             "Date Range",
             value=(default_start, sidebar_end_date),
