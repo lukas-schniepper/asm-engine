@@ -268,24 +268,13 @@ def run_daily_update(
 
     price_df = pd.DataFrame(price_dicts)
 
-    # If no price data, try to fetch it from EODHD
+    # If no price data, fail fast - the price update workflow should have run first
     if price_df.empty:
-        logger.info("No cached price data found, fetching from EODHD...")
-        try:
-            dm.update_ticker_data(list(all_tickers))
-            # Retry getting price data
-            price_dicts = dm.get_price_data(
-                list(all_tickers),
-                min_date.strftime("%Y-%m-%d"),
-                max_date.strftime("%Y-%m-%d"),
-            )
-            price_df = pd.DataFrame(price_dicts)
-        except Exception as e:
-            logger.error(f"Failed to fetch price data: {e}")
-
-    if price_df.empty:
-        logger.error("No price data available")
-        return {"success": False, "error": "No price data"}
+        logger.error(
+            "No price data available in database. "
+            "Run the 'Update Ticker Prices' workflow first to populate price cache."
+        )
+        return {"success": False, "error": "No price data - run price update first"}
 
     price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
 
