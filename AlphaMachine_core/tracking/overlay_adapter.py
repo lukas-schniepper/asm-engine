@@ -503,6 +503,7 @@ class OverlayAdapter:
         self._features_cache: Optional[pd.DataFrame] = None
         self._spy_cache: Optional[pd.DataFrame] = None
         self._enhanced_features_cache: Optional[pd.DataFrame] = None
+        self._allocation_history_cache: dict[str, pd.DataFrame] = {}
 
     def get_available_overlays(self) -> list[str]:
         """Return list of available overlay model names."""
@@ -558,6 +559,76 @@ class OverlayAdapter:
         self._features_cache = None
         self._spy_cache = None
         self._enhanced_features_cache = None
+        self._allocation_history_cache.clear()
+
+    def _load_allocation_history(self, model: str) -> Optional[pd.DataFrame]:
+        """
+        Load allocation history from S3 for a model (with caching).
+
+        Returns:
+            DataFrame with columns: date, allocation, target_allocation, etc.
+            Returns None if not available.
+        """
+        if model in self._allocation_history_cache:
+            return self._allocation_history_cache[model]
+
+        try:
+            df = self.s3_loader.load_allocation_history(model)
+            if df is not None and not df.empty:
+                # Ensure date column is datetime
+                if "date" in df.columns:
+                    df["date"] = pd.to_datetime(df["date"])
+                self._allocation_history_cache[model] = df
+                logger.info(f"Loaded allocation history for {model}: {len(df)} rows")
+                return df
+        except Exception as e:
+            logger.warning(f"Could not load allocation history for {model}: {e}")
+
+        return None
+
+    def _get_allocation_from_history(
+        self, model: str, trade_date: date
+    ) -> Optional[tuple[float, dict]]:
+        """
+        Get allocation for a specific date from S3 allocation history.
+
+        Returns:
+            Tuple of (allocation, signals_dict) or None if not found.
+        """
+        history = self._load_allocation_history(model)
+        if history is None:
+            return None
+
+        # Find the row for this date
+        target_date = pd.to_datetime(trade_date)
+
+        if "date" in history.columns:
+            row = history[history["date"] == target_date]
+        else:
+            # If date is the index
+            row = history.loc[history.index == target_date]
+
+        if row.empty:
+            logger.debug(f"No allocation found in history for {model} on {trade_date}")
+            return None
+
+        row = row.iloc[0]
+
+        # Get allocation (prefer 'allocation' column, fall back to 'target_allocation')
+        allocation = row.get("allocation", row.get("target_allocation"))
+        if allocation is None or pd.isna(allocation):
+            return None
+
+        # Build signals dict from available columns
+        signals = {}
+        signal_columns = [c for c in row.index if c not in ["date", "allocation", "target_allocation"]]
+        for col in signal_columns:
+            val = row[col]
+            if not pd.isna(val):
+                signals[col] = val
+
+        logger.info(f"Using S3 allocation for {model} on {trade_date}: {allocation:.4f}")
+        return float(allocation), signals
 
     def apply_overlay(
         self,
@@ -567,6 +638,9 @@ class OverlayAdapter:
     ) -> tuple[float, float, dict, dict]:
         """
         Apply a risk overlay model to adjust NAV.
+
+        First tries to get the allocation from S3 allocation_history.csv (source of truth).
+        Falls back to local calculation only if S3 data is unavailable.
 
         Args:
             model: Overlay model name ('conservative' or 'trend_regime_v2')
@@ -583,6 +657,20 @@ class OverlayAdapter:
         if model not in OVERLAY_REGISTRY:
             raise ValueError(f"Unknown model: {model}. Available: {self.get_available_overlays()}")
 
+        # FIRST: Try to get allocation from S3 allocation history (source of truth)
+        s3_result = self._get_allocation_from_history(model, trade_date)
+        if s3_result is not None:
+            allocation, signals = s3_result
+            # S3 history doesn't have impacts breakdown, so provide empty
+            impacts = {"source": "s3_allocation_history"}
+
+            # Calculate adjusted NAV
+            adjusted_nav = raw_nav * allocation + raw_nav * (1 - allocation) * 1.0
+            return adjusted_nav, allocation, signals, impacts
+
+        # FALLBACK: Calculate allocation locally if S3 data not available
+        logger.info(f"S3 allocation not found for {model} on {trade_date}, calculating locally")
+
         config = OVERLAY_REGISTRY[model]
         params = self._load_config(model)
         enhanced_features = self._get_enhanced_features()
@@ -598,6 +686,8 @@ class OverlayAdapter:
             allocation, signals, impacts = config.calculator(
                 trade_date, params, enhanced_features
             )
+
+        impacts["source"] = "local_calculation"
 
         # Calculate adjusted NAV
         # Assumption: cash portion earns 0% for simplicity (can be enhanced later)
