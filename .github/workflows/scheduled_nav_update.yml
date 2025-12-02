@@ -1,0 +1,132 @@
+# Daily NAV Update Workflow
+#
+# This workflow updates daily NAV for all tracked portfolios.
+# Runs after US market close (21:00 UTC = 4:00 PM ET / 5:00 PM ET during DST)
+#
+# Prerequisites:
+# - DATABASE_URL secret must be set
+# - AWS credentials for S3 access (optional, will use cache if unavailable)
+
+name: Daily NAV Update
+
+on:
+  schedule:
+    # Run at 21:00 UTC Monday-Friday (after US market close)
+    - cron: '0 21 * * 1-5'
+  workflow_dispatch:
+    # Allow manual trigger with optional parameters
+    inputs:
+      portfolio:
+        description: 'Specific portfolio name (leave empty for all)'
+        required: false
+        type: string
+      date:
+        description: 'Specific date YYYY-MM-DD (leave empty for today)'
+        required: false
+        type: string
+      skip_metrics:
+        description: 'Skip computing periodic metrics'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  update-nav:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run NAV update
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'eu-central-1' }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET || 'alpha-state-machine2030' }}
+        run: |
+          # Build command with optional parameters
+          CMD="python scripts/scheduled_nav_update.py"
+
+          if [ -n "${{ github.event.inputs.portfolio }}" ]; then
+            CMD="$CMD --portfolio '${{ github.event.inputs.portfolio }}'"
+          fi
+
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            CMD="$CMD --date '${{ github.event.inputs.date }}'"
+          fi
+
+          if [ "${{ github.event.inputs.skip_metrics }}" == "true" ]; then
+            CMD="$CMD --no-metrics"
+          fi
+
+          echo "Running: $CMD"
+          eval $CMD
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav-update-logs
+          path: |
+            *.log
+            data/cache/*.log
+          retention-days: 7
+
+      - name: Notify on failure (optional)
+        if: failure()
+        run: |
+          echo "::error::NAV update failed. Check the logs for details."
+          # Add Slack/email notification here if needed
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"NAV update failed!"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
+
+
+  # Optional: Backfill job that can be triggered manually
+  backfill-nav:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.date != ''
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run backfill
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'eu-central-1' }}
+        run: |
+          # If a specific date is provided, this job handles single-date backfill
+          echo "Backfilling NAV for date: ${{ github.event.inputs.date }}"
+          python scripts/scheduled_nav_update.py --date "${{ github.event.inputs.date }}"

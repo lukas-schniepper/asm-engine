@@ -92,4 +92,6 @@ psycopg[binary]
 yfinance==0.2.56 ; python_version >= "3.10" and python_version < "4.0"
 optuna
 ta
+boto3
+python-dateutil
 -e .

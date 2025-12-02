@@ -191,7 +191,7 @@ if pwd != st.secrets.get("APP_PW", ""):
 # -----------------------------------------------------------------------------
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
-    ["Backtester", "Optimizer", "Data Mgmt"],
+    ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
     index=0
 )
 
@@ -552,6 +552,84 @@ def show_backtester_ui():
                         .set_index("Date")["Monthly PnL (%)"]
         })
         st.bar_chart(perf_df)
+
+        # Track Portfolio Section
+        st.markdown("---")
+        st.subheader("📊 Portfolio Tracking")
+
+        with st.expander("Track this portfolio for performance monitoring", expanded=False):
+            try:
+                from AlphaMachine_core.tracking.registration import (
+                    register_portfolio_from_backtest,
+                    get_suggested_portfolio_name,
+                    check_portfolio_name_exists,
+                )
+
+                # Get suggested name
+                suggested_name = get_suggested_portfolio_name(
+                    source=sources[0] if sources else "Unknown",
+                    num_stocks=num_stocks,
+                    optimizer=opt_method,
+                )
+
+                # Portfolio name input
+                portfolio_name = st.text_input(
+                    "Portfolio Name",
+                    value=suggested_name,
+                    help="Unique name for this portfolio"
+                )
+
+                portfolio_description = st.text_area(
+                    "Description (optional)",
+                    value="",
+                    help="Optional description of this portfolio strategy"
+                )
+
+                # Check if name exists
+                name_exists = check_portfolio_name_exists(portfolio_name)
+                if name_exists:
+                    st.warning(f"⚠️ Portfolio '{portfolio_name}' already exists. Choose a different name.")
+
+                # Get holdings from the next month allocation
+                if hasattr(engine_baseline, 'allocation_history') and engine_baseline.allocation_history:
+                    last_alloc = engine_baseline.allocation_history[-1]
+                    holdings_df = pd.DataFrame([
+                        {"ticker": ticker, "weight": weight}
+                        for ticker, weight in last_alloc.get("weights", {}).items()
+                    ])
+                else:
+                    holdings_df = pd.DataFrame()
+
+                # Register button
+                if st.button("🚀 Start Tracking", disabled=name_exists or not portfolio_name):
+                    with st.spinner("Registering portfolio..."):
+                        result = register_portfolio_from_backtest(
+                            name=portfolio_name,
+                            backtest_params=ui_params,
+                            holdings_df=holdings_df,
+                            nav_history=engine_baseline.portfolio_value,
+                            source=sources[0] if sources else "Unknown",
+                            description=portfolio_description if portfolio_description else None,
+                        )
+
+                        if result.get("success"):
+                            st.success(
+                                f"✅ Portfolio '{portfolio_name}' registered successfully!\n\n"
+                                f"- Portfolio ID: {result.get('portfolio_id')}\n"
+                                f"- Holdings: {result.get('holdings_count', 0)}\n"
+                                f"- Historical NAV records: {result.get('backfilled_nav_count', 0)}\n\n"
+                                f"View it in the **Performance Tracker** page."
+                            )
+                        else:
+                            st.error(f"❌ Failed to register portfolio: {result.get('error')}")
+
+            except ImportError as e:
+                st.info(
+                    "Portfolio tracking module not available. "
+                    "Run the migration script first: `python scripts/migrate_tracking_tables.py`"
+                )
+            except Exception as e:
+                st.error(f"Error loading tracking module: {e}")
 
 
     with tabs[1]:  # Overlay
@@ -1382,6 +1460,31 @@ def render_engine_tabs(engine):
 # === DATENLADE- UND KONVERTIERUNGSFUNKTIONEN (JETZT MAXIMAL ANGEPASST) ===
 # =============================================================================
 
+# =============================================================================
+# === Performance Tracker (isolated with error handling) ===
+# =============================================================================
+def show_performance_tracker_safe():
+    """
+    Wrapper to load Performance Tracker page with error isolation.
+
+    This ensures the main app continues to work even if there are
+    issues with the tracking module or database.
+    """
+    try:
+        from AlphaMachine_core.ui.performance_tracker import show_performance_tracker_ui
+        show_performance_tracker_ui()
+    except ImportError as e:
+        st.error(
+            "Performance Tracker module could not be loaded.\n\n"
+            f"Error: {e}\n\n"
+            "Please ensure all required packages are installed."
+        )
+    except Exception as e:
+        st.error(
+            f"An error occurred while loading the Performance Tracker:\n\n{e}\n\n"
+            "The rest of the application continues to work normally."
+        )
+
 # -----------------------------------------------------------------------------
 # 5) Router
 # -----------------------------------------------------------------------------
@@ -1389,6 +1492,8 @@ if page == "Backtester":
     show_backtester_ui()
 elif page == "Optimizer":
     show_optimizer_ui()
+elif page == "Performance Tracker":
+    show_performance_tracker_safe()
 else:
     show_data_ui()
 

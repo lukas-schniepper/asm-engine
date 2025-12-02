@@ -1,9 +1,17 @@
 # AlphaMachine_core/config.py
 import os
 from pathlib import Path
-import streamlit as st # Muss importiert werden, um st.secrets zu verwenden
 
-_THIS_DIR = Path(__file__).resolve().parent   
+_THIS_DIR = Path(__file__).resolve().parent
+
+# Try to import streamlit, but make it optional for CLI scripts
+_streamlit_available = False
+st = None
+try:
+    import streamlit as st
+    _streamlit_available = True
+except ImportError:
+    pass
 
 print("DEBUG [config.py]: Lese DATABASE_URL...")
 
@@ -12,11 +20,12 @@ DATABASE_URL_FROM_OS_ENV = os.getenv("DATABASE_URL")
 
 # Dann versuche st.secrets (für Streamlit App)
 DATABASE_URL_FROM_SECRETS = None
-try:
-    DATABASE_URL_FROM_SECRETS = st.secrets.get("DATABASE_URL")
-except Exception:
-    # st.secrets kann fehlschlagen außerhalb von Streamlit - das ist ok
-    pass
+if _streamlit_available and st is not None:
+    try:
+        DATABASE_URL_FROM_SECRETS = st.secrets.get("DATABASE_URL")
+    except Exception:
+        # st.secrets kann fehlschlagen außerhalb von Streamlit - das ist ok
+        pass
 
 DATABASE_URL = None # Initialisiere
 if DATABASE_URL_FROM_OS_ENV:
@@ -41,7 +50,7 @@ print(f"INFO [config.py]: DATABASE_URL erfolgreich initialisiert (Auszug): ...{D
 
 # API_KEY analog behandeln, falls nötig
 API_KEY = os.getenv("API_KEY")
-if not API_KEY:
+if not API_KEY and _streamlit_available and st is not None:
     try:
         API_KEY = st.secrets.get("API_KEY")
     except Exception:
@@ -95,10 +104,11 @@ BENCHMARK_TICKERS = ["SPY"]
 # === Risikomanagement ===
 # Hole "enabled" auch aus Secrets, falls es zur Laufzeit änderbar sein soll, sonst Default hier
 risk_overlay_enabled_secret = True
-try:
-    risk_overlay_enabled_secret = st.secrets.get("RISK_OVERLAY_ENABLED", True)
-except Exception:
-    pass
+if _streamlit_available and st is not None:
+    try:
+        risk_overlay_enabled_secret = st.secrets.get("RISK_OVERLAY_ENABLED", True)
+    except Exception:
+        pass
 
 RISK_OVERLAY = {
     "enabled": risk_overlay_enabled_secret, 
