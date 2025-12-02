@@ -620,12 +620,21 @@ class OverlayAdapter:
             return None
 
         # Build signals dict from available columns
+        # Convert numpy types to native Python types for JSON serialization
         signals = {}
         signal_columns = [c for c in row.index if c not in ["date", "allocation", "target_allocation"]]
         for col in signal_columns:
             val = row[col]
             if not pd.isna(val):
-                signals[col] = val
+                # Convert numpy types to native Python types
+                if isinstance(val, (np.integer, np.floating)):
+                    signals[col] = float(val)
+                elif isinstance(val, np.bool_):
+                    signals[col] = bool(val)
+                elif isinstance(val, np.ndarray):
+                    signals[col] = val.tolist()
+                else:
+                    signals[col] = val
 
         logger.info(f"Using S3 allocation for {model} on {trade_date}: {allocation:.4f}")
         return float(allocation), signals
