@@ -190,6 +190,7 @@ def _render_performance_tracker():
     tabs = st.tabs([
         "Overview",
         "Performance Comparison",
+        "Multi-Portfolio Compare",
         "Allocation History",
         "Signal Analysis",
         "Monthly Returns",
@@ -209,19 +210,23 @@ def _render_performance_tracker():
             start_date, end_date
         )
 
-    # ===== Tab 3: Allocation History =====
+    # ===== Tab 3: Multi-Portfolio Comparison =====
     with tabs[2]:
+        _render_multi_portfolio_comparison_tab(tracker, start_date, end_date)
+
+    # ===== Tab 4: Allocation History =====
+    with tabs[3]:
         _render_allocation_tab(
             tracker, selected_portfolio_id, selected_variants,
             start_date, end_date
         )
 
-    # ===== Tab 4: Signal Analysis =====
-    with tabs[3]:
+    # ===== Tab 5: Signal Analysis =====
+    with tabs[4]:
         _render_signals_tab(tracker, start_date, end_date)
 
-    # ===== Tab 5: Monthly Returns =====
-    with tabs[4]:
+    # ===== Tab 6: Monthly Returns =====
+    with tabs[5]:
         _render_monthly_returns_tab(nav_data)
 
 
@@ -500,6 +505,158 @@ def _render_signals_tab(tracker, start_date, end_date):
             st.info(f"Total trades in period: {len(trades)}")
         else:
             st.info("No trades executed in the selected period.")
+
+
+def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
+    """Render the Multi-Portfolio Comparison tab with expandable month/day returns."""
+    from ..tracking import Variants
+    from .styles import format_percentage, get_variant_display_name, VARIANT_COLORS, COLORS
+    import pandas as pd
+
+    st.markdown("### Multi-Portfolio Returns Comparison")
+    st.markdown("Compare returns across multiple portfolios with expandable month/day details.")
+
+    # Get all portfolios
+    all_portfolios = tracker.list_portfolios(active_only=True)
+
+    if not all_portfolios:
+        st.warning("No portfolios available.")
+        return
+
+    # Multi-select for portfolios
+    portfolio_options = {p.name: p.id for p in all_portfolios}
+    selected_portfolio_names = st.multiselect(
+        "Select Portfolios to Compare",
+        options=list(portfolio_options.keys()),
+        default=list(portfolio_options.keys())[:3],  # Default first 3
+        help="Select multiple portfolios to compare side by side",
+    )
+
+    if not selected_portfolio_names:
+        st.info("Please select at least one portfolio.")
+        return
+
+    # Get variant selection
+    variant_options = Variants.all()
+    selected_variant = st.selectbox(
+        "Select Variant",
+        options=variant_options,
+        format_func=get_variant_display_name,
+        index=0,
+    )
+
+    # Build returns data for each portfolio
+    portfolio_returns = {}
+
+    for portfolio_name in selected_portfolio_names:
+        portfolio_id = portfolio_options[portfolio_name]
+        nav_df = tracker.get_nav_series(portfolio_id, selected_variant, start_date, end_date)
+
+        if nav_df.empty:
+            continue
+
+        nav_series = nav_df["nav"]
+        returns = nav_series.pct_change()
+
+        # Group by month
+        monthly_data = {}
+        for date_idx, ret in returns.items():
+            if pd.isna(ret):
+                continue
+            month_key = date_idx.strftime("%Y-%m")
+            if month_key not in monthly_data:
+                monthly_data[month_key] = {"days": [], "total": 0}
+            monthly_data[month_key]["days"].append({
+                "date": date_idx.strftime("%Y-%m-%d"),
+                "return": ret,
+            })
+
+        # Calculate monthly totals using compounding
+        for month_key in monthly_data:
+            daily_returns = [d["return"] for d in monthly_data[month_key]["days"]]
+            monthly_total = 1
+            for r in daily_returns:
+                monthly_total *= (1 + r)
+            monthly_data[month_key]["total"] = monthly_total - 1
+
+        portfolio_returns[portfolio_name] = monthly_data
+
+    if not portfolio_returns:
+        st.warning("No NAV data available for the selected portfolios and variant.")
+        return
+
+    # Get all months across all portfolios
+    all_months = set()
+    for data in portfolio_returns.values():
+        all_months.update(data.keys())
+    all_months = sorted(all_months, reverse=True)
+
+    # Display comparison table with expandable rows
+    st.markdown("---")
+    st.markdown(f"#### Monthly Returns by Portfolio ({get_variant_display_name(selected_variant)})")
+
+    # Create header columns
+    cols = st.columns([2] + [2] * len(selected_portfolio_names))
+    cols[0].markdown("**Month**")
+    for i, pname in enumerate(selected_portfolio_names):
+        cols[i + 1].markdown(f"**{pname[:20]}**")
+
+    # Display each month with expander for daily details
+    for month in all_months:
+        cols = st.columns([2] + [2] * len(selected_portfolio_names))
+
+        # Month label with expander
+        with cols[0]:
+            expanded = st.checkbox(f"📅 {month}", key=f"expand_{month}")
+
+        # Portfolio returns for this month
+        for i, pname in enumerate(selected_portfolio_names):
+            with cols[i + 1]:
+                if pname in portfolio_returns and month in portfolio_returns[pname]:
+                    monthly_ret = portfolio_returns[pname][month]["total"]
+                    color = COLORS["positive"] if monthly_ret > 0 else COLORS["negative"]
+                    st.markdown(
+                        f'<span style="color: {color}; font-weight: 600;">{monthly_ret*100:.2f}%</span>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown("-")
+
+        # Show daily details if expanded
+        if expanded:
+            st.markdown(f"**Daily returns for {month}:**")
+
+            # Get all days for this month across portfolios
+            all_days = set()
+            for pname in selected_portfolio_names:
+                if pname in portfolio_returns and month in portfolio_returns[pname]:
+                    for d in portfolio_returns[pname][month]["days"]:
+                        all_days.add(d["date"])
+            all_days = sorted(all_days)
+
+            # Create daily data table
+            daily_table_data = []
+            for day in all_days:
+                row = {"Date": day}
+                for pname in selected_portfolio_names:
+                    if pname in portfolio_returns and month in portfolio_returns[pname]:
+                        day_ret = next(
+                            (d["return"] for d in portfolio_returns[pname][month]["days"] if d["date"] == day),
+                            None,
+                        )
+                        if day_ret is not None:
+                            row[pname[:15]] = f"{day_ret*100:.2f}%"
+                        else:
+                            row[pname[:15]] = "-"
+                    else:
+                        row[pname[:15]] = "-"
+                daily_table_data.append(row)
+
+            if daily_table_data:
+                daily_df = pd.DataFrame(daily_table_data)
+                st.dataframe(daily_df, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
 
 
 def _render_monthly_returns_tab(nav_data):

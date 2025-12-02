@@ -275,13 +275,25 @@ def create_monthly_returns_heatmap(
     monthly = nav_series.resample("ME").last()
     monthly_returns = monthly.pct_change() * 100
 
-    # Pivot to year x month
+    # Create DataFrame with year-month as rows
     df = pd.DataFrame({
         "year": monthly_returns.index.year,
         "month": monthly_returns.index.month,
         "return": monthly_returns.values,
-    })
+    }).dropna()
+
+    if df.empty:
+        # Return empty figure if no data
+        fig = go.Figure()
+        fig.add_annotation(text="No monthly data available", xref="paper", yref="paper",
+                          x=0.5, y=0.5, showarrow=False)
+        return fig
+
+    # Pivot to year x month - ensure all 12 months are included
     pivot = df.pivot(index="year", columns="month", values="return")
+
+    # Reindex columns to ensure all 12 months are present
+    pivot = pivot.reindex(columns=range(1, 13))
 
     # Month names
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
