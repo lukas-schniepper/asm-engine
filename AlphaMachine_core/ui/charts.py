@@ -271,23 +271,30 @@ def create_monthly_returns_heatmap(
     Returns:
         Plotly Figure
     """
-    # Calculate monthly returns
-    monthly = nav_series.resample("ME").last()
-    monthly_returns = monthly.pct_change() * 100
+    # Calculate monthly returns within each month (first to last value)
+    # This ensures the first month also shows a return
+    monthly_returns_list = []
 
-    # Create DataFrame with year-month as rows
-    df = pd.DataFrame({
-        "year": monthly_returns.index.year,
-        "month": monthly_returns.index.month,
-        "return": monthly_returns.values,
-    }).dropna()
+    for period, group in nav_series.groupby(pd.Grouper(freq="ME")):
+        if len(group) >= 1:
+            first_val = group.iloc[0]
+            last_val = group.iloc[-1]
+            if first_val > 0:
+                monthly_ret = ((last_val / first_val) - 1) * 100
+                monthly_returns_list.append({
+                    "year": period.year,
+                    "month": period.month,
+                    "return": monthly_ret,
+                })
 
-    if df.empty:
+    if not monthly_returns_list:
         # Return empty figure if no data
         fig = go.Figure()
         fig.add_annotation(text="No monthly data available", xref="paper", yref="paper",
                           x=0.5, y=0.5, showarrow=False)
         return fig
+
+    df = pd.DataFrame(monthly_returns_list)
 
     # Pivot to year x month - ensure all 12 months are included
     pivot = df.pivot(index="year", columns="month", values="return")
@@ -299,10 +306,13 @@ def create_monthly_returns_heatmap(
     month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+    # Ensure year labels are strings (not floats)
+    year_labels = [str(int(y)) for y in pivot.index]
+
     fig = go.Figure(data=go.Heatmap(
         z=pivot.values,
         x=month_names,
-        y=pivot.index.astype(str),
+        y=year_labels,
         colorscale=[
             [0, COLORS["negative"]],
             [0.5, COLORS["bg_secondary"]],
@@ -323,6 +333,7 @@ def create_monthly_returns_heatmap(
     layout["xaxis"]["title"] = ""
     layout["yaxis"]["title"] = ""
     layout["yaxis"]["autorange"] = "reversed"
+    layout["yaxis"]["type"] = "category"  # Force categorical axis for years
     fig.update_layout(**layout)
 
     return fig
