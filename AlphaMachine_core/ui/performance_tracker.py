@@ -511,6 +511,7 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
     """Render the Multi-Portfolio Comparison tab with expandable month/day returns."""
     from ..tracking import Variants
     from .styles import format_percentage, get_variant_display_name, VARIANT_COLORS, COLORS
+    from datetime import date
     import pandas as pd
 
     st.markdown("### Multi-Portfolio Returns Comparison")
@@ -545,12 +546,17 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
         index=0,
     )
 
+    # Always use today's date to include current/running month
+    today = date.today()
+    current_month = today.strftime("%Y-%m")
+
     # Build returns data for each portfolio
     portfolio_returns = {}
 
     for portfolio_name in selected_portfolio_names:
         portfolio_id = portfolio_options[portfolio_name]
-        nav_df = tracker.get_nav_series(portfolio_id, selected_variant, start_date, end_date)
+        # Use today as end_date to always include current month
+        nav_df = tracker.get_nav_series(portfolio_id, selected_variant, start_date, today)
 
         if nav_df.empty:
             continue
@@ -605,9 +611,12 @@ def _render_multi_portfolio_comparison_tab(tracker, start_date, end_date):
     for month in all_months:
         cols = st.columns([2] + [2] * len(selected_portfolio_names))
 
-        # Month label with expander
+        # Month label with expander - mark current month as MTD
         with cols[0]:
-            expanded = st.checkbox(f"📅 {month}", key=f"expand_{month}")
+            month_label = f"📅 {month}"
+            if month == current_month:
+                month_label += " (MTD)"
+            expanded = st.checkbox(month_label, key=f"expand_{month}")
 
         # Portfolio returns for this month
         for i, pname in enumerate(selected_portfolio_names):
