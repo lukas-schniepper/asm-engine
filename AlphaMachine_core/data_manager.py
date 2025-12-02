@@ -7,10 +7,12 @@ from typing import Dict, Optional, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlmodel import select
 from sqlalchemy import func
+from decimal import Decimal
 
 from AlphaMachine_core.models import TickerPeriod, TickerInfo, PriceData
 from AlphaMachine_core.data_sources.eodhd_http_client import EODHDHttpClient
 from AlphaMachine_core.db import get_session
+from AlphaMachine_core.tracking.models import PortfolioDefinition, PortfolioHolding
 
 class StockDataManager:
     def __init__(self):
@@ -42,7 +44,7 @@ class StockDataManager:
         created_tickers: List[str] = []
         with get_session() as session:
             for t_str in tickers:
-                t = t_str.upper() 
+                t = t_str.upper()
                 statement = select(TickerPeriod).where(
                     TickerPeriod.ticker    == t,
                     TickerPeriod.start_date == start,
@@ -56,7 +58,80 @@ class StockDataManager:
                     created_tickers.append(t)
             if created_tickers:
                 session.commit()
+
+        # Also ensure a portfolio exists for this source
+        self._ensure_portfolio_exists(source_name, tickers, start)
+
         return created_tickers
+
+    def _ensure_portfolio_exists(self, source_name: str, tickers: List[str], start_date: dt.date) -> None:
+        """Ensure a portfolio exists for this source, creating one if needed."""
+        portfolio_name = f"{source_name}_EqualWeight"
+
+        with get_session() as session:
+            # Check if portfolio already exists
+            existing = session.exec(
+                select(PortfolioDefinition).where(PortfolioDefinition.name == portfolio_name)
+            ).first()
+
+            if existing:
+                # Update holdings with any new tickers
+                self._update_portfolio_holdings(session, existing.id, tickers, start_date)
+            else:
+                # Create new portfolio
+                tickers_upper = [t.upper() for t in tickers]
+                weights = {t: 1.0 / len(tickers_upper) for t in tickers_upper}
+
+                portfolio = PortfolioDefinition(
+                    name=portfolio_name,
+                    description=f"Portfolio for {source_name} tickers (equal weight)",
+                    config={"tickers": tickers_upper, "weights": weights},
+                    source=source_name,
+                    start_date=start_date,
+                    is_active=True,
+                )
+                session.add(portfolio)
+                session.commit()
+                session.refresh(portfolio)
+
+                # Create holdings
+                self._update_portfolio_holdings(session, portfolio.id, tickers_upper, start_date)
+                print(f"Created portfolio '{portfolio_name}' (id={portfolio.id}) with {len(tickers_upper)} holdings")
+
+    def _update_portfolio_holdings(self, session, portfolio_id: int, tickers: List[str], effective_date: dt.date) -> None:
+        """Add or update holdings for a portfolio with equal weights."""
+        tickers_upper = [t.upper() for t in tickers]
+
+        # Get existing holdings
+        existing_holdings = session.exec(
+            select(PortfolioHolding).where(PortfolioHolding.portfolio_id == portfolio_id)
+        ).all()
+        existing_tickers = {h.ticker for h in existing_holdings}
+
+        # Calculate new equal weight across all tickers (existing + new)
+        all_tickers = existing_tickers.union(set(tickers_upper))
+        equal_weight = Decimal(str(round(1.0 / len(all_tickers), 6))) if all_tickers else Decimal("1")
+
+        # Update existing holdings with new weight
+        for holding in existing_holdings:
+            holding.weight = equal_weight
+            session.add(holding)
+
+        # Add new holdings (use weights only, not shares, for normalized NAV calculation)
+        new_tickers = set(tickers_upper) - existing_tickers
+        for ticker in new_tickers:
+            holding = PortfolioHolding(
+                portfolio_id=portfolio_id,
+                ticker=ticker,
+                weight=equal_weight,
+                effective_date=effective_date,
+                # Note: shares=None forces weight-based NAV calculation (normalized to base 100)
+            )
+            session.add(holding)
+
+        if new_tickers:
+            session.commit()
+            print(f"Added {len(new_tickers)} new holdings to portfolio {portfolio_id}")
 
     def update_ticker_data(self, tickers: Optional[List[str]] = None, history_start: str = '1990-01-01', max_workers: int = 10) -> Dict[str, Any]:
         """

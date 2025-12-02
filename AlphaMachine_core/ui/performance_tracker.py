@@ -74,7 +74,6 @@ def _render_performance_tracker():
         create_drawdown_chart,
         create_allocation_chart,
         create_returns_bar_chart,
-        create_monthly_returns_heatmap,
     )
 
     # Inject custom CSS with reduced header spacing
@@ -201,7 +200,6 @@ def _render_performance_tracker():
         "Multi-Portfolio Compare",
         "Allocation History",
         "Signal Analysis",
-        "Monthly Returns",
     ])
 
     # ===== Tab 1: Overview =====
@@ -232,10 +230,6 @@ def _render_performance_tracker():
     # ===== Tab 5: Signal Analysis =====
     with tabs[4]:
         _render_signals_tab(tracker, start_date, end_date)
-
-    # ===== Tab 6: Monthly Returns =====
-    with tabs[5]:
-        _render_monthly_returns_tab(nav_data)
 
 
 def _render_overview_tab(
@@ -789,30 +783,6 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=35 * len(daily_df) + 38)
         else:
             st.info("No daily data available for this month.")
-
-
-def _render_monthly_returns_tab(nav_data):
-    """Render the Monthly Returns tab."""
-    from .charts import create_monthly_returns_heatmap
-    from .styles import get_variant_display_name
-
-    st.markdown("### Monthly Returns Heatmap")
-
-    # Create heatmap for each variant
-    for variant, nav_series in nav_data.items():
-        st.markdown(f"#### {get_variant_display_name(variant)}")
-
-        try:
-            heatmap = create_monthly_returns_heatmap(
-                nav_series,
-                title="",
-                height=350,
-            )
-            st.plotly_chart(heatmap, use_container_width=True)
-        except Exception as e:
-            st.warning(f"Could not generate heatmap for {variant}: {e}")
-
-        st.markdown("---")
 
 
 def _render_demo_mode():
