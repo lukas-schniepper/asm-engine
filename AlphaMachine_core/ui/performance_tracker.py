@@ -200,6 +200,7 @@ def _render_performance_tracker():
         "Multi-Portfolio Compare",
         "Allocation History",
         "Signal Analysis",
+        "Scraper View",
     ])
 
     # ===== Tab 1: Overview =====
@@ -230,6 +231,10 @@ def _render_performance_tracker():
     # ===== Tab 5: Signal Analysis =====
     with tabs[4]:
         _render_signals_tab(tracker, start_date, end_date)
+
+    # ===== Tab 6: Scraper View =====
+    with tabs[5]:
+        _render_scraper_view_tab(tracker, start_date, end_date)
 
 
 def _render_overview_tab(
@@ -783,6 +788,184 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=35 * len(daily_df) + 38)
         else:
             st.info("No daily data available for this month.")
+
+
+def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
+    """Render the Scraper View tab - pivot table of daily returns across all portfolios."""
+    from ..tracking import Variants
+    from .styles import format_percentage
+    from datetime import date, timedelta
+    import pandas as pd
+    import numpy as np
+
+    st.markdown("### Daily Returns - Scraper View")
+    st.markdown("Daily performance percentage for all portfolios (similar to Google Sheets view).")
+
+    # Get all portfolios
+    all_portfolios = tracker.list_portfolios(active_only=True)
+
+    if not all_portfolios:
+        st.warning("No portfolios available.")
+        return
+
+    # Sort portfolios alphabetically
+    all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
+    portfolio_options = {p.name: p.id for p in all_portfolios_sorted}
+
+    # Controls
+    col1, col2 = st.columns(2)
+
+    with col1:
+        selected_variant = st.selectbox(
+            "Select Variant",
+            options=Variants.all(),
+            index=0,  # Default to RAW
+            key="scraper_view_variant",
+        )
+
+    with col2:
+        # Default to last 30 days
+        default_start = max(sidebar_start_date, sidebar_end_date - timedelta(days=30))
+        date_range = st.date_input(
+            "Date Range",
+            value=(default_start, sidebar_end_date),
+            key="scraper_view_dates",
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date, end_date = default_start, sidebar_end_date
+
+    # Helper to clean portfolio name
+    def clean_name(name: str) -> str:
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
+    # Collect daily returns for all portfolios
+    returns_data = {}
+
+    for portfolio in all_portfolios_sorted:
+        nav_df = tracker.get_nav_series(portfolio.id, selected_variant, start_date, end_date)
+
+        if nav_df.empty:
+            continue
+
+        # Use pre-computed daily_return from database
+        if "daily_return" in nav_df.columns:
+            returns = nav_df["daily_return"]
+        else:
+            returns = nav_df["nav"].pct_change()
+
+        # Store returns with clean name
+        clean_portfolio_name = clean_name(portfolio.name)
+        returns_data[clean_portfolio_name] = returns
+
+    if not returns_data:
+        st.warning("No data available for the selected date range and variant.")
+        return
+
+    # Create DataFrame with portfolios as rows, dates as columns
+    df = pd.DataFrame(returns_data).T
+
+    # Sort columns (dates) chronologically
+    df = df.reindex(sorted(df.columns), axis=1)
+
+    # Add total row (sum of all portfolios)
+    total_row = df.sum(axis=0)
+    df.loc["Gesamtsumme"] = total_row
+
+    # Format column headers as short dates (e.g., "Nov. 03")
+    date_labels = {}
+    for col in df.columns:
+        if hasattr(col, 'strftime'):
+            date_labels[col] = col.strftime("%b %d")
+        else:
+            date_labels[col] = str(col)
+
+    df.columns = [date_labels.get(c, str(c)) for c in df.columns]
+
+    # Convert to percentages for display
+    display_df = df.copy()
+    for col in display_df.columns:
+        display_df[col] = display_df[col].apply(
+            lambda x: f"{x*100:.2f}%" if pd.notna(x) else ""
+        )
+
+    # Reset index to make portfolio name a column
+    display_df = display_df.reset_index()
+    display_df.rename(columns={"index": "Portfolio"}, inplace=True)
+
+    # Style function for color coding
+    def color_returns(val):
+        """Color cells based on return value - orange/yellow for positive, blue for negative."""
+        if val == "" or val == "Portfolio":
+            return ""
+        try:
+            num = float(val.replace("%", ""))
+            if num > 5:
+                return "background-color: #ff8c00; color: white"  # Dark orange
+            elif num > 2:
+                return "background-color: #ffa500; color: black"  # Orange
+            elif num > 0:
+                return "background-color: #fff3cd; color: black"  # Light yellow
+            elif num > -2:
+                return "background-color: #cce5ff; color: black"  # Light blue
+            elif num > -5:
+                return "background-color: #66b3ff; color: black"  # Medium blue
+            else:
+                return "background-color: #0066cc; color: white"  # Dark blue
+        except (ValueError, AttributeError):
+            return ""
+
+    # Apply styling
+    value_cols = [c for c in display_df.columns if c != "Portfolio"]
+    styled_df = display_df.style.map(
+        color_returns, subset=value_cols
+    ).set_properties(
+        **{"text-align": "center"}, subset=value_cols
+    ).set_properties(
+        **{"text-align": "left", "font-weight": "bold"}, subset=["Portfolio"]
+    )
+
+    # Make the last row (Gesamtsumme) bold
+    styled_df = styled_df.apply(
+        lambda x: ["font-weight: bold" if x.name == len(display_df) - 1 else "" for _ in x],
+        axis=1
+    )
+
+    # Calculate height based on number of rows
+    height = 35 * len(display_df) + 40
+
+    # Display the table
+    st.dataframe(
+        styled_df,
+        use_container_width=True,
+        hide_index=True,
+        height=min(height, 600),  # Cap at 600px
+    )
+
+    # Show summary stats
+    st.markdown("---")
+    st.markdown("#### Period Summary")
+
+    # Calculate period totals using compounding
+    summary_data = []
+    for portfolio_name, returns in returns_data.items():
+        valid_returns = returns.dropna()
+        if len(valid_returns) > 0:
+            # Compounded return
+            total_return = (1 + valid_returns).prod() - 1
+            avg_daily = valid_returns.mean()
+            summary_data.append({
+                "Portfolio": portfolio_name,
+                "Total Return": f"{total_return*100:.2f}%",
+                "Avg Daily": f"{avg_daily*100:.3f}%",
+                "Trading Days": len(valid_returns),
+            })
+
+    if summary_data:
+        summary_df = pd.DataFrame(summary_data)
+        summary_df = summary_df.sort_values("Total Return", ascending=False, key=lambda x: x.str.replace("%", "").astype(float))
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
 
 def _render_demo_mode():
