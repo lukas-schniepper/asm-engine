@@ -207,12 +207,32 @@ def run_daily_update(
     elif trade_date:
         dates_to_process = [trade_date]
     else:
-        trade_date = date.today()
-        if not is_trading_day(trade_date):
-            # Find most recent trading day
-            while not is_trading_day(trade_date):
-                trade_date -= timedelta(days=1)
-            logger.info(f"Today is not a trading day, using most recent: {trade_date}")
+        # Use the most recent COMPLETED trading day
+        # Since this runs after market close (typically overnight UTC),
+        # we need to find the last trading day with available price data
+        from datetime import datetime
+        import pytz
+
+        # Get current time in ET
+        et_tz = pytz.timezone('America/New_York')
+        now_et = datetime.now(et_tz)
+
+        # Start with today in ET timezone
+        trade_date = now_et.date()
+
+        # If before market close (4 PM ET), use previous day
+        # Market closes at 16:00 ET, add buffer for data availability
+        if now_et.hour < 18:  # Before 6 PM ET - data may not be ready
+            trade_date -= timedelta(days=1)
+            logger.info(f"Before market data cutoff, starting from previous day: {trade_date}")
+
+        # Find most recent trading day
+        while not is_trading_day(trade_date):
+            trade_date -= timedelta(days=1)
+
+        if trade_date != now_et.date():
+            logger.info(f"Using most recent completed trading day: {trade_date}")
+
         dates_to_process = [trade_date]
 
     # Get portfolios to update
