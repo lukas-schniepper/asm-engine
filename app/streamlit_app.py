@@ -850,10 +850,218 @@ def show_backtester_ui():
     
 
 # =============================================================================
+# === Portfolio Holdings Selection UI ===
+# =============================================================================
+def _show_portfolio_holdings_ui():
+    """
+    UI for selecting which tickers from the universe (ticker_period)
+    should be included in the actual portfolio (portfolio_holding).
+    """
+    from decimal import Decimal
+    from AlphaMachine_core.tracking.models import PortfolioDefinition, PortfolioHolding
+
+    st.subheader("Portfolio Holdings Management")
+    st.markdown("""
+    Select which stocks from the **universe** (ticker_period) should be included in the **actual portfolio** (portfolio_holding).
+
+    - **Universe**: All candidate stocks loaded for a source/period
+    - **Portfolio**: Only the selected stocks that are actually tracked
+    """)
+
+    # Load all portfolios
+    try:
+        with get_session() as session:
+            portfolios = session.exec(
+                select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
+            ).all()
+    except Exception as e:
+        st.error(f"Error loading portfolios: {e}")
+        return
+
+    if not portfolios:
+        st.warning("No active portfolios found. Create a portfolio first via the Backtester page.")
+        return
+
+    # Portfolio selector
+    portfolio_options = {p.name: p for p in portfolios}
+    selected_portfolio_name = st.selectbox(
+        "Select Portfolio",
+        options=list(portfolio_options.keys()),
+        key="holdings_portfolio_selector"
+    )
+    selected_portfolio = portfolio_options[selected_portfolio_name]
+
+    # Show portfolio info
+    st.info(f"**Source**: {selected_portfolio.source or 'Unknown'} | **Start Date**: {selected_portfolio.start_date}")
+
+    portfolio_source = selected_portfolio.source
+    if not portfolio_source:
+        st.warning("This portfolio has no source defined. Cannot load universe tickers.")
+        return
+
+    # Get available months for this source
+    try:
+        with get_session() as session:
+            from sqlalchemy import func
+            months_result = session.exec(
+                select(func.to_char(TickerPeriod.start_date, 'YYYY-MM'))
+                .where(TickerPeriod.source == portfolio_source)
+                .distinct()
+                .order_by(func.to_char(TickerPeriod.start_date, 'YYYY-MM').desc())
+            ).all()
+            available_months = [str(m) for m in months_result if m]
+    except Exception as e:
+        st.error(f"Error loading months: {e}")
+        return
+
+    if not available_months:
+        st.warning(f"No ticker periods found for source '{portfolio_source}'")
+        return
+
+    # Month selector
+    selected_month = st.selectbox(
+        "Select Period (Month)",
+        options=available_months,
+        key="holdings_month_selector"
+    )
+
+    # Parse month to date
+    year, month = selected_month.split("-")
+    effective_date = dt.date(int(year), int(month), 1)
+
+    # Get universe tickers for this source/month
+    try:
+        with get_session() as session:
+            universe_tickers = session.exec(
+                select(TickerPeriod.ticker)
+                .where(TickerPeriod.source == portfolio_source)
+                .where(func.to_char(TickerPeriod.start_date, 'YYYY-MM') == selected_month)
+                .distinct()
+                .order_by(TickerPeriod.ticker)
+            ).all()
+            universe_tickers = sorted([str(t) for t in universe_tickers if t])
+    except Exception as e:
+        st.error(f"Error loading universe tickers: {e}")
+        return
+
+    if not universe_tickers:
+        st.warning(f"No tickers in universe for {portfolio_source} / {selected_month}")
+        return
+
+    # Get currently selected tickers (already in portfolio_holding)
+    try:
+        with get_session() as session:
+            current_holdings = session.exec(
+                select(PortfolioHolding.ticker)
+                .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                .where(PortfolioHolding.effective_date == effective_date)
+            ).all()
+            current_selected = set(str(t) for t in current_holdings if t)
+    except Exception as e:
+        st.error(f"Error loading current holdings: {e}")
+        current_selected = set()
+
+    st.markdown("---")
+    st.markdown(f"### Universe: {len(universe_tickers)} stocks | Currently Selected: {len(current_selected)}")
+
+    # Create checkboxes for each ticker
+    st.markdown("**Select stocks for portfolio:**")
+
+    # Use columns for better layout (4 columns)
+    num_cols = 4
+    cols = st.columns(num_cols)
+
+    # Track selections
+    selected_tickers = []
+    for i, ticker in enumerate(universe_tickers):
+        col_idx = i % num_cols
+        with cols[col_idx]:
+            is_checked = st.checkbox(
+                ticker,
+                value=ticker in current_selected,
+                key=f"ticker_select_{selected_portfolio.id}_{selected_month}_{ticker}"
+            )
+            if is_checked:
+                selected_tickers.append(ticker)
+
+    st.markdown("---")
+
+    # Summary and save button
+    col_info, col_action = st.columns([2, 1])
+
+    with col_info:
+        st.markdown(f"**Selected: {len(selected_tickers)} of {len(universe_tickers)} stocks**")
+        if len(selected_tickers) > 0:
+            weight = 1.0 / len(selected_tickers)
+            st.markdown(f"Equal weight per stock: **{weight*100:.2f}%**")
+
+    with col_action:
+        if st.button("Save Holdings", type="primary", key="save_holdings_btn"):
+            try:
+                with get_session() as session:
+                    # Delete existing holdings for this portfolio/date
+                    existing = session.exec(
+                        select(PortfolioHolding)
+                        .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                        .where(PortfolioHolding.effective_date == effective_date)
+                    ).all()
+
+                    for h in existing:
+                        session.delete(h)
+
+                    # Add new holdings
+                    weight = Decimal("1") / Decimal(str(len(selected_tickers))) if selected_tickers else Decimal("0")
+
+                    for ticker in selected_tickers:
+                        new_holding = PortfolioHolding(
+                            portfolio_id=selected_portfolio.id,
+                            effective_date=effective_date,
+                            ticker=ticker,
+                            weight=weight,
+                        )
+                        session.add(new_holding)
+
+                    session.commit()
+
+                st.success(f"Saved {len(selected_tickers)} holdings for {selected_month}!")
+                st.info("Note: You may need to re-run NAV backfill to update historical returns with the new holdings.")
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Error saving holdings: {e}")
+
+    # Show current holdings table
+    with st.expander("View Current Holdings Details", expanded=False):
+        try:
+            with get_session() as session:
+                holdings = session.exec(
+                    select(PortfolioHolding)
+                    .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                    .where(PortfolioHolding.effective_date == effective_date)
+                    .order_by(PortfolioHolding.ticker)
+                ).all()
+
+                if holdings:
+                    holdings_data = [
+                        {
+                            "Ticker": h.ticker,
+                            "Weight": f"{float(h.weight)*100:.2f}%" if h.weight else "-",
+                            "Entry Price": f"${float(h.entry_price):.2f}" if h.entry_price else "-",
+                        }
+                        for h in holdings
+                    ]
+                    st.dataframe(pd.DataFrame(holdings_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No holdings saved for this period yet.")
+        except Exception as e:
+            st.error(f"Error loading holdings details: {e}")
+
+
+# =============================================================================
 # === Data-Management-UI ===
 # =============================================================================
 def show_data_ui():
-    st.header("📂 Data Management")
+    st.header("Data Management")
 
     if 'sdm_instance' not in st.session_state:
         try:
@@ -862,10 +1070,10 @@ def show_data_ui():
             st.error(f"Fehler Initialisierung StockDataManager: {e}"); st.exception(e); st.stop()
     dm = st.session_state.sdm_instance
 
-    mode = st.radio("Modus", ["➕ Add/Update", "👁️ View/Delete"], index=0, key="data_ui_mode_radio_main_v2")
+    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings"], index=0, key="data_ui_mode_radio_main_v3")
 
-    if mode == "➕ Add/Update":
-        st.subheader("➕ Ticker einfügen & Daten updaten")
+    if mode == "Add/Update":
+        st.subheader("Ticker einfuegen & Daten updaten")
         tickers_text = st.text_area("Tickers (eine pro Zeile)", height=120, key="data_ui_tickers_text_main_v2")
         col_date, col_source = st.columns(2)
         month_dt_input = col_date.date_input("Monat wählen", value=dt.date.today().replace(day=1), key="data_ui_month_date_main_v2")
@@ -960,11 +1168,16 @@ def show_data_ui():
 
                 total_time = time.time() - start_time
                 status_text.success(f"✅ Update abgeschlossen in {total_time/60:.1f} Minuten")
-                stats_text.success(f"📊 Aktualisiert: {updated_count} | Übersprungen: {skipped_count} | Gesamt: {len(tickers_in_db_update)}")
-        return 
+                stats_text.success(f"Aktualisiert: {updated_count} | Uebersprungen: {skipped_count} | Gesamt: {len(tickers_in_db_update)}")
+        return
+
+    # --- Portfolio Holdings Mode ---
+    elif mode == "Portfolio Holdings":
+        _show_portfolio_holdings_ui()
+        return
 
     # --- View/Delete Mode ---
-    st.subheader("👁️ View/Delete Ticker Periods")
+    st.subheader("View/Delete Ticker Periods")
     all_periods_for_filters: List[Dict[str, Any]]
     if 'all_periods_for_filters_cached_data_ui' not in st.session_state:
         with st.spinner("Lade Periodendaten für Filter..."):
