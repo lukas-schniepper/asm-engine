@@ -996,8 +996,8 @@ def _show_portfolio_holdings_ui():
 
     st.markdown("---")
 
-    # Summary and save button
-    col_info, col_action = st.columns([2, 1])
+    # Summary and action buttons
+    col_info, col_save, col_clear = st.columns([2, 1, 1])
 
     with col_info:
         st.markdown(f"**Selected: {len(selected_tickers)} of {len(universe_tickers)} stocks**")
@@ -1005,7 +1005,7 @@ def _show_portfolio_holdings_ui():
             weight = 1.0 / len(selected_tickers)
             st.markdown(f"Equal weight per stock: **{weight*100:.2f}%**")
 
-    with col_action:
+    with col_save:
         if st.button("Save Holdings", type="primary", key="save_holdings_btn"):
             try:
                 with get_session() as session:
@@ -1039,6 +1039,30 @@ def _show_portfolio_holdings_ui():
 
             except Exception as e:
                 st.error(f"Error saving holdings: {e}")
+
+    with col_clear:
+        if len(current_selected) > 0:
+            if st.button("Clear All", type="secondary", key="clear_holdings_btn", help="Delete all holdings for this month"):
+                try:
+                    with get_session() as session:
+                        # Delete all holdings for this portfolio/date
+                        existing = session.exec(
+                            select(PortfolioHolding)
+                            .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
+                            .where(PortfolioHolding.effective_date == effective_date)
+                        ).all()
+
+                        deleted_count = len(existing)
+                        for h in existing:
+                            session.delete(h)
+
+                        session.commit()
+
+                    st.success(f"Cleared {deleted_count} holdings for {selected_month}!")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Error clearing holdings: {e}")
 
     # Show current holdings table
     with st.expander("View Current Holdings Details", expanded=False):
