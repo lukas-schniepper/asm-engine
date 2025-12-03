@@ -556,8 +556,16 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         if not nav_df.empty:
             portfolios_with_data.append(p.name)
 
-    # Default selection: SA Large Caps, SA Mid Caps, SPY
-    default_portfolio_keywords = ["SA Large Caps", "SA Mid Caps", "SPY"]
+    # Function to clean portfolio names for display (remove _EqualWeight suffix)
+    def clean_portfolio_name(name: str) -> str:
+        """Remove _EqualWeight suffix for cleaner dropdown display."""
+        return name.replace("_EqualWeight", "")
+
+    # Default selection: SA portfolios, SPY, plus additional portfolios
+    default_portfolio_keywords = [
+        "SA Large Caps", "SA Mid Caps", "SPY",
+        "50er", "30er", "TR10 Large Caps", "TR10", "TW30", "TR10_EqualWeight"
+    ]
     default_selection = []
     for keyword in default_portfolio_keywords:
         for pname in portfolios_with_data:
@@ -584,6 +592,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             options=portfolios_with_data,
             default=st.session_state[session_key],
             key="multi_portfolio_selector",
+            format_func=clean_portfolio_name,
             help="Select portfolios to compare (only portfolios with NAV data shown)",
         )
         # Save selection to session state
