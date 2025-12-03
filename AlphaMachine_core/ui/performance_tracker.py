@@ -552,6 +552,15 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                     default_selection.append(pname)
                 break
 
+    # Use session state to persist selection across visits
+    session_key = "multi_portfolio_selected_portfolios"
+    if session_key not in st.session_state:
+        st.session_state[session_key] = default_selection if default_selection else portfolios_with_data[:3]
+    # Filter out any portfolios that no longer have data
+    st.session_state[session_key] = [p for p in st.session_state[session_key] if p in portfolios_with_data]
+    if not st.session_state[session_key]:
+        st.session_state[session_key] = default_selection if default_selection else portfolios_with_data[:3]
+
     # Multi-select for portfolios and variants side by side
     col1, col2 = st.columns(2)
 
@@ -559,9 +568,12 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         selected_portfolio_names = st.multiselect(
             "Select Portfolios",
             options=portfolios_with_data,
-            default=default_selection if default_selection else portfolios_with_data[:3],
+            default=st.session_state[session_key],
+            key="multi_portfolio_selector",
             help="Select portfolios to compare (only portfolios with NAV data shown)",
         )
+        # Save selection to session state
+        st.session_state[session_key] = selected_portfolio_names
 
     with col2:
         variant_options = Variants.all()
@@ -570,6 +582,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             options=variant_options,
             default=[Variants.RAW],  # Default to raw only
             format_func=get_variant_display_name,
+            key="multi_portfolio_variants",
             help="Select one or more variants to compare",
         )
 
@@ -853,6 +866,15 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     default_selected.append(pname)
                 break
 
+    # Use session state to persist selection across visits
+    session_key = "scraper_view_selected_portfolios"
+    if session_key not in st.session_state:
+        st.session_state[session_key] = default_selected if default_selected else portfolios_with_data[:3]
+    # Filter out any portfolios that no longer have data
+    st.session_state[session_key] = [p for p in st.session_state[session_key] if p in portfolios_with_data]
+    if not st.session_state[session_key]:
+        st.session_state[session_key] = default_selected if default_selected else portfolios_with_data[:3]
+
     # Controls
     col1, col2 = st.columns(2)
 
@@ -881,10 +903,12 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     selected_portfolios = st.multiselect(
         "Select Portfolios",
         options=portfolios_with_data,
-        default=default_selected if default_selected else portfolios_with_data[:3],
-        key="scraper_view_portfolios",
+        default=st.session_state[session_key],
+        key="scraper_view_portfolios_selector",
         help="Only portfolios with NAV data are shown",
     )
+    # Save selection to session state
+    st.session_state[session_key] = selected_portfolios
 
     if not selected_portfolios:
         st.warning("Please select at least one portfolio.")
