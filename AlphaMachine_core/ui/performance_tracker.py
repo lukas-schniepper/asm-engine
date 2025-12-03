@@ -535,15 +535,32 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
     portfolio_options = {p.name: p.id for p in all_portfolios_sorted}
 
+    # Filter to only portfolios with NAV data
+    portfolios_with_data = []
+    for p in all_portfolios_sorted:
+        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
+        if not nav_df.empty:
+            portfolios_with_data.append(p.name)
+
+    # Default selection: SA Large Caps, SA Mid Caps, SPY
+    default_portfolio_keywords = ["SA Large Caps", "SA Mid Caps", "SPY"]
+    default_selection = []
+    for keyword in default_portfolio_keywords:
+        for pname in portfolios_with_data:
+            if keyword.lower().replace(" ", "") in pname.lower().replace("_", "").replace(" ", ""):
+                if pname not in default_selection:
+                    default_selection.append(pname)
+                break
+
     # Multi-select for portfolios and variants side by side
     col1, col2 = st.columns(2)
 
     with col1:
         selected_portfolio_names = st.multiselect(
             "Select Portfolios",
-            options=list(portfolio_options.keys()),
-            default=list(portfolio_options.keys())[:3] if len(portfolio_options) >= 3 else list(portfolio_options.keys()),
-            help="Select portfolios to compare",
+            options=portfolios_with_data,
+            default=default_selection if default_selection else portfolios_with_data[:3],
+            help="Select portfolios to compare (only portfolios with NAV data shown)",
         )
 
     with col2:
@@ -815,28 +832,26 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     def clean_name(name: str) -> str:
         return name.replace("_EqualWeight", "").replace("_", " ")
 
-    # Default portfolio filter keywords (multiple variations to catch different naming)
-    default_keywords = [
-        "SA_LargeCaps", "SA-LargeCaps", "SA LargeCaps", "SALargeCaps",
-        "SA_MidCaps", "SA-MidCaps", "SA MidCaps", "SAMidCaps",
-        "SPY",
-        "TR10_LargeCapsX", "TR10-LargeCapsX", "TR10 LargeCapsX",
-        "TR10",
-        "TopWeights", "Topweights",
-        "TW30",
-    ]
+    # Filter to only portfolios with NAV data
+    portfolios_with_data = []
+    for p in all_portfolios_sorted:
+        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
+        if not nav_df.empty:
+            portfolios_with_data.append(p.name)
 
-    # Determine default selected portfolios
-    def matches_default(name: str) -> bool:
-        name_lower = name.lower().replace("_", "").replace("-", "").replace(" ", "")
-        for keyword in default_keywords:
-            keyword_normalized = keyword.lower().replace("_", "").replace("-", "").replace(" ", "")
-            if keyword_normalized in name_lower:
-                return True
-        return False
+    if not portfolios_with_data:
+        st.warning("No portfolios with NAV data available.")
+        return
 
-    default_selected = [p.name for p in all_portfolios_sorted if matches_default(p.name)]
-    all_portfolio_names = [p.name for p in all_portfolios_sorted]
+    # Default selection: SA Large Caps, SA Mid Caps, SPY
+    default_portfolio_keywords = ["SA Large Caps", "SA Mid Caps", "SPY"]
+    default_selected = []
+    for keyword in default_portfolio_keywords:
+        for pname in portfolios_with_data:
+            if keyword.lower().replace(" ", "") in pname.lower().replace("_", "").replace(" ", ""):
+                if pname not in default_selected:
+                    default_selected.append(pname)
+                break
 
     # Controls
     col1, col2 = st.columns(2)
@@ -862,12 +877,13 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         else:
             start_date, end_date = default_start, sidebar_end_date
 
-    # Portfolio filter
+    # Portfolio filter - only show portfolios with NAV data
     selected_portfolios = st.multiselect(
         "Select Portfolios",
-        options=all_portfolio_names,
-        default=default_selected if default_selected else all_portfolio_names[:5],
+        options=portfolios_with_data,
+        default=default_selected if default_selected else portfolios_with_data[:3],
         key="scraper_view_portfolios",
+        help="Only portfolios with NAV data are shown",
     )
 
     if not selected_portfolios:
