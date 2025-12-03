@@ -1094,27 +1094,73 @@ def _show_portfolio_holdings_ui():
         )
 
 
+def _get_trading_days(start_date, end_date):
+    """Get list of trading days between start and end dates."""
+    from pandas.tseries.holiday import USFederalHolidayCalendar
+    from pandas.tseries.offsets import CustomBusinessDay
+
+    us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+    trading_days = pd.date_range(start=start_date, end=end_date, freq=us_bd)
+    return [d.date() for d in trading_days]
+
+
+def _update_portfolio_nav(tracker, portfolio, trade_date, price_data, prev_price_data=None):
+    """Update NAV for a single portfolio on a specific date."""
+    from datetime import timedelta
+    from AlphaMachine_core.tracking import Variants
+
+    try:
+        # Get holdings as of trade date
+        holdings = tracker.get_holdings(portfolio.id, trade_date)
+
+        if not holdings:
+            return False
+
+        # Get previous NAV for return calculation
+        prev_nav_df = tracker.get_nav_series(
+            portfolio.id,
+            Variants.RAW,
+            end_date=trade_date - timedelta(days=1),
+        )
+
+        if prev_nav_df.empty:
+            previous_raw_nav = 100.0
+            initial_nav = 100.0
+        else:
+            previous_raw_nav = prev_nav_df["nav"].iloc[-1]
+            initial_nav = prev_nav_df["nav"].iloc[0]
+
+        # Calculate raw NAV
+        raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)
+
+        # Update NAV for all variants
+        tracker.update_daily_nav(
+            portfolio_id=portfolio.id,
+            trade_date=trade_date,
+            raw_nav=raw_nav,
+            previous_raw_nav=previous_raw_nav,
+            initial_nav=initial_nav,
+        )
+        return True
+
+    except Exception:
+        return False
+
+
 def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
     """Run NAV update with progress bar."""
-    import sys
-    from pathlib import Path
     from datetime import timedelta
 
-    # Import NAV update functions
+    # Import required modules
     try:
-        from scripts.scheduled_nav_update import (
-            get_trading_days,
-            update_portfolio_nav,
-            is_trading_day,
-        )
-        from AlphaMachine_core.tracking import PortfolioTracker, get_tracker
+        from AlphaMachine_core.tracking import get_tracker
         from AlphaMachine_core.data_manager import StockDataManager
     except ImportError as e:
-        st.error(f"Could not import NAV update modules: {e}")
+        st.error(f"Could not import modules: {e}")
         return
 
     # Get trading days
-    dates_to_process = get_trading_days(start_date, end_date)
+    dates_to_process = _get_trading_days(start_date, end_date)
 
     if not dates_to_process:
         st.warning("No trading days in the selected date range.")
@@ -1194,7 +1240,7 @@ def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
             prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
 
         # Update NAV
-        success = update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
+        success = _update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
         if success:
             successful += 1
         else:
