@@ -873,8 +873,13 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     # Default selection for Scraper View: SA portfolios, SPY, plus additional portfolios
     default_portfolio_keywords = [
         "SA Large Caps", "SA Mid Caps", "SPY",
-        "50er", "30er", "TR10 Large Caps", "TR10", "TW30"
+        "50er", "30er", "TR10 Large Caps", "TR10", "TW30", "TR10_EqualWeight"
     ]
+
+    # Function to clean portfolio names for display (remove _EqualWeight suffix)
+    def clean_portfolio_name(name: str) -> str:
+        """Remove _EqualWeight suffix for cleaner dropdown display."""
+        return name.replace("_EqualWeight", "")
     default_selected = []
     for keyword in default_portfolio_keywords:
         for pname in portfolios_with_data:
@@ -922,6 +927,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         options=portfolios_with_data,
         default=st.session_state[session_key],
         key="scraper_view_portfolios_selector",
+        format_func=clean_portfolio_name,
         help="Only portfolios with NAV data are shown",
     )
     # Save selection to session state
