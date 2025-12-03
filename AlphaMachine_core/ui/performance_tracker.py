@@ -963,15 +963,59 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     # Sort columns (dates) chronologically
     df = df.reindex(sorted(df.columns), axis=1)
 
-    # Format column headers as short dates (e.g., "Nov. 03")
+    # Add monthly total columns
+    # Group dates by month and calculate compounded returns
+    date_cols = list(df.columns)
+    if date_cols:
+        # Group by year-month
+        month_groups = {}
+        for d in date_cols:
+            if hasattr(d, 'strftime'):
+                month_key = d.strftime("%Y-%m")
+                if month_key not in month_groups:
+                    month_groups[month_key] = []
+                month_groups[month_key].append(d)
+
+        # Build new column order with monthly totals inserted
+        new_columns = []
+        monthly_total_cols = []
+        for month_key in sorted(month_groups.keys()):
+            month_dates = month_groups[month_key]
+            # Add daily columns
+            new_columns.extend(month_dates)
+            # Calculate monthly total for each portfolio (compounded return)
+            month_name = pd.Timestamp(month_dates[0]).strftime("%b")
+            total_col_name = f"{month_name} Total"
+            monthly_total_cols.append(total_col_name)
+
+            # Calculate compounded monthly return for each portfolio
+            monthly_returns = []
+            for portfolio in df.index:
+                month_data = df.loc[portfolio, month_dates].dropna()
+                if len(month_data) > 0:
+                    compounded = (1 + month_data).prod() - 1
+                    monthly_returns.append(compounded)
+                else:
+                    monthly_returns.append(np.nan)
+
+            df[total_col_name] = monthly_returns
+            new_columns.append(total_col_name)
+
+        # Reorder columns
+        df = df[new_columns]
+
+    # Format column headers as short dates (e.g., "Nov 03")
     date_labels = {}
     for col in df.columns:
         if hasattr(col, 'strftime'):
             date_labels[col] = col.strftime("%b %d")
         else:
-            date_labels[col] = str(col)
+            date_labels[col] = str(col)  # Monthly totals already have string names
 
     df.columns = [date_labels.get(c, str(c)) for c in df.columns]
+
+    # Track which columns are monthly totals (for special styling)
+    monthly_total_col_names = [c for c in df.columns if "Total" in str(c)]
 
     # Convert to percentages for display
     display_df = df.copy()
@@ -985,26 +1029,43 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     display_df.rename(columns={"index": "Portfolio"}, inplace=True)
 
     # Style function for color coding
-    def color_returns(val):
+    def color_returns(val, is_total=False):
         """Color cells based on return value - green for positive, red for negative."""
         if val == "" or val == "Portfolio":
             return ""
         try:
             num = float(val.replace("%", ""))
-            if num > 5:
-                return "background-color: #1e7b1e; color: white"  # Dark green
-            elif num > 2:
-                return "background-color: #28a745; color: white"  # Green
-            elif num > 0:
-                return "background-color: #90EE90; color: black"  # Light green
-            elif num == 0:
-                return "background-color: #f8f9fa; color: black"  # Neutral gray
-            elif num > -2:
-                return "background-color: #ffcccb; color: black"  # Light red
-            elif num > -5:
-                return "background-color: #dc3545; color: white"  # Red
+            # Use bolder colors for monthly totals
+            if is_total:
+                if num > 5:
+                    return "background-color: #145214; color: white; font-weight: bold"  # Darker green
+                elif num > 2:
+                    return "background-color: #1e7b1e; color: white; font-weight: bold"
+                elif num > 0:
+                    return "background-color: #2d8f2d; color: white; font-weight: bold"
+                elif num == 0:
+                    return "background-color: #6c757d; color: white; font-weight: bold"  # Gray
+                elif num > -2:
+                    return "background-color: #c82333; color: white; font-weight: bold"
+                elif num > -5:
+                    return "background-color: #a71d2a; color: white; font-weight: bold"
+                else:
+                    return "background-color: #6b0f18; color: white; font-weight: bold"  # Darker red
             else:
-                return "background-color: #8b0000; color: white"  # Dark red
+                if num > 5:
+                    return "background-color: #1e7b1e; color: white"  # Dark green
+                elif num > 2:
+                    return "background-color: #28a745; color: white"  # Green
+                elif num > 0:
+                    return "background-color: #90EE90; color: black"  # Light green
+                elif num == 0:
+                    return "background-color: #f8f9fa; color: black"  # Neutral gray
+                elif num > -2:
+                    return "background-color: #ffcccb; color: black"  # Light red
+                elif num > -5:
+                    return "background-color: #dc3545; color: white"  # Red
+                else:
+                    return "background-color: #8b0000; color: white"  # Dark red
         except (ValueError, AttributeError):
             return ""
 
@@ -1015,10 +1076,15 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     portfolio_col = display_df[["Portfolio"]]
     data_cols = display_df[value_cols]
 
-    # Style the data columns
-    styled_data = data_cols.style.map(color_returns).set_properties(
-        **{"text-align": "center"}
-    )
+    # Create styling function that knows which columns are totals
+    def style_cell(val, col_name):
+        is_total = "Total" in str(col_name)
+        return color_returns(val, is_total)
+
+    # Style the data columns with column-aware styling
+    styled_data = data_cols.style.apply(
+        lambda col: [style_cell(v, col.name) for v in col], axis=0
+    ).set_properties(**{"text-align": "center"})
 
     # Style the portfolio column
     styled_portfolio = portfolio_col.style.set_properties(
