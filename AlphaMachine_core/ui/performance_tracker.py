@@ -870,8 +870,11 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         st.warning("No portfolios with NAV data available.")
         return
 
-    # Default selection: SA Large Caps, SA Mid Caps, SPY
-    default_portfolio_keywords = ["SA Large Caps", "SA Mid Caps", "SPY"]
+    # Default selection for Scraper View: SA portfolios, SPY, plus additional portfolios
+    default_portfolio_keywords = [
+        "SA Large Caps", "SA Mid Caps", "SPY",
+        "50er", "30er", "TR10 Large Caps", "TR10", "TW30"
+    ]
     default_selected = []
     for keyword in default_portfolio_keywords:
         for pname in portfolios_with_data:
