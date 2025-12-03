@@ -1066,6 +1066,161 @@ def _show_portfolio_holdings_ui():
         except Exception as e:
             st.error(f"Error loading holdings details: {e}")
 
+    # NAV Update Section
+    st.markdown("---")
+    st.markdown("### NAV Update")
+    st.markdown("Run NAV calculation for this portfolio to see performance immediately.")
+
+    # Date range inputs
+    col_start, col_end = st.columns(2)
+    with col_start:
+        nav_start_date = st.date_input(
+            "Start Date",
+            value=selected_portfolio["start_date"],
+            key="nav_update_start_date"
+        )
+    with col_end:
+        nav_end_date = st.date_input(
+            "End Date",
+            value=dt.date.today(),
+            key="nav_update_end_date"
+        )
+
+    if st.button("Run NAV Update", type="secondary", key="run_nav_update_btn"):
+        _run_nav_update_with_progress(
+            selected_portfolio["name"],
+            nav_start_date,
+            nav_end_date
+        )
+
+
+def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
+    """Run NAV update with progress bar."""
+    import sys
+    from pathlib import Path
+    from datetime import timedelta
+
+    # Import NAV update functions
+    try:
+        from scripts.scheduled_nav_update import (
+            get_trading_days,
+            update_portfolio_nav,
+            is_trading_day,
+        )
+        from AlphaMachine_core.tracking import PortfolioTracker, get_tracker
+        from AlphaMachine_core.data_manager import StockDataManager
+    except ImportError as e:
+        st.error(f"Could not import NAV update modules: {e}")
+        return
+
+    # Get trading days
+    dates_to_process = get_trading_days(start_date, end_date)
+
+    if not dates_to_process:
+        st.warning("No trading days in the selected date range.")
+        return
+
+    st.info(f"Processing {len(dates_to_process)} trading days from {start_date} to {end_date}")
+
+    # Initialize tracker and data manager
+    tracker = get_tracker()
+    dm = StockDataManager()
+
+    # Get portfolio
+    portfolio = tracker.get_portfolio_by_name(portfolio_name)
+    if not portfolio:
+        st.error(f"Portfolio '{portfolio_name}' not found")
+        return
+
+    # Collect all tickers needed
+    all_tickers = set()
+    for d in dates_to_process:
+        holdings = tracker.get_holdings(portfolio.id, d)
+        all_tickers.update(h.ticker for h in holdings)
+
+    if not all_tickers:
+        st.warning("No holdings found for any date in the range.")
+        return
+
+    # Get price data
+    status_text = st.empty()
+    status_text.text(f"Loading prices for {len(all_tickers)} tickers...")
+
+    min_date = min(dates_to_process)
+    max_date = max(dates_to_process)
+
+    # Include previous days for return calculation
+    prev_min_date = min_date - timedelta(days=7)
+
+    price_dicts = dm.get_price_data(
+        list(all_tickers),
+        prev_min_date.strftime("%Y-%m-%d"),
+        max_date.strftime("%Y-%m-%d"),
+    )
+
+    if not price_dicts:
+        st.error("No price data available. Make sure prices are loaded for these tickers.")
+        return
+
+    price_df = pd.DataFrame(price_dicts)
+    price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+    # Progress tracking
+    progress_bar = st.progress(0)
+    stats_container = st.empty()
+
+    successful = 0
+    failed = 0
+
+    # Process each date
+    for i, process_date in enumerate(dates_to_process):
+        status_text.text(f"Processing {process_date}...")
+
+        # Get prices for this date
+        date_prices = price_df[price_df["trade_date"] == process_date]
+        price_data = dict(zip(date_prices["ticker"], date_prices["close"]))
+
+        if not price_data:
+            failed += 1
+            progress_bar.progress((i + 1) / len(dates_to_process))
+            continue
+
+        # Get previous day's prices
+        prev_dates = price_df[price_df["trade_date"] < process_date]
+        prev_prices_data = {}
+        if not prev_dates.empty:
+            latest_prev_date = prev_dates["trade_date"].max()
+            prev_day_prices = price_df[price_df["trade_date"] == latest_prev_date]
+            prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
+
+        # Update NAV
+        success = update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
+        if success:
+            successful += 1
+        else:
+            failed += 1
+
+        # Update progress
+        progress_bar.progress((i + 1) / len(dates_to_process))
+        stats_container.text(f"Successful: {successful} | Failed/Skipped: {failed}")
+
+    # Compute metrics
+    status_text.text("Computing periodic metrics...")
+    try:
+        metrics = tracker.compute_and_store_metrics(portfolio.id)
+        status_text.text(f"Computed {len(metrics)} metrics")
+    except Exception as e:
+        status_text.warning(f"Metrics computation failed: {e}")
+
+    # Final results
+    progress_bar.progress(1.0)
+    status_text.empty()
+
+    if successful > 0:
+        st.success(f"NAV Update Complete: {successful} days updated, {failed} days skipped/failed")
+    else:
+        st.warning(f"NAV Update Complete: No days were successfully updated ({failed} failed/skipped)")
+
 
 # =============================================================================
 # === Data-Management-UI ===
