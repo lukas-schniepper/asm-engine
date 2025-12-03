@@ -868,12 +868,22 @@ def _show_portfolio_holdings_ui():
     - **Portfolio**: Only the selected stocks that are actually tracked
     """)
 
-    # Load all portfolios
+    # Load all portfolios - extract data while session is open to avoid DetachedInstanceError
     try:
         with get_session() as session:
-            portfolios = session.exec(
+            portfolios_raw = session.exec(
                 select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
             ).all()
+            # Extract data while session is open
+            portfolios = [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "source": p.source,
+                    "start_date": p.start_date,
+                }
+                for p in portfolios_raw
+            ]
     except Exception as e:
         st.error(f"Error loading portfolios: {e}")
         return
@@ -883,7 +893,7 @@ def _show_portfolio_holdings_ui():
         return
 
     # Portfolio selector
-    portfolio_options = {p.name: p for p in portfolios}
+    portfolio_options = {p["name"]: p for p in portfolios}
     selected_portfolio_name = st.selectbox(
         "Select Portfolio",
         options=list(portfolio_options.keys()),
@@ -892,9 +902,9 @@ def _show_portfolio_holdings_ui():
     selected_portfolio = portfolio_options[selected_portfolio_name]
 
     # Show portfolio info
-    st.info(f"**Source**: {selected_portfolio.source or 'Unknown'} | **Start Date**: {selected_portfolio.start_date}")
+    st.info(f"**Source**: {selected_portfolio['source'] or 'Unknown'} | **Start Date**: {selected_portfolio['start_date']}")
 
-    portfolio_source = selected_portfolio.source
+    portfolio_source = selected_portfolio["source"]
     if not portfolio_source:
         st.warning("This portfolio has no source defined. Cannot load universe tickers.")
         return
@@ -953,7 +963,7 @@ def _show_portfolio_holdings_ui():
         with get_session() as session:
             current_holdings = session.exec(
                 select(PortfolioHolding.ticker)
-                .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
                 .where(PortfolioHolding.effective_date == effective_date)
             ).all()
             current_selected = set(str(t) for t in current_holdings if t)
@@ -979,7 +989,7 @@ def _show_portfolio_holdings_ui():
             is_checked = st.checkbox(
                 ticker,
                 value=ticker in current_selected,
-                key=f"ticker_select_{selected_portfolio.id}_{selected_month}_{ticker}"
+                key=f"ticker_select_{selected_portfolio['id']}_{selected_month}_{ticker}"
             )
             if is_checked:
                 selected_tickers.append(ticker)
@@ -1002,7 +1012,7 @@ def _show_portfolio_holdings_ui():
                     # Delete existing holdings for this portfolio/date
                     existing = session.exec(
                         select(PortfolioHolding)
-                        .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                        .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
                         .where(PortfolioHolding.effective_date == effective_date)
                     ).all()
 
@@ -1014,7 +1024,7 @@ def _show_portfolio_holdings_ui():
 
                     for ticker in selected_tickers:
                         new_holding = PortfolioHolding(
-                            portfolio_id=selected_portfolio.id,
+                            portfolio_id=selected_portfolio["id"],
                             effective_date=effective_date,
                             ticker=ticker,
                             weight=weight,
@@ -1036,7 +1046,7 @@ def _show_portfolio_holdings_ui():
             with get_session() as session:
                 holdings = session.exec(
                     select(PortfolioHolding)
-                    .where(PortfolioHolding.portfolio_id == selected_portfolio.id)
+                    .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
                     .where(PortfolioHolding.effective_date == effective_date)
                     .order_by(PortfolioHolding.ticker)
                 ).all()
