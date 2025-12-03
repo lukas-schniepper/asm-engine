@@ -118,10 +118,24 @@ def _render_performance_tracker():
     def clean_display_name(name: str) -> str:
         return name.replace("_EqualWeight", "").replace("_", " ")
 
-    # Portfolio selector - sorted alphabetically, display clean names
+    # Filter to only portfolios with NAV data
     sorted_portfolios = sorted(portfolios, key=lambda x: x.name)
-    portfolio_id_map = {p.name: p.id for p in sorted_portfolios}
-    display_to_actual = {clean_display_name(p.name): p.name for p in sorted_portfolios}
+    portfolios_with_data = []
+    for p in sorted_portfolios:
+        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
+        if not nav_df.empty:
+            portfolios_with_data.append(p)
+
+    if not portfolios_with_data:
+        st.warning(
+            "No portfolios have NAV data yet. "
+            "Run NAV update to generate performance data."
+        )
+        return
+
+    # Portfolio selector - sorted alphabetically, display clean names
+    portfolio_id_map = {p.name: p.id for p in portfolios_with_data}
+    display_to_actual = {clean_display_name(p.name): p.name for p in portfolios_with_data}
 
     selected_display_name = st.sidebar.selectbox(
         "Select Portfolio",
