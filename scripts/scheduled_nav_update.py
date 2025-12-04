@@ -105,7 +105,7 @@ def update_portfolio_nav(
     trade_date: date,
     price_data: dict[str, float],
     prev_price_data: Optional[dict[str, float]] = None,
-) -> bool:
+) -> str:
     """
     Update NAV for a single portfolio on a specific date.
 
@@ -117,7 +117,7 @@ def update_portfolio_nav(
         prev_price_data: Dict mapping ticker to previous day's price
 
     Returns:
-        True if successful, False otherwise
+        "success" if NAV updated, "skipped" if no holdings, "error" if failed
     """
     try:
         # Get holdings as of trade date
@@ -128,7 +128,7 @@ def update_portfolio_nav(
                 f"No holdings found for portfolio {portfolio.name} as of {trade_date}. "
                 "Skipping NAV update."
             )
-            return False
+            return "skipped"
 
         # Get previous NAV for return calculation
         from AlphaMachine_core.tracking import Variants
@@ -162,11 +162,11 @@ def update_portfolio_nav(
             f"Updated NAV for {portfolio.name} on {trade_date}: "
             f"raw={raw_nav:.2f}, variants={list(results.keys())}"
         )
-        return True
+        return "success"
 
     except Exception as e:
         logger.error(f"Error updating NAV for {portfolio.name} on {trade_date}: {e}")
-        return False
+        return "error"
 
 
 def run_daily_update(
@@ -256,7 +256,8 @@ def run_daily_update(
         "dates_processed": len(dates_to_process),
         "portfolios": len(portfolios),
         "successful_updates": 0,
-        "failed_updates": 0,
+        "skipped_updates": 0,  # Portfolios with no holdings
+        "failed_updates": 0,   # Actual errors
         "errors": [],
     }
 
@@ -334,10 +335,12 @@ def run_daily_update(
 
         # Update each portfolio
         for portfolio in portfolios:
-            success = update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
-            if success:
+            result = update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
+            if result == "success":
                 stats["successful_updates"] += 1
-            else:
+            elif result == "skipped":
+                stats["skipped_updates"] += 1
+            else:  # "error"
                 stats["failed_updates"] += 1
 
     # Compute metrics
@@ -357,6 +360,7 @@ def run_daily_update(
     logger.info(f"Dates processed: {stats['dates_processed']}")
     logger.info(f"Portfolios: {stats['portfolios']}")
     logger.info(f"Successful updates: {stats['successful_updates']}")
+    logger.info(f"Skipped (no holdings): {stats['skipped_updates']}")
     logger.info(f"Failed updates: {stats['failed_updates']}")
 
     return stats
