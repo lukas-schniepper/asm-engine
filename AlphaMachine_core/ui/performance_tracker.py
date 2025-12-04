@@ -879,28 +879,18 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         st.warning("No portfolios with NAV data available.")
         return
 
-    # Default selection for Scraper View: SA portfolios, SPY, plus additional portfolios
-    default_portfolio_keywords = [
-        "SA Large Caps", "SA Mid Caps", "SPY",
-        "50er", "30er", "TR10 Large Caps", "TR10", "TW30", "TR10_EqualWeight"
-    ]
-
     # Function to clean portfolio names for display (remove _EqualWeight suffix)
     def clean_portfolio_name(name: str) -> str:
         """Remove _EqualWeight suffix for cleaner dropdown display."""
         return name.replace("_EqualWeight", "")
-    default_selected = []
-    for keyword in default_portfolio_keywords:
-        for pname in portfolios_with_data:
-            if keyword.lower().replace(" ", "") in pname.lower().replace("_", "").replace(" ", ""):
-                if pname not in default_selected:
-                    default_selected.append(pname)
-                break
+
+    # Default selection for Scraper View: ALL portfolios with NAV data
+    default_selected = portfolios_with_data.copy()
 
     # Use session state to persist selection across visits
     session_key = "scraper_view_selected_portfolios"
     if session_key not in st.session_state:
-        st.session_state[session_key] = default_selected if default_selected else portfolios_with_data[:3]
+        st.session_state[session_key] = default_selected
     # Filter out any portfolios that no longer have data
     st.session_state[session_key] = [p for p in st.session_state[session_key] if p in portfolios_with_data]
     if not st.session_state[session_key]:
