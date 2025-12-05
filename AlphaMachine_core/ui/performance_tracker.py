@@ -1098,18 +1098,18 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         children.append({
             "field": total_col,
             "headerName": "Total",
-            "minWidth": 80,
+            "width": 70,
             "cellStyle": cell_style_jscode,
         })
 
         # Daily columns - only shown when group is open
         for d in month_dates:
             field_name = d.strftime("%Y-%m-%d")  # Unique field name
-            day_label = d.strftime("%d")  # Display as just day number
+            day_label = d.strftime("%d %b")  # Display as "01 Dec"
             children.append({
                 "field": field_name,
                 "headerName": day_label,
-                "minWidth": 55,
+                "width": 65,
                 "columnGroupShow": "open",  # Only show when expanded
                 "cellStyle": cell_style_jscode,
             })
