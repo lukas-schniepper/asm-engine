@@ -968,12 +968,13 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     # Sort columns (dates) chronologically
     df = df.reindex(sorted(df.columns), axis=1)
 
-    # Add monthly total columns
     # Group dates by month and calculate compounded returns
     date_cols = list(df.columns)
+    month_groups = {}  # month_key -> list of date columns
+    month_totals = {}  # month_key -> total column name
+
     if date_cols:
         # Group by year-month
-        month_groups = {}
         for d in date_cols:
             if hasattr(d, 'strftime'):
                 month_key = d.strftime("%Y-%m")
@@ -983,15 +984,12 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
         # Build new column order with monthly totals inserted
         new_columns = []
-        monthly_total_cols = []
         for month_key in sorted(month_groups.keys()):
             month_dates = month_groups[month_key]
-            # Add daily columns
-            new_columns.extend(month_dates)
             # Calculate monthly total for each portfolio (compounded return)
-            month_name = pd.Timestamp(month_dates[0]).strftime("%b")
+            month_name = pd.Timestamp(month_dates[0]).strftime("%b %Y")
             total_col_name = f"{month_name} Total"
-            monthly_total_cols.append(total_col_name)
+            month_totals[month_key] = total_col_name
 
             # Calculate compounded monthly return for each portfolio
             monthly_returns = []
@@ -1004,23 +1002,26 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     monthly_returns.append(np.nan)
 
             df[total_col_name] = monthly_returns
+            # Add total first, then daily columns (total always visible)
             new_columns.append(total_col_name)
+            new_columns.extend(month_dates)
 
         # Reorder columns
         df = df[new_columns]
 
-    # Format column headers as short dates (e.g., "Nov 03")
+    # Format column headers as short dates (e.g., "03")
     date_labels = {}
+    original_to_formatted = {}  # Track original -> formatted mapping
     for col in df.columns:
         if hasattr(col, 'strftime'):
-            date_labels[col] = col.strftime("%b %d")
+            formatted = col.strftime("%d")  # Just day number for daily cols
+            date_labels[col] = formatted
+            original_to_formatted[col] = formatted
         else:
-            date_labels[col] = str(col)  # Monthly totals already have string names
+            date_labels[col] = str(col)  # Monthly totals keep their names
+            original_to_formatted[col] = str(col)
 
     df.columns = [date_labels.get(c, str(c)) for c in df.columns]
-
-    # Track which columns are monthly totals (for special styling)
-    monthly_total_col_names = [c for c in df.columns if "Total" in str(c)]
 
     # Convert to percentages for display
     display_df = df.copy()
@@ -1033,19 +1034,8 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     display_df = display_df.reset_index()
     display_df.rename(columns={"index": "Portfolio"}, inplace=True)
 
-    # Use AgGrid for frozen column support
-    from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
-
-    # Build grid options
-    gb = GridOptionsBuilder.from_dataframe(display_df)
-
-    # Configure Portfolio column - pinned to left
-    gb.configure_column(
-        "Portfolio",
-        pinned="left",
-        minWidth=200,
-        cellStyle={"fontWeight": "bold"},
-    )
+    # Use AgGrid with column grouping for collapsible months
+    from st_aggrid import AgGrid, JsCode
 
     # JavaScript function for cell styling based on return value
     cell_style_jscode = JsCode("""
@@ -1080,26 +1070,71 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     }
     """)
 
-    # Configure all other columns with cell styling
-    for col in display_df.columns:
-        if col != "Portfolio":
-            # Wider width for Total columns
-            col_width = 100 if "Total" in str(col) else 85
-            gb.configure_column(
-                col,
-                minWidth=col_width,
-                cellStyle=cell_style_jscode,
-            )
+    # Build column definitions with grouping
+    # Current month for determining which groups are open
+    current_month = date.today().strftime("%Y-%m")
 
-    gb.configure_default_column(
-        resizable=True,
-        sortable=True,
-    )
+    column_defs = [
+        {
+            "field": "Portfolio",
+            "pinned": "left",
+            "minWidth": 200,
+            "cellStyle": {"fontWeight": "bold"},
+        }
+    ]
 
-    grid_options = gb.build()
+    # Build column groups for each month
+    for month_key in sorted(month_groups.keys()):
+        month_dates = month_groups[month_key]
+        total_col = month_totals[month_key]
+        month_display = pd.Timestamp(f"{month_key}-01").strftime("%b %Y")
+
+        # Is this the current month? Expand current month by default
+        is_current_month = month_key == current_month
+
+        # Build children columns for this month group
+        children = []
+
+        # Total column - always visible (shown when closed)
+        children.append({
+            "field": total_col,
+            "headerName": "Total",
+            "minWidth": 80,
+            "cellStyle": cell_style_jscode,
+        })
+
+        # Daily columns - only shown when group is open
+        for d in month_dates:
+            day_label = d.strftime("%d")
+            children.append({
+                "field": day_label,
+                "headerName": day_label,
+                "minWidth": 55,
+                "columnGroupShow": "open",  # Only show when expanded
+                "cellStyle": cell_style_jscode,
+            })
+
+        # Add the month column group
+        column_defs.append({
+            "headerName": month_display,
+            "children": children,
+            "openByDefault": is_current_month,
+            "marryChildren": True,
+        })
+
+    # Build grid options
+    grid_options = {
+        "columnDefs": column_defs,
+        "defaultColDef": {
+            "resizable": True,
+            "sortable": True,
+        },
+        "suppressColumnVirtualisation": True,
+        "groupHeaderHeight": 25,
+    }
 
     # Calculate height based on number of rows
-    height = 35 * (len(display_df) + 1) + 40
+    height = 35 * (len(display_df) + 1) + 60
 
     # Display AgGrid
     AgGrid(
