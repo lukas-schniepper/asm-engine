@@ -1009,19 +1009,18 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         # Reorder columns
         df = df[new_columns]
 
-    # Format column headers as short dates (e.g., "03")
-    date_labels = {}
-    original_to_formatted = {}  # Track original -> formatted mapping
+    # Format column headers - use unique names to avoid duplicates
+    # Daily columns get "YYYY-MM-DD" format internally, display as just day number
+    date_to_field = {}  # Maps original date to field name for AgGrid
     for col in df.columns:
         if hasattr(col, 'strftime'):
-            formatted = col.strftime("%d")  # Just day number for daily cols
-            date_labels[col] = formatted
-            original_to_formatted[col] = formatted
+            # Use full date as field name to ensure uniqueness
+            field_name = col.strftime("%Y-%m-%d")
+            date_to_field[col] = field_name
         else:
-            date_labels[col] = str(col)  # Monthly totals keep their names
-            original_to_formatted[col] = str(col)
+            date_to_field[col] = str(col)
 
-    df.columns = [date_labels.get(c, str(c)) for c in df.columns]
+    df.columns = [date_to_field.get(c, str(c)) for c in df.columns]
 
     # Convert to percentages for display
     display_df = df.copy()
@@ -1105,9 +1104,10 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
         # Daily columns - only shown when group is open
         for d in month_dates:
-            day_label = d.strftime("%d")
+            field_name = d.strftime("%Y-%m-%d")  # Unique field name
+            day_label = d.strftime("%d")  # Display as just day number
             children.append({
-                "field": day_label,
+                "field": field_name,
                 "headerName": day_label,
                 "minWidth": 55,
                 "columnGroupShow": "open",  # Only show when expanded
