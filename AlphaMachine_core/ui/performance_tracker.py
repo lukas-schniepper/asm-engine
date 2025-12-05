@@ -1074,49 +1074,29 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         except (ValueError, AttributeError):
             return ""
 
-    # Apply styling to value columns only
-    value_cols = [c for c in display_df.columns if c != "Portfolio"]
+    # Style the full dataframe - apply color styling to value columns only
+    def style_row(row):
+        styles = []
+        for col in display_df.columns:
+            if col == "Portfolio":
+                styles.append("text-align: left; font-weight: bold")
+            else:
+                is_total = "Total" in str(col)
+                styles.append(color_returns(row[col], is_total))
+        return styles
 
-    # Split into portfolio names and data columns
-    portfolio_col = display_df[["Portfolio"]]
-    data_cols = display_df[value_cols]
-
-    # Create styling function that knows which columns are totals
-    def style_cell(val, col_name):
-        is_total = "Total" in str(col_name)
-        return color_returns(val, is_total)
-
-    # Style the data columns with column-aware styling
-    styled_data = data_cols.style.apply(
-        lambda col: [style_cell(v, col.name) for v in col], axis=0
-    ).set_properties(**{"text-align": "center"})
-
-    # Style the portfolio column
-    styled_portfolio = portfolio_col.style.set_properties(
-        **{"text-align": "left", "font-weight": "bold"}
-    )
+    styled_df = display_df.style.apply(style_row, axis=1)
 
     # Calculate height based on number of rows (no cap to avoid scrollbar)
     height = 38 * (len(display_df) + 1) + 20
 
-    # Display as two columns side by side - Portfolio frozen on left
-    col_portfolio, col_data = st.columns([1, 8])
-
-    with col_portfolio:
-        st.dataframe(
-            styled_portfolio,
-            use_container_width=True,
-            hide_index=True,
-            height=height,
-        )
-
-    with col_data:
-        st.dataframe(
-            styled_data,
-            use_container_width=True,
-            hide_index=True,
-            height=height,
-        )
+    # Display as a single dataframe to ensure alignment
+    st.dataframe(
+        styled_df,
+        use_container_width=True,
+        hide_index=True,
+        height=height,
+    )
 
     # Show summary stats
     st.markdown("---")
