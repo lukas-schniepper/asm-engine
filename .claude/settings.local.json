@@ -1,7 +1,22 @@
 {
   "permissions": {
     "allow": [
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(cat:*)",
+      "Bash(dir /s /b c:UsersLukascodebaseasm-engine*.py)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(gh workflow run:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run watch:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run cancel:*)",
+      "Bash(git reset:*)",
+      "Bash(gh workflow:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []

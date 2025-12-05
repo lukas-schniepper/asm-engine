@@ -1043,7 +1043,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     gb.configure_column(
         "Portfolio",
         pinned="left",
-        width=180,
+        minWidth=200,
         cellStyle={"fontWeight": "bold"},
     )
 
@@ -1083,9 +1083,11 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     # Configure all other columns with cell styling
     for col in display_df.columns:
         if col != "Portfolio":
+            # Wider width for Total columns
+            col_width = 100 if "Total" in str(col) else 85
             gb.configure_column(
                 col,
-                width=75,
+                minWidth=col_width,
                 cellStyle=cell_style_jscode,
             )
 
