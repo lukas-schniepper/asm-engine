@@ -94,4 +94,5 @@ optuna
 ta
 boto3
 python-dateutil
+streamlit-aggrid
 -e .

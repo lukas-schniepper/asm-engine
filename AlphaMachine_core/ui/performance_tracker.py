@@ -1033,69 +1033,79 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     display_df = display_df.reset_index()
     display_df.rename(columns={"index": "Portfolio"}, inplace=True)
 
-    # Style function for color coding
-    def color_returns(val, is_total=False):
-        """Color cells based on return value - green for positive, red for negative."""
-        if val == "" or val == "Portfolio":
-            return ""
-        try:
-            num = float(val.replace("%", ""))
-            # Use bolder colors for monthly totals
-            if is_total:
-                if num > 5:
-                    return "background-color: #145214; color: white; font-weight: bold"  # Darker green
-                elif num > 2:
-                    return "background-color: #1e7b1e; color: white; font-weight: bold"
-                elif num > 0:
-                    return "background-color: #2d8f2d; color: white; font-weight: bold"
-                elif num == 0:
-                    return "background-color: #6c757d; color: white; font-weight: bold"  # Gray
-                elif num > -2:
-                    return "background-color: #c82333; color: white; font-weight: bold"
-                elif num > -5:
-                    return "background-color: #a71d2a; color: white; font-weight: bold"
-                else:
-                    return "background-color: #6b0f18; color: white; font-weight: bold"  # Darker red
-            else:
-                if num > 5:
-                    return "background-color: #1e7b1e; color: white"  # Dark green
-                elif num > 2:
-                    return "background-color: #28a745; color: white"  # Green
-                elif num > 0:
-                    return "background-color: #90EE90; color: black"  # Light green
-                elif num == 0:
-                    return "background-color: #f8f9fa; color: black"  # Neutral gray
-                elif num > -2:
-                    return "background-color: #ffcccb; color: black"  # Light red
-                elif num > -5:
-                    return "background-color: #dc3545; color: white"  # Red
-                else:
-                    return "background-color: #8b0000; color: white"  # Dark red
-        except (ValueError, AttributeError):
-            return ""
+    # Use AgGrid for frozen column support
+    from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
-    # Style the full dataframe - apply color styling to value columns only
-    def style_row(row):
-        styles = []
-        for col in display_df.columns:
-            if col == "Portfolio":
-                styles.append("text-align: left; font-weight: bold")
-            else:
-                is_total = "Total" in str(col)
-                styles.append(color_returns(row[col], is_total))
-        return styles
+    # Build grid options
+    gb = GridOptionsBuilder.from_dataframe(display_df)
 
-    styled_df = display_df.style.apply(style_row, axis=1)
+    # Configure Portfolio column - pinned to left
+    gb.configure_column(
+        "Portfolio",
+        pinned="left",
+        width=180,
+        cellStyle={"fontWeight": "bold"},
+    )
 
-    # Calculate height based on number of rows (no cap to avoid scrollbar)
-    height = 38 * (len(display_df) + 1) + 20
+    # JavaScript function for cell styling based on return value
+    cell_style_jscode = JsCode("""
+    function(params) {
+        if (params.value === '' || params.value === null || params.value === undefined) {
+            return {};
+        }
+        try {
+            var num = parseFloat(params.value.replace('%', ''));
+            var isTotal = params.colDef.field.includes('Total');
 
-    # Display as a single dataframe to ensure alignment
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        hide_index=True,
+            if (isTotal) {
+                if (num > 5) return {'backgroundColor': '#145214', 'color': 'white', 'fontWeight': 'bold'};
+                else if (num > 2) return {'backgroundColor': '#1e7b1e', 'color': 'white', 'fontWeight': 'bold'};
+                else if (num > 0) return {'backgroundColor': '#2d8f2d', 'color': 'white', 'fontWeight': 'bold'};
+                else if (num === 0) return {'backgroundColor': '#6c757d', 'color': 'white', 'fontWeight': 'bold'};
+                else if (num > -2) return {'backgroundColor': '#c82333', 'color': 'white', 'fontWeight': 'bold'};
+                else if (num > -5) return {'backgroundColor': '#a71d2a', 'color': 'white', 'fontWeight': 'bold'};
+                else return {'backgroundColor': '#6b0f18', 'color': 'white', 'fontWeight': 'bold'};
+            } else {
+                if (num > 5) return {'backgroundColor': '#1e7b1e', 'color': 'white'};
+                else if (num > 2) return {'backgroundColor': '#28a745', 'color': 'white'};
+                else if (num > 0) return {'backgroundColor': '#90EE90', 'color': 'black'};
+                else if (num === 0) return {'backgroundColor': '#f8f9fa', 'color': 'black'};
+                else if (num > -2) return {'backgroundColor': '#ffcccb', 'color': 'black'};
+                else if (num > -5) return {'backgroundColor': '#dc3545', 'color': 'white'};
+                else return {'backgroundColor': '#8b0000', 'color': 'white'};
+            }
+        } catch(e) {
+            return {};
+        }
+    }
+    """)
+
+    # Configure all other columns with cell styling
+    for col in display_df.columns:
+        if col != "Portfolio":
+            gb.configure_column(
+                col,
+                width=75,
+                cellStyle=cell_style_jscode,
+            )
+
+    gb.configure_default_column(
+        resizable=True,
+        sortable=True,
+    )
+
+    grid_options = gb.build()
+
+    # Calculate height based on number of rows
+    height = 35 * (len(display_df) + 1) + 40
+
+    # Display AgGrid
+    AgGrid(
+        display_df,
+        gridOptions=grid_options,
         height=height,
+        allow_unsafe_jscode=True,
+        theme="streamlit",
     )
 
     # Show summary stats
