@@ -1094,14 +1094,6 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         # Build children columns for this month group
         children = []
 
-        # Total column - always visible (shown when closed)
-        children.append({
-            "field": total_col,
-            "headerName": "Total",
-            "width": 70,
-            "cellStyle": cell_style_jscode,
-        })
-
         # Daily columns - only shown when group is open
         for d in month_dates:
             field_name = d.strftime("%Y-%m-%d")  # Unique field name
@@ -1113,6 +1105,14 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                 "columnGroupShow": "open",  # Only show when expanded
                 "cellStyle": cell_style_jscode,
             })
+
+        # Total column - always visible (shown when closed), placed at the end
+        children.append({
+            "field": total_col,
+            "headerName": "Total",
+            "width": 70,
+            "cellStyle": cell_style_jscode,
+        })
 
         # Add the month column group
         column_defs.append({
