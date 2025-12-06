@@ -1256,7 +1256,7 @@ def _show_ticker_analysis_ui():
                         )
 
                         st.markdown(f"### {selected_month}: {len(all_tickers)} unique tickers across {len(selected_portfolio_names)} portfolios")
-                        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+                        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
                         # Summary stats
                         col1, col2, col3 = st.columns(3)
