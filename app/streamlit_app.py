@@ -1326,49 +1326,61 @@ def _show_ticker_analysis_ui():
                             month_tickers[month] = set()
                         month_tickers[month].add(ticker)
 
-                    # Get all unique tickers and months
-                    all_unique_tickers = sorted(set(t for tickers in month_tickers.values() for t in tickers))
                     sorted_months = sorted(month_tickers.keys())
+                    max_tickers = max(len(tickers) for tickers in month_tickers.values()) if month_tickers else 0
 
-                    # Create the monthly matrix
-                    matrix_rows = []
-                    for ticker in all_unique_tickers:
-                        row = {"Ticker": ticker}
-                        for month in sorted_months:
-                            if ticker in month_tickers.get(month, set()):
-                                row[month] = "X"
-                            else:
-                                row[month] = ""
-                        matrix_rows.append(row)
+                    # Build vertical ticker lists per month with retention info
+                    # Each column = one month, rows = tickers sorted alphabetically
+                    month_columns = {}
+                    prev_month_tickers = set()
 
-                    df_monthly = pd.DataFrame(matrix_rows)
+                    for month in sorted_months:
+                        current_tickers = sorted(month_tickers.get(month, set()))
+                        # Store tuple (ticker, is_retained)
+                        month_columns[month] = [
+                            (ticker, ticker in prev_month_tickers)
+                            for ticker in current_tickers
+                        ]
+                        prev_month_tickers = set(current_tickers)
 
-                    # Calculate retained status for styling
-                    def style_monthly_matrix(df):
-                        """Style the monthly matrix with green for retained tickers."""
+                    # Create DataFrame with months as columns, tickers as values
+                    # Pad shorter columns with empty strings
+                    df_data = {}
+                    for month in sorted_months:
+                        tickers_with_status = month_columns[month]
+                        # Just store ticker names for display
+                        ticker_list = [t[0] for t in tickers_with_status]
+                        # Pad to max length
+                        ticker_list.extend([""] * (max_tickers - len(ticker_list)))
+                        df_data[month] = ticker_list
+
+                    df_monthly = pd.DataFrame(df_data)
+
+                    # Build retention status for styling
+                    retention_status = {}
+                    for month in sorted_months:
+                        retention_status[month] = {
+                            ticker: is_retained
+                            for ticker, is_retained in month_columns[month]
+                        }
+
+                    def style_vertical_tickers(df):
+                        """Style tickers: green if retained from previous month."""
                         styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                        months_cols = [c for c in df.columns if c != "Ticker"]
-
-                        for idx in df.index:
-                            for i, month in enumerate(months_cols):
-                                if df.loc[idx, month] == "X":
-                                    if i > 0:
-                                        prev_month = months_cols[i - 1]
-                                        if df.loc[idx, prev_month] == "X":
-                                            # Retained from previous month - green
-                                            styles.loc[idx, month] = "background-color: #90EE90; font-weight: bold"
-                                        else:
-                                            # New this month - light blue
-                                            styles.loc[idx, month] = "background-color: #ADD8E6; font-weight: bold"
-                                    else:
-                                        # First month - light blue
-                                        styles.loc[idx, month] = "background-color: #ADD8E6; font-weight: bold"
+                        for col in df.columns:
+                            for idx in df.index:
+                                ticker = df.loc[idx, col]
+                                if ticker:
+                                    is_retained = retention_status.get(col, {}).get(ticker, False)
+                                    if is_retained:
+                                        styles.loc[idx, col] = "background-color: #90EE90; font-weight: bold"
                         return styles
 
-                    styled_monthly = df_monthly.style.apply(style_monthly_matrix, axis=None)
+                    styled_monthly = df_monthly.style.apply(style_vertical_tickers, axis=None)
 
+                    all_unique_tickers = set(t for tickers in month_tickers.values() for t in tickers)
                     st.markdown(f"### {selected_display_name_tab2}: {len(all_unique_tickers)} tickers across {len(sorted_months)} months")
-                    st.markdown("**Legend:** Green = retained from previous month | Blue = new this month")
+                    st.markdown("**Legend:** Green = retained from previous month")
                     st.dataframe(styled_monthly, use_container_width=True, hide_index=True, height=600)
 
                     # Monthly stats
