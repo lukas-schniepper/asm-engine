@@ -271,12 +271,14 @@ class StockDataManager:
                             raw.columns = raw.columns.droplevel(0)
 
                     expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+                    # Adjusted_Close is optional but preferred for GIPS compliance
+                    all_cols = expected_cols + (['Adjusted_Close'] if 'Adjusted_Close' in raw.columns else [])
                     if not all(col in raw.columns for col in expected_cols):
                         ticker_details[ticker] = {'status': 'skipped', 'reason': 'Missing data columns'}
                         self.skipped_tickers.append(ticker)
                         continue
 
-                    df = raw[expected_cols].copy()
+                    df = raw[all_cols].copy()
                     df.dropna(subset=['Close', 'Volume'], inplace=True)
                     df = df[df['Volume'] > 0]
 
@@ -308,6 +310,7 @@ class StockDataManager:
                                 high=float(r['High']),
                                 low=float(r['Low']),
                                 close=float(r['Close']),
+                                adjusted_close=float(r['Adjusted_Close']) if 'Adjusted_Close' in r and pd.notna(r.get('Adjusted_Close')) else None,
                                 volume=int(r['Volume'])
                             ))
                         except Exception:

@@ -56,6 +56,7 @@ class PriceData(SQLModel, table=True):
     high:  float = Field(description="Höchstkurs")
     low:   float = Field(description="Tiefstkurs")
     close: float = Field(description="Schlusskurs")
+    adjusted_close: Optional[float] = Field(default=None, description="Adjusted close (dividends + splits)")
     volume: int   = Field(
         sa_column=Column(BigInteger, nullable=False),
         description="Handelsvolumen"

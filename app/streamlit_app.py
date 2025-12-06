@@ -1118,6 +1118,277 @@ def _show_portfolio_holdings_ui():
         )
 
 
+def _show_ticker_analysis_ui():
+    """
+    Ticker Analysis UI with two tabs:
+    - Tab 1: Cross-portfolio ticker matrix (which ticker is in which portfolio for a month)
+    - Tab 2: Monthly ticker history for a single portfolio with retention highlighting
+    """
+    from AlphaMachine_core.tracking.models import PortfolioDefinition, PortfolioHolding
+    from sqlalchemy import func
+
+    st.subheader("Ticker Analysis")
+
+    # Load all active portfolios
+    try:
+        with get_session() as session:
+            portfolios_raw = session.exec(
+                select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
+            ).all()
+            portfolios = [
+                {"id": p.id, "name": p.name, "source": p.source, "start_date": p.start_date}
+                for p in portfolios_raw
+            ]
+    except Exception as e:
+        st.error(f"Error loading portfolios: {e}")
+        return
+
+    if not portfolios:
+        st.warning("No active portfolios found.")
+        return
+
+    tab1, tab2 = st.tabs(["Cross-Portfolio Matrix", "Monthly History"])
+
+    # =====================================================================
+    # TAB 1: Cross-Portfolio Matrix
+    # =====================================================================
+    with tab1:
+        st.markdown("**Select portfolios and month to see which tickers are in each portfolio.**")
+
+        # Multi-select for portfolios
+        portfolio_names = [p["name"] for p in portfolios]
+        selected_portfolio_names = st.multiselect(
+            "Select Portfolios",
+            options=portfolio_names,
+            default=portfolio_names[:3] if len(portfolio_names) >= 3 else portfolio_names,
+            key="ticker_analysis_portfolio_multiselect"
+        )
+
+        if not selected_portfolio_names:
+            st.info("Please select at least one portfolio.")
+        else:
+            selected_portfolios = [p for p in portfolios if p["name"] in selected_portfolio_names]
+            selected_portfolio_ids = [p["id"] for p in selected_portfolios]
+
+            # Get available months across selected portfolios
+            try:
+                with get_session() as session:
+                    months_result = session.exec(
+                        select(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM'))
+                        .where(PortfolioHolding.portfolio_id.in_(selected_portfolio_ids))
+                        .distinct()
+                        .order_by(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM').desc())
+                    ).all()
+                    available_months = [str(m) for m in months_result if m]
+            except Exception as e:
+                st.error(f"Error loading months: {e}")
+                available_months = []
+
+            if not available_months:
+                st.warning("No holdings data found for selected portfolios.")
+            else:
+                selected_month = st.selectbox(
+                    "Select Month",
+                    options=available_months,
+                    key="ticker_analysis_month_select"
+                )
+
+                # Load holdings for all selected portfolios for this month
+                try:
+                    with get_session() as session:
+                        holdings_data = session.exec(
+                            select(
+                                PortfolioHolding.portfolio_id,
+                                PortfolioHolding.ticker
+                            )
+                            .where(PortfolioHolding.portfolio_id.in_(selected_portfolio_ids))
+                            .where(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM') == selected_month)
+                        ).all()
+
+                    # Build portfolio_id -> name mapping
+                    id_to_name = {p["id"]: p["name"] for p in selected_portfolios}
+
+                    # Build ticker -> portfolios mapping
+                    ticker_portfolios = {}
+                    for portfolio_id, ticker in holdings_data:
+                        if ticker not in ticker_portfolios:
+                            ticker_portfolios[ticker] = set()
+                        ticker_portfolios[ticker].add(id_to_name[portfolio_id])
+
+                    if not ticker_portfolios:
+                        st.info(f"No holdings found for {selected_month}.")
+                    else:
+                        # Create matrix DataFrame
+                        all_tickers = sorted(ticker_portfolios.keys())
+                        matrix_data = []
+
+                        for ticker in all_tickers:
+                            row = {"Ticker": ticker}
+                            for pname in selected_portfolio_names:
+                                row[pname] = "X" if pname in ticker_portfolios[ticker] else ""
+                            row["Total"] = len(ticker_portfolios[ticker])
+                            matrix_data.append(row)
+
+                        df_matrix = pd.DataFrame(matrix_data)
+
+                        # Sort by Total descending
+                        df_matrix = df_matrix.sort_values("Total", ascending=False)
+
+                        # Style the dataframe
+                        def highlight_x(val):
+                            if val == "X":
+                                return "background-color: #90EE90; font-weight: bold"
+                            return ""
+
+                        styled_df = df_matrix.style.applymap(
+                            highlight_x,
+                            subset=[c for c in df_matrix.columns if c not in ["Ticker", "Total"]]
+                        )
+
+                        st.markdown(f"### {selected_month}: {len(all_tickers)} unique tickers across {len(selected_portfolio_names)} portfolios")
+                        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+
+                        # Summary stats
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Unique Tickers", len(all_tickers))
+                        with col2:
+                            multi_portfolio = sum(1 for t in ticker_portfolios if len(ticker_portfolios[t]) > 1)
+                            st.metric("In Multiple Portfolios", multi_portfolio)
+                        with col3:
+                            avg_count = sum(len(v) for v in ticker_portfolios.values()) / len(ticker_portfolios) if ticker_portfolios else 0
+                            st.metric("Avg Portfolios per Ticker", f"{avg_count:.1f}")
+
+                except Exception as e:
+                    st.error(f"Error loading holdings data: {e}")
+
+    # =====================================================================
+    # TAB 2: Monthly History
+    # =====================================================================
+    with tab2:
+        st.markdown("**Select a portfolio to see monthly ticker changes. Green = retained from previous month.**")
+
+        # Single portfolio selector
+        selected_portfolio_name = st.selectbox(
+            "Select Portfolio",
+            options=portfolio_names,
+            key="ticker_analysis_single_portfolio"
+        )
+
+        selected_portfolio = next((p for p in portfolios if p["name"] == selected_portfolio_name), None)
+
+        if selected_portfolio:
+            # Get all months for this portfolio
+            try:
+                with get_session() as session:
+                    months_result = session.exec(
+                        select(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM'))
+                        .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
+                        .distinct()
+                        .order_by(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM').desc())
+                    ).all()
+                    portfolio_months = [str(m) for m in months_result if m]
+            except Exception as e:
+                st.error(f"Error loading months: {e}")
+                portfolio_months = []
+
+            if not portfolio_months:
+                st.warning(f"No holdings found for {selected_portfolio_name}.")
+            else:
+                # Load all holdings for this portfolio
+                try:
+                    with get_session() as session:
+                        all_holdings = session.exec(
+                            select(
+                                func.to_char(PortfolioHolding.effective_date, 'YYYY-MM').label("month"),
+                                PortfolioHolding.ticker
+                            )
+                            .where(PortfolioHolding.portfolio_id == selected_portfolio["id"])
+                            .order_by(func.to_char(PortfolioHolding.effective_date, 'YYYY-MM'))
+                        ).all()
+
+                    # Build month -> tickers mapping
+                    month_tickers = {}
+                    for month, ticker in all_holdings:
+                        if month not in month_tickers:
+                            month_tickers[month] = set()
+                        month_tickers[month].add(ticker)
+
+                    # Get all unique tickers and months
+                    all_unique_tickers = sorted(set(t for tickers in month_tickers.values() for t in tickers))
+                    sorted_months = sorted(month_tickers.keys())
+
+                    # Create the monthly matrix
+                    matrix_rows = []
+                    for ticker in all_unique_tickers:
+                        row = {"Ticker": ticker}
+                        for month in sorted_months:
+                            if ticker in month_tickers.get(month, set()):
+                                row[month] = "X"
+                            else:
+                                row[month] = ""
+                        matrix_rows.append(row)
+
+                    df_monthly = pd.DataFrame(matrix_rows)
+
+                    # Calculate retained status for styling
+                    def style_monthly_matrix(df):
+                        """Style the monthly matrix with green for retained tickers."""
+                        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                        months_cols = [c for c in df.columns if c != "Ticker"]
+
+                        for idx in df.index:
+                            for i, month in enumerate(months_cols):
+                                if df.loc[idx, month] == "X":
+                                    if i > 0:
+                                        prev_month = months_cols[i - 1]
+                                        if df.loc[idx, prev_month] == "X":
+                                            # Retained from previous month - green
+                                            styles.loc[idx, month] = "background-color: #90EE90; font-weight: bold"
+                                        else:
+                                            # New this month - light blue
+                                            styles.loc[idx, month] = "background-color: #ADD8E6; font-weight: bold"
+                                    else:
+                                        # First month - light blue
+                                        styles.loc[idx, month] = "background-color: #ADD8E6; font-weight: bold"
+                        return styles
+
+                    styled_monthly = df_monthly.style.apply(style_monthly_matrix, axis=None)
+
+                    st.markdown(f"### {selected_portfolio_name}: {len(all_unique_tickers)} tickers across {len(sorted_months)} months")
+                    st.markdown("**Legend:** Green = retained from previous month | Blue = new this month")
+                    st.dataframe(styled_monthly, use_container_width=True, hide_index=True, height=600)
+
+                    # Monthly stats
+                    st.markdown("---")
+                    st.markdown("### Monthly Statistics")
+
+                    stats_data = []
+                    prev_tickers = set()
+                    for month in sorted_months:
+                        current_tickers = month_tickers.get(month, set())
+                        retained = len(current_tickers & prev_tickers)
+                        new_tickers = len(current_tickers - prev_tickers)
+                        dropped = len(prev_tickers - current_tickers)
+                        turnover = (new_tickers + dropped) / (len(current_tickers) + len(prev_tickers)) * 2 if (len(current_tickers) + len(prev_tickers)) > 0 else 0
+
+                        stats_data.append({
+                            "Month": month,
+                            "Total": len(current_tickers),
+                            "Retained": retained,
+                            "New": new_tickers,
+                            "Dropped": dropped,
+                            "Turnover": f"{turnover*100:.1f}%"
+                        })
+                        prev_tickers = current_tickers
+
+                    df_stats = pd.DataFrame(stats_data)
+                    st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
+                except Exception as e:
+                    st.error(f"Error loading holdings: {e}")
+
+
 def _get_trading_days(start_date, end_date):
     """Get list of trading days between start and end dates."""
     from pandas.tseries.holiday import USFederalHolidayCalendar
@@ -1305,7 +1576,7 @@ def show_data_ui():
             st.error(f"Fehler Initialisierung StockDataManager: {e}"); st.exception(e); st.stop()
     dm = st.session_state.sdm_instance
 
-    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings"], index=0, key="data_ui_mode_radio_main_v3")
+    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis"], index=0, key="data_ui_mode_radio_main_v4")
 
     if mode == "Add/Update":
         st.subheader("Ticker einfuegen & Daten updaten")
@@ -1409,6 +1680,11 @@ def show_data_ui():
     # --- Portfolio Holdings Mode ---
     elif mode == "Portfolio Holdings":
         _show_portfolio_holdings_ui()
+        return
+
+    # --- Ticker Analysis Mode ---
+    elif mode == "Ticker Analysis":
+        _show_ticker_analysis_ui()
         return
 
     # --- View/Delete Mode ---

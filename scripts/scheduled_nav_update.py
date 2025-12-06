@@ -314,9 +314,13 @@ def run_daily_update(
     for process_date in dates_to_process:
         logger.info(f"\nProcessing date: {process_date}")
 
-        # Get prices for this date
+        # Get prices for this date (use adjusted_close for GIPS-compliant Total Return)
         date_prices = price_df[price_df["trade_date"] == process_date]
-        price_data = dict(zip(date_prices["ticker"], date_prices["close"]))
+        # Use adjusted_close if available, fall back to close
+        if "adjusted_close" in date_prices.columns and date_prices["adjusted_close"].notna().any():
+            price_data = dict(zip(date_prices["ticker"], date_prices["adjusted_close"].fillna(date_prices["close"])))
+        else:
+            price_data = dict(zip(date_prices["ticker"], date_prices["close"]))
 
         if not price_data:
             logger.warning(f"No price data for {process_date}")
@@ -331,7 +335,11 @@ def run_daily_update(
             if not prev_dates.empty:
                 latest_prev_date = prev_dates["trade_date"].max()
                 prev_day_prices = prev_price_df[prev_price_df["trade_date"] == latest_prev_date]
-                prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
+                # Use adjusted_close if available, fall back to close
+                if "adjusted_close" in prev_day_prices.columns and prev_day_prices["adjusted_close"].notna().any():
+                    prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["adjusted_close"].fillna(prev_day_prices["close"])))
+                else:
+                    prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
 
         # Update each portfolio
         for portfolio in portfolios:

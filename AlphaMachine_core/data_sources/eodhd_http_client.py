@@ -225,13 +225,14 @@ class EODHDHttpClient:
                 'high': 'High',
                 'low': 'Low',
                 'close': 'Close',
+                'adjusted_close': 'Adjusted_Close',
                 'volume': 'Volume'
             }
 
             df = df.rename(columns=column_mapping)
 
-            # Select only the columns we need (exclude adjusted_close, date, etc.)
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            # Select all columns we need (including adjusted_close for GIPS compliance)
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Adjusted_Close', 'Volume']
 
             # Check if all required columns exist
             missing_cols = [col for col in required_columns if col not in df.columns]
