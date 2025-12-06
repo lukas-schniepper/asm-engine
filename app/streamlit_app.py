@@ -1147,6 +1147,10 @@ def _show_ticker_analysis_ui():
         st.warning("No active portfolios found.")
         return
 
+    # Helper to clean portfolio names for display
+    def clean_name(name):
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
     tab1, tab2 = st.tabs(["Cross-Portfolio Matrix", "Monthly History"])
 
     # =====================================================================
@@ -1155,14 +1159,19 @@ def _show_ticker_analysis_ui():
     with tab1:
         st.markdown("**Select portfolios and month to see which tickers are in each portfolio.**")
 
-        # Multi-select for portfolios
+        # Multi-select for portfolios (display clean names, map back to original)
         portfolio_names = [p["name"] for p in portfolios]
-        selected_portfolio_names = st.multiselect(
+        display_names = [clean_name(p["name"]) for p in portfolios]
+        display_to_original = {clean_name(p["name"]): p["name"] for p in portfolios}
+
+        selected_display_names = st.multiselect(
             "Select Portfolios",
-            options=portfolio_names,
-            default=portfolio_names[:3] if len(portfolio_names) >= 3 else portfolio_names,
+            options=display_names,
+            default=display_names[:3] if len(display_names) >= 3 else display_names,
             key="ticker_analysis_portfolio_multiselect"
         )
+        # Map back to original names
+        selected_portfolio_names = [display_to_original[d] for d in selected_display_names]
 
         if not selected_portfolio_names:
             st.info("Please select at least one portfolio.")
@@ -1218,14 +1227,15 @@ def _show_ticker_analysis_ui():
                     if not ticker_portfolios:
                         st.info(f"No holdings found for {selected_month}.")
                     else:
-                        # Create matrix DataFrame
+                        # Create matrix DataFrame with clean column names
                         all_tickers = sorted(ticker_portfolios.keys())
                         matrix_data = []
 
                         for ticker in all_tickers:
                             row = {"Ticker": ticker}
                             for pname in selected_portfolio_names:
-                                row[pname] = "X" if pname in ticker_portfolios[ticker] else ""
+                                # Use clean name for column header
+                                row[clean_name(pname)] = "X" if pname in ticker_portfolios[ticker] else ""
                             row["Total"] = len(ticker_portfolios[ticker])
                             matrix_data.append(row)
 
@@ -1268,14 +1278,16 @@ def _show_ticker_analysis_ui():
     with tab2:
         st.markdown("**Select a portfolio to see monthly ticker changes. Green = retained from previous month.**")
 
-        # Single portfolio selector
-        selected_portfolio_name = st.selectbox(
+        # Single portfolio selector (display clean names)
+        selected_display_name_tab2 = st.selectbox(
             "Select Portfolio",
-            options=portfolio_names,
+            options=display_names,
             key="ticker_analysis_single_portfolio"
         )
+        # Map back to original name
+        selected_portfolio_name_tab2 = display_to_original.get(selected_display_name_tab2, selected_display_name_tab2)
 
-        selected_portfolio = next((p for p in portfolios if p["name"] == selected_portfolio_name), None)
+        selected_portfolio = next((p for p in portfolios if p["name"] == selected_portfolio_name_tab2), None)
 
         if selected_portfolio:
             # Get all months for this portfolio
@@ -1293,7 +1305,7 @@ def _show_ticker_analysis_ui():
                 portfolio_months = []
 
             if not portfolio_months:
-                st.warning(f"No holdings found for {selected_portfolio_name}.")
+                st.warning(f"No holdings found for {selected_display_name_tab2}.")
             else:
                 # Load all holdings for this portfolio
                 try:
@@ -1355,7 +1367,7 @@ def _show_ticker_analysis_ui():
 
                     styled_monthly = df_monthly.style.apply(style_monthly_matrix, axis=None)
 
-                    st.markdown(f"### {selected_portfolio_name}: {len(all_unique_tickers)} tickers across {len(sorted_months)} months")
+                    st.markdown(f"### {selected_display_name_tab2}: {len(all_unique_tickers)} tickers across {len(sorted_months)} months")
                     st.markdown("**Legend:** Green = retained from previous month | Blue = new this month")
                     st.dataframe(styled_monthly, use_container_width=True, hide_index=True, height=600)
 
