@@ -1394,7 +1394,15 @@ def _show_ticker_analysis_ui():
                         retained = len(current_tickers & prev_tickers)
                         new_tickers = len(current_tickers - prev_tickers)
                         dropped = len(prev_tickers - current_tickers)
-                        turnover = (new_tickers + dropped) / (len(current_tickers) + len(prev_tickers)) * 2 if (len(current_tickers) + len(prev_tickers)) > 0 else 0
+
+                        # Turnover: percentage of positions that changed
+                        # First month has no previous, so N/A
+                        if not prev_tickers:
+                            turnover_str = "-"
+                        else:
+                            # Turnover = changed positions / current positions (capped at 100%)
+                            turnover = new_tickers / len(current_tickers) if len(current_tickers) > 0 else 0
+                            turnover_str = f"{turnover*100:.1f}%"
 
                         stats_data.append({
                             "Month": month,
@@ -1402,7 +1410,7 @@ def _show_ticker_analysis_ui():
                             "Retained": retained,
                             "New": new_tickers,
                             "Dropped": dropped,
-                            "Turnover": f"{turnover*100:.1f}%"
+                            "Turnover": turnover_str
                         })
                         prev_tickers = current_tickers
 
