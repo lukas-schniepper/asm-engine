@@ -197,17 +197,19 @@ if "auto_run_backtest" not in st.session_state:
 if "switch_to_backtester" not in st.session_state:
     st.session_state.switch_to_backtester = False
 
-# Auto-switch to Backtester if flag is set (must happen BEFORE widget renders)
-default_page_idx = 0
-if st.session_state.switch_to_backtester:
-    default_page_idx = 0  # Backtester
+# Check if we need to switch to Backtester
+force_backtester = st.session_state.switch_to_backtester
+if force_backtester:
     st.session_state.switch_to_backtester = False  # Reset flag
 
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
     ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
-    index=default_page_idx
 )
+
+# Override page if coming from optimizer
+if force_backtester:
+    page = "Backtester"
 
 # -----------------------------------------------------------------------------
 # 4) CSV-Loader (Session-Cache)
