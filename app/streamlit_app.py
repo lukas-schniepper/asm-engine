@@ -335,7 +335,7 @@ def show_backtester_ui():
     )
 
     # 2) Monat wählen
-    months = dm.get_periods_distinct_months()
+    months = sorted(dm.get_periods_distinct_months(), reverse=True)  # Newest first
     default_month = opt_params.get("month", months[0] if months else None)
     default_month_idx = months.index(default_month) if default_month in months else 0
     month  = st.sidebar.selectbox("Periode wählen (YYYY-MM)", months, index=default_month_idx)
@@ -2029,7 +2029,8 @@ def show_optimizer_ui():
 
     # ---------- Daten-Selektion ------------------------------------
     dm = StockDataManager()
-    month   = st.selectbox("Start-Monat (Universe)", dm.get_periods_distinct_months())
+    months_sorted = sorted(dm.get_periods_distinct_months(), reverse=True)  # Newest first
+    month   = st.selectbox("Start-Monat (Universe)", months_sorted)
     with get_session() as session:
         existing = session.exec(select(TickerPeriod.source)).all()
     defaults = ["Topweights", "TR20"]
