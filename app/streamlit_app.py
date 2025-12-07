@@ -194,15 +194,19 @@ if "optimizer_to_backtester" not in st.session_state:
     st.session_state.optimizer_to_backtester = None
 if "auto_run_backtest" not in st.session_state:
     st.session_state.auto_run_backtest = False
+if "switch_to_backtester" not in st.session_state:
+    st.session_state.switch_to_backtester = False
 
-# Auto-switch to Backtester if coming from optimizer
-if st.session_state.optimizer_to_backtester:
-    st.session_state.page_selector = "Backtester"
+# Auto-switch to Backtester if flag is set (must happen BEFORE widget renders)
+default_page_idx = 0
+if st.session_state.switch_to_backtester:
+    default_page_idx = 0  # Backtester
+    st.session_state.switch_to_backtester = False  # Reset flag
 
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
     ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
-    key="page_selector"
+    index=default_page_idx
 )
 
 # -----------------------------------------------------------------------------
@@ -2202,7 +2206,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
             "month": optimizer_context.get("month"),
         }
         st.session_state.auto_run_backtest = True
-        st.session_state.page_selector = "Backtester"  # Switch page
+        st.session_state.switch_to_backtester = True  # Flag for page switch
         st.rerun()
 
     if run_btn:
