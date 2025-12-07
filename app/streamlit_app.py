@@ -2114,7 +2114,25 @@ def show_optimizer_ui():
             "end_date": end_date,
             "month": month,
         }
-        show_study_results(study, kpi_weights, price_df, base_kwargs, optimizer_context)
+        # Store in session state for persistence across reruns
+        st.session_state.optimizer_results = {
+            "study": study,
+            "kpi_weights": kpi_weights,
+            "price_df": price_df,
+            "base_kwargs": base_kwargs,
+            "optimizer_context": optimizer_context,
+        }
+
+    # Display results if available in session state
+    if "optimizer_results" in st.session_state and st.session_state.optimizer_results:
+        results = st.session_state.optimizer_results
+        show_study_results(
+            results["study"],
+            results["kpi_weights"],
+            results["price_df"],
+            results["base_kwargs"],
+            results["optimizer_context"]
+        )
 
 def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_context=None):
     
