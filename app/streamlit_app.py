@@ -196,14 +196,13 @@ if "auto_run_backtest" not in st.session_state:
     st.session_state.auto_run_backtest = False
 
 # Auto-switch to Backtester if coming from optimizer
-default_page_index = 0
 if st.session_state.optimizer_to_backtester:
-    default_page_index = 0  # Backtester is index 0
+    st.session_state.page_selector = "Backtester"
 
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
     ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
-    index=default_page_index
+    key="page_selector"
 )
 
 # -----------------------------------------------------------------------------
