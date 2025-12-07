@@ -211,6 +211,7 @@ def _render_performance_tracker():
     tabs = st.tabs([
         "Overview",
         "Performance Comparison",
+        "Benchmark Comparison",
         "Multi-Portfolio Compare",
         "Allocation History",
         "Signal Analysis",
@@ -231,23 +232,30 @@ def _render_performance_tracker():
             start_date, end_date
         )
 
-    # ===== Tab 3: Multi-Portfolio Comparison =====
+    # ===== Tab 3: Benchmark Comparison =====
     with tabs[2]:
+        _render_benchmark_comparison_tab(
+            tracker, selected_portfolio_id, portfolio, selected_variants,
+            start_date, end_date
+        )
+
+    # ===== Tab 4: Multi-Portfolio Comparison =====
+    with tabs[3]:
         _render_multi_portfolio_comparison_tab(tracker, start_date, end_date)
 
-    # ===== Tab 4: Allocation History =====
-    with tabs[3]:
+    # ===== Tab 5: Allocation History =====
+    with tabs[4]:
         _render_allocation_tab(
             tracker, selected_portfolio_id, selected_variants,
             start_date, end_date
         )
 
-    # ===== Tab 5: Signal Analysis =====
-    with tabs[4]:
+    # ===== Tab 6: Signal Analysis =====
+    with tabs[5]:
         _render_signals_tab(tracker, start_date, end_date)
 
-    # ===== Tab 6: Scraper View =====
-    with tabs[5]:
+    # ===== Tab 7: Scraper View =====
+    with tabs[6]:
         _render_scraper_view_tab(tracker, start_date, end_date)
 
 
@@ -379,6 +387,291 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
                     "max_drawdown": "{:.2%}",
                 }),
                 use_container_width=True,
+            )
+
+
+def _render_benchmark_comparison_tab(
+    tracker, portfolio_id, portfolio, variants, start_date, end_date
+):
+    """Render the Benchmark Comparison tab - compare portfolio to EW universe."""
+    from ..tracking import Variants
+    from ..tracking.benchmark import compare_portfolio_to_benchmark
+    from .styles import COLORS
+    import plotly.graph_objects as go
+    from datetime import date as date_type
+
+    st.markdown("### Portfolio vs Equal-Weight Benchmark")
+    st.markdown(
+        "Compare your portfolio's performance against an equal-weight basket of all "
+        "tickers in the source universe."
+    )
+
+    # Check if portfolio has a source
+    if not portfolio or not portfolio.source:
+        st.warning(
+            "This portfolio doesn't have a source defined. "
+            "Cannot calculate benchmark comparison."
+        )
+        return
+
+    source = portfolio.source
+    st.info(f"**Benchmark:** Equal-weight all tickers from source '{source}'")
+
+    # Select which variant to compare
+    variant_for_comparison = st.selectbox(
+        "Select portfolio variant to compare",
+        options=variants,
+        index=0,  # Default to first variant (usually raw)
+        format_func=lambda x: x.replace("_", " ").title(),
+        key="benchmark_variant_select",
+    )
+
+    # Get portfolio NAV data
+    nav_df = tracker.get_nav_series(
+        portfolio_id, variant_for_comparison, start_date, end_date
+    )
+
+    if nav_df.empty:
+        st.warning("No NAV data available for the selected date range.")
+        return
+
+    # Calculate comparison with loading indicator
+    with st.spinner("Calculating benchmark returns..."):
+        try:
+            comparison = compare_portfolio_to_benchmark(
+                portfolio_nav_df=nav_df,
+                source=source,
+                start_date=start_date,
+                end_date=end_date,
+                use_adjusted_close=True,
+            )
+        except Exception as e:
+            st.error(f"Error calculating benchmark: {str(e)}")
+            return
+
+    if not comparison["benchmark_metrics"]:
+        st.warning(
+            f"No benchmark data available for source '{source}'. "
+            "This may be because no ticker_period entries exist for this source."
+        )
+        return
+
+    # ===== Summary Metrics Table =====
+    st.markdown("---")
+    st.markdown("### Performance Metrics")
+
+    port_metrics = comparison["portfolio_metrics"]
+    bench_metrics = comparison["benchmark_metrics"]
+
+    # Build comparison table
+    metrics_data = []
+    metric_labels = {
+        "total_return": ("Total Return", "{:.2%}"),
+        "cagr": ("CAGR", "{:.2%}"),
+        "sharpe_ratio": ("Sharpe Ratio", "{:.2f}"),
+        "sortino_ratio": ("Sortino Ratio", "{:.2f}"),
+        "max_drawdown": ("Max Drawdown", "{:.2%}"),
+        "calmar_ratio": ("Calmar Ratio", "{:.2f}"),
+        "volatility": ("Volatility", "{:.2%}"),
+        "win_rate": ("Win Rate", "{:.1%}"),
+    }
+
+    for metric_key, (label, fmt) in metric_labels.items():
+        port_val = port_metrics.get(metric_key, 0)
+        bench_val = bench_metrics.get(metric_key, 0)
+        diff = port_val - bench_val if port_val is not None and bench_val is not None else None
+
+        # Format for display
+        port_str = fmt.format(port_val) if port_val is not None else "N/A"
+        bench_str = fmt.format(bench_val) if bench_val is not None else "N/A"
+        diff_str = fmt.format(diff) if diff is not None else "N/A"
+
+        # Add sign prefix for difference
+        if diff is not None and diff > 0:
+            diff_str = "+" + diff_str
+
+        metrics_data.append({
+            "Metric": label,
+            "Portfolio": port_str,
+            "EW Benchmark": bench_str,
+            "Difference": diff_str,
+        })
+
+    metrics_df = pd.DataFrame(metrics_data)
+
+    # Color the difference column
+    def color_diff(val):
+        if val == "N/A":
+            return "color: #666"
+        try:
+            # Check if positive or negative
+            if val.startswith("+"):
+                return "color: #22c55e; font-weight: 600"
+            elif val.startswith("-"):
+                return "color: #ef4444; font-weight: 600"
+        except:
+            pass
+        return ""
+
+    styled_metrics = metrics_df.style.applymap(
+        color_diff, subset=["Difference"]
+    ).set_properties(**{"text-align": "center"}, subset=["Portfolio", "EW Benchmark", "Difference"])
+
+    st.dataframe(styled_metrics, use_container_width=True, hide_index=True)
+
+    # ===== Equity Curves Chart =====
+    st.markdown("---")
+    st.markdown("### Equity Curves")
+
+    portfolio_nav = comparison["portfolio_nav"]
+    benchmark_nav = comparison["benchmark_nav"]
+
+    # Normalize to 100
+    if not portfolio_nav.empty:
+        portfolio_nav_normalized = (portfolio_nav / portfolio_nav.iloc[0]) * 100
+    else:
+        portfolio_nav_normalized = pd.Series(dtype=float)
+
+    if not benchmark_nav.empty:
+        benchmark_nav_normalized = (benchmark_nav / benchmark_nav.iloc[0]) * 100
+    else:
+        benchmark_nav_normalized = pd.Series(dtype=float)
+
+    fig = go.Figure()
+
+    # Portfolio line
+    if not portfolio_nav_normalized.empty:
+        fig.add_trace(go.Scatter(
+            x=portfolio_nav_normalized.index,
+            y=portfolio_nav_normalized.values,
+            name=f"Portfolio ({variant_for_comparison.replace('_', ' ').title()})",
+            mode="lines",
+            line={"color": COLORS.get("primary", "#3b82f6"), "width": 2.5},
+        ))
+
+    # Benchmark line
+    if not benchmark_nav_normalized.empty:
+        fig.add_trace(go.Scatter(
+            x=benchmark_nav_normalized.index,
+            y=benchmark_nav_normalized.values,
+            name=f"EW Benchmark ({source})",
+            mode="lines",
+            line={"color": "#f97316", "width": 2, "dash": "dot"},
+        ))
+
+    fig.update_layout(
+        height=400,
+        xaxis_title="Date",
+        yaxis_title="NAV (Normalized to 100)",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ===== Monthly Comparison Table =====
+    st.markdown("---")
+    st.markdown("### Monthly Returns Comparison")
+
+    monthly_data = comparison["monthly_comparison"]
+    if not monthly_data:
+        st.info("No monthly comparison data available.")
+    else:
+        # Build monthly table sorted by month descending
+        monthly_data_sorted = sorted(monthly_data, key=lambda x: x["month"], reverse=True)
+
+        # Current month for MTD label
+        current_month = date_type.today().strftime("%Y-%m")
+
+        monthly_table = []
+        cumulative_port = 1.0
+        cumulative_bench = 1.0
+        cumulative_diff = 0.0
+
+        # Calculate cumulative from oldest to newest, then display newest first
+        for record in sorted(monthly_data, key=lambda x: x["month"]):
+            port_ret = record.get("portfolio_return")
+            bench_ret = record.get("benchmark_return")
+            diff = record.get("difference")
+
+            if port_ret is not None:
+                cumulative_port *= (1 + port_ret)
+            if bench_ret is not None:
+                cumulative_bench *= (1 + bench_ret)
+            if diff is not None:
+                cumulative_diff += diff
+
+        # Now build display table
+        for record in monthly_data_sorted:
+            month = record["month"]
+            port_ret = record.get("portfolio_return")
+            bench_ret = record.get("benchmark_return")
+            diff = record.get("difference")
+
+            # Format
+            month_label = f"{month} (MTD)" if month == current_month else month
+            port_str = f"{port_ret*100:.2f}%" if port_ret is not None else "-"
+            bench_str = f"{bench_ret*100:.2f}%" if bench_ret is not None else "-"
+            diff_str = f"{diff*100:+.2f}%" if diff is not None else "-"
+
+            monthly_table.append({
+                "Month": month_label,
+                "Portfolio": port_str,
+                "EW Benchmark": bench_str,
+                "Alpha": diff_str,
+            })
+
+        monthly_df = pd.DataFrame(monthly_table)
+
+        # Color function
+        def color_monthly_val(val):
+            if val == "-":
+                return "color: #666"
+            try:
+                num = float(val.replace("%", "").replace("+", ""))
+                if "+" in val:
+                    return "color: #22c55e; font-weight: 600"
+                elif val.startswith("-"):
+                    return "color: #ef4444; font-weight: 600"
+                elif num > 0:
+                    return "color: #22c55e"
+                elif num < 0:
+                    return "color: #ef4444"
+            except:
+                pass
+            return ""
+
+        styled_monthly = monthly_df.style.applymap(
+            color_monthly_val, subset=["Portfolio", "EW Benchmark", "Alpha"]
+        ).set_properties(**{"text-align": "center"}, subset=["Portfolio", "EW Benchmark", "Alpha"])
+
+        st.dataframe(
+            styled_monthly,
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, 35 * len(monthly_df) + 38)
+        )
+
+        # Summary stats
+        if monthly_data:
+            total_alpha = (cumulative_port - 1) - (cumulative_bench - 1)
+            months_with_alpha = sum(1 for r in monthly_data if r.get("difference") and r["difference"] > 0)
+            total_months = sum(1 for r in monthly_data if r.get("difference") is not None)
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric(
+                "Cumulative Alpha",
+                f"{total_alpha*100:+.2f}%",
+                delta=None,
+            )
+            col2.metric(
+                "Win Rate (months)",
+                f"{months_with_alpha}/{total_months}",
+                delta=f"{months_with_alpha/total_months*100:.0f}%" if total_months > 0 else "N/A",
+            )
+            col3.metric(
+                "Period",
+                f"{len(monthly_data)} months",
             )
 
 

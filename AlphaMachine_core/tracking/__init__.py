@@ -43,6 +43,12 @@ from .registration import (
     get_suggested_portfolio_name,
     check_portfolio_name_exists,
 )
+from .benchmark import (
+    calculate_ew_benchmark_returns,
+    get_benchmark_metrics,
+    get_benchmark_monthly_returns,
+    compare_portfolio_to_benchmark,
+)
 
 __all__ = [
     # Models
@@ -83,4 +89,9 @@ __all__ = [
     "register_portfolio_from_backtest",
     "get_suggested_portfolio_name",
     "check_portfolio_name_exists",
+    # Benchmark
+    "calculate_ew_benchmark_returns",
+    "get_benchmark_metrics",
+    "get_benchmark_monthly_returns",
+    "compare_portfolio_to_benchmark",
 ]
