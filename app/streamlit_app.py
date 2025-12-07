@@ -296,7 +296,7 @@ def show_backtester_ui():
     dm = StockDataManager()
 
     # Check if coming from optimizer with pre-filled parameters
-    opt_params = st.session_state.get("optimizer_to_backtester", {})
+    opt_params = st.session_state.get("optimizer_to_backtester") or {}
     from_optimizer = bool(opt_params)
 
     if from_optimizer:
