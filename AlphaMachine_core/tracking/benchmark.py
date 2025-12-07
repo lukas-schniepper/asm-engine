@@ -94,12 +94,17 @@ def calculate_ew_benchmark_returns(
         # Fetch price data for all tickers
         price_col = "adjusted_close" if use_adjusted_close else "close"
 
+        # Calculate a lookback date to get previous day's price for first day's return
+        # We need to fetch data from before start_date to calculate pct_change correctly
+        from datetime import timedelta
+        lookback_date = start_date - timedelta(days=10)  # Go back 10 days to handle weekends/holidays
+
         # Use raw SQL for better performance
         query = text(f"""
             SELECT ticker, date as trade_date, close, adjusted_close
             FROM price_data
             WHERE ticker = ANY(:tickers)
-            AND date >= :start_date
+            AND date >= :lookback_date
             AND date <= :end_date
             ORDER BY date, ticker
         """)
@@ -108,7 +113,7 @@ def calculate_ew_benchmark_returns(
             query,
             {
                 "tickers": list(all_tickers),
-                "start_date": start_date,
+                "lookback_date": lookback_date,
                 "end_date": end_date,
             }
         )
@@ -154,6 +159,10 @@ def calculate_ew_benchmark_returns(
         # Calculate equal-weight average return for each day
         # (mean of active tickers)
         ew_returns = masked_returns.mean(axis=1)
+
+        # Filter to only include dates >= start_date (lookback was only for pct_change)
+        ew_returns = ew_returns[ew_returns.index >= pd.Timestamp(start_date)]
+        active_mask = active_mask[active_mask.index >= pd.Timestamp(start_date)]
 
         # Calculate NAV series starting at 100
         nav = (1 + ew_returns.fillna(0)).cumprod() * 100
