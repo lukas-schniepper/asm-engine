@@ -189,10 +189,21 @@ if pwd != st.secrets.get("APP_PW", ""):
 # -----------------------------------------------------------------------------
 # 3) Navigation-Switcher
 # -----------------------------------------------------------------------------
+# Session state for optimizer -> backtester parameter passing
+if "optimizer_to_backtester" not in st.session_state:
+    st.session_state.optimizer_to_backtester = None
+if "auto_run_backtest" not in st.session_state:
+    st.session_state.auto_run_backtest = False
+
+# Auto-switch to Backtester if coming from optimizer
+default_page_index = 0
+if st.session_state.optimizer_to_backtester:
+    default_page_index = 0  # Backtester is index 0
+
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
     ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
-    index=0
+    index=default_page_index
 )
 
 # -----------------------------------------------------------------------------
@@ -284,16 +295,25 @@ def show_backtester_ui():
     st.sidebar.header("📊 Backtest-Parameter")
     dm = StockDataManager()
 
+    # Check if coming from optimizer with pre-filled parameters
+    opt_params = st.session_state.get("optimizer_to_backtester", {})
+    from_optimizer = bool(opt_params)
+
+    if from_optimizer:
+        st.info("✅ Parameter aus Optimizer übernommen - Backtest wird automatisch gestartet")
+
     # 0) Backtest-Periode festlegen
     col1, col2 = st.sidebar.columns(2)
+    default_start = opt_params.get("start_date", dt.date.today() - dt.timedelta(days=5*365))
+    default_end = opt_params.get("end_date", dt.date.today())
     start_date = col1.date_input(
         "Backtest-Startdatum",
-        value=dt.date.today() - dt.timedelta(days=5*365),
+        value=default_start,
         max_value=dt.date.today()
     )
     end_date = col2.date_input(
         "Backtest-Enddatum",
-        value=dt.date.today(),
+        value=default_end,
         min_value=start_date
     )
     if start_date >= end_date:
@@ -304,15 +324,21 @@ def show_backtester_ui():
     with get_session() as session:
         existing = session.exec(select(TickerPeriod.source)).all()
     defaults = ["Topweights","TR20"]
+    all_sources = sorted(set(existing + defaults))
+    default_sources = opt_params.get("sources", ["Topweights"])
+    # Ensure default_sources are valid options
+    default_sources = [s for s in default_sources if s in all_sources] or ["Topweights"]
     sources = st.sidebar.multiselect(
         "Datenquellen auswählen",
-        options=sorted(set(existing + defaults)),
-        default=["Topweights"]
+        options=all_sources,
+        default=default_sources
     )
 
     # 2) Monat wählen
     months = dm.get_periods_distinct_months()
-    month  = st.sidebar.selectbox("Periode wählen (YYYY-MM)", months)
+    default_month = opt_params.get("month", months[0] if months else None)
+    default_month_idx = months.index(default_month) if default_month in months else 0
+    month  = st.sidebar.selectbox("Periode wählen (YYYY-MM)", months, index=default_month_idx)
 
     # 3) Modus: statisch vs. dynamisch
     mode = st.sidebar.radio(
@@ -321,29 +347,48 @@ def show_backtester_ui():
     )
 
     # 4) Lookback Days (Backtest-Fenster)
+    default_window = opt_params.get("window_days", CFG_WINDOW)
+    # Clamp to valid range
+    default_window = max(50, min(500, default_window))
     window_days = st.sidebar.slider(
-        "Lookback Days", 
+        "Lookback Days",
         min_value=50,
         max_value=500,
-        value=CFG_WINDOW,
+        value=default_window,
         step=10
     )
 
     # — 5) Portfolio- & Optimierungs-Parameter —
     start_balance = st.sidebar.number_input("Startkapital", 10_000, 1_000_000, 100_000, 1_000)
-    num_stocks    = st.sidebar.slider("Aktien pro Portfolio", 5, 50, 20)
+
+    default_num_stocks = opt_params.get("num_stocks", 20)
+    default_num_stocks = max(5, min(50, default_num_stocks))
+    num_stocks    = st.sidebar.slider("Aktien pro Portfolio", 5, 50, default_num_stocks)
+
+    opt_methods = ["ledoit-wolf","minvar","hrp"]
+    default_opt_method = opt_params.get("optimizer_method", CFG_OPT_METHOD)
+    default_opt_idx = opt_methods.index(default_opt_method) if default_opt_method in opt_methods else 0
     opt_method    = st.sidebar.selectbox(
-        "Optimierer", ["ledoit-wolf","minvar","hrp"],
-        index=["ledoit-wolf","minvar","hrp"].index(CFG_OPT_METHOD)
+        "Optimierer", opt_methods,
+        index=default_opt_idx
     )
+
+    cov_estimators = ["ledoit-wolf","constant-corr","factor-model"]
+    default_cov = opt_params.get("cov_estimator", CFG_COV_EST)
+    default_cov_idx = cov_estimators.index(default_cov) if default_cov in cov_estimators else 0
     cov_estimator = st.sidebar.selectbox(
-        "Kovarianzschätzer", ["ledoit-wolf","constant-corr","factor-model"],
-        index=["ledoit-wolf","constant-corr","factor-model"].index(CFG_COV_EST)
+        "Kovarianzschätzer", cov_estimators,
+        index=default_cov_idx
     )
+
+    opt_modes = ["select-then-optimize","optimize-subset"]
+    default_opt_mode = opt_params.get("optimization_mode", CFG_OPT_MODE)
+    default_opt_mode_idx = opt_modes.index(default_opt_mode) if default_opt_mode in opt_modes else 0
     opt_mode      = st.sidebar.selectbox(
-        "Optimierungsmodus", ["select-then-optimize","optimize-subset"],
-        index=["select-then-optimize","optimize-subset"].index(CFG_OPT_MODE)
+        "Optimierungsmodus", opt_modes,
+        index=default_opt_mode_idx
     )
+
     rebalance_freq= st.sidebar.selectbox(
         "Rebalance", ["weekly","monthly","custom"],
         index=["weekly","monthly","custom"].index(CFG_REBAL_FREQ)
@@ -354,9 +399,16 @@ def show_backtester_ui():
     )
 
     # — 6) Gewicht-Constraints —
-    min_w    = st.sidebar.slider("Min Weight (%)", 0.0, 5.0, CFG_MIN_W*100, 0.5) / 100.0
-    max_w    = st.sidebar.slider("Max Weight (%)", 5.0, 50.0, CFG_MAX_W*100, 1.0) / 100.0
-    force_eq = st.sidebar.checkbox("Force Equal Weight", CFG_FORCE_EQ)
+    default_min_w = opt_params.get("min_weight", CFG_MIN_W * 100)
+    default_min_w = max(0.0, min(5.0, float(default_min_w)))
+    min_w    = st.sidebar.slider("Min Weight (%)", 0.0, 5.0, default_min_w, 0.5) / 100.0
+
+    default_max_w = opt_params.get("max_weight", CFG_MAX_W * 100)
+    default_max_w = max(5.0, min(50.0, float(default_max_w)))
+    max_w    = st.sidebar.slider("Max Weight (%)", 5.0, 50.0, default_max_w, 1.0) / 100.0
+
+    default_force_eq = opt_params.get("force_equal_weight", CFG_FORCE_EQ)
+    force_eq = st.sidebar.checkbox("Force Equal Weight", default_force_eq)
 
     # — 7) Trading-Kosten —
     st.sidebar.subheader("Trading-Kosten")
@@ -364,15 +416,21 @@ def show_backtester_ui():
     fixed_cost = st.sidebar.number_input("Fixe Kosten pro Trade", 0.0, 100.0, CFG_FIXED_COST)
     var_cost   = st.sidebar.number_input("Variable Kosten (%)", 0.0, 1.0, CFG_VAR_COST*100) / 100.0
 
-    
+
     # --- Risk-Overlay: feste Defaults, weil die Widgets entfernt wurden ------------
     overlay_enabled = False          # Overlay komplett aus
     low_thr  = -0.30                 # Default für Three-Band LOW
     high_thr =  0.10                 # Default für Three-Band HIGH
 
-    
-    # --- Buttons -----------------------------------------------
-    run_btn     = st.sidebar.button("Backtest starten 🚀")
+
+    # --- Buttons / Auto-Run -----------------------------------------------
+    # Check for auto-run from optimizer
+    if st.session_state.get("auto_run_backtest"):
+        st.session_state.auto_run_backtest = False  # Reset flag
+        st.session_state.optimizer_to_backtester = None  # Clear params after use
+        run_btn = True
+    else:
+        run_btn = st.sidebar.button("Backtest starten 🚀")
 
     # Wenn *keiner* gedrückt wurde → zurück
     if not run_btn:
@@ -2049,9 +2107,16 @@ def show_optimizer_ui():
 
     if st.button("🚀 Suche starten"):
         study = run_optimizer(price_df, base_kwargs, search_space, kpi_weights, n_trials)
-        show_study_results(study, kpi_weights, price_df, base_kwargs)
+        # Pass optimizer context for "Run in Backtester" feature
+        optimizer_context = {
+            "sources": sources,
+            "start_date": start_date,
+            "end_date": end_date,
+            "month": month,
+        }
+        show_study_results(study, kpi_weights, price_df, base_kwargs, optimizer_context)
 
-def show_study_results(study, kpi_weights, price_df, fixed_kwargs):
+def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_context=None):
     
     # ------- A) Trials-DataFrame aufbereiten -----------------------
     df = study.trials_dataframe()
@@ -2089,7 +2154,38 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs):
     # Auswahl eines Runs für Backtest
     run_numbers = top_df["number"].tolist()
     selected = st.selectbox("Wähle Run-Nummer zum Backtesten", run_numbers)
-    run_btn = st.button("🔄 Ausgewählten Run backtesten", key="run_selected_btn")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        run_btn = st.button("🔄 Hier backtesten", key="run_selected_btn")
+    with col2:
+        backtester_btn = st.button("📊 Im Backtester öffnen", key="open_in_backtester_btn")
+
+    # Handle "Open in Backtester" button
+    if backtester_btn and optimizer_context:
+        sel_row = df[df["number"] == selected].iloc[0]
+        params = {c: sel_row[c] for c in sel_row.index if c not in ("number", "value", *kpis)}
+
+        # Store parameters for backtester
+        st.session_state.optimizer_to_backtester = {
+            # Optimized/fixed parameters
+            "num_stocks": int(params.get("num_stocks", fixed_kwargs.get("num_stocks", 20))),
+            "window_days": int(params.get("window_days", fixed_kwargs.get("window_days", 252))),
+            "min_weight": float(params.get("min_weight", 0.0)),
+            "max_weight": float(params.get("max_weight", 20.0)),
+            "force_equal_weight": bool(params.get("force_equal_weight", False)),
+            "optimization_mode": params.get("optimization_mode", "select-then-optimize"),
+            "optimizer_method": params.get("optimizer_method", "ledoit-wolf"),
+            "cov_estimator": params.get("cov_estimator", "ledoit-wolf"),
+            # Context from optimizer
+            "sources": optimizer_context.get("sources", ["Topweights"]),
+            "start_date": optimizer_context.get("start_date"),
+            "end_date": optimizer_context.get("end_date"),
+            "month": optimizer_context.get("month"),
+        }
+        st.session_state.auto_run_backtest = True
+        st.rerun()
+
     if run_btn:
         # Parameter ins Session-State schreiben
         sel_row = df[df["number"] == selected].iloc[0]
