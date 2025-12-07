@@ -197,19 +197,16 @@ if "auto_run_backtest" not in st.session_state:
 if "switch_to_backtester" not in st.session_state:
     st.session_state.switch_to_backtester = False
 
-# Check if we need to switch to Backtester
-force_backtester = st.session_state.switch_to_backtester
-if force_backtester:
+# Check if we need to switch to Backtester - set BEFORE widget renders
+if st.session_state.switch_to_backtester:
+    st.session_state.page_radio = "Backtester"  # Set widget state before render
     st.session_state.switch_to_backtester = False  # Reset flag
 
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
     ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
+    key="page_radio"
 )
-
-# Override page if coming from optimizer
-if force_backtester:
-    page = "Backtester"
 
 # -----------------------------------------------------------------------------
 # 4) CSV-Loader (Session-Cache)
@@ -2179,11 +2176,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
     run_numbers = top_df["number"].tolist()
     selected = st.selectbox("Wähle Run-Nummer zum Backtesten", run_numbers)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        run_btn = st.button("🔄 Hier backtesten", key="run_selected_btn")
-    with col2:
-        backtester_btn = st.button("📊 Im Backtester öffnen", key="open_in_backtester_btn")
+    backtester_btn = st.button("📊 Im Backtester öffnen", key="open_in_backtester_btn")
 
     # Handle "Open in Backtester" button
     if backtester_btn and optimizer_context:
@@ -2210,40 +2203,6 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
         st.session_state.auto_run_backtest = True
         st.session_state.switch_to_backtester = True  # Flag for page switch
         st.rerun()
-
-    if run_btn:
-        # Parameter ins Session-State schreiben
-        sel_row = df[df["number"] == selected].iloc[0]
-        params = {c: sel_row[c] for c in sel_row.index if c not in ("number","value",*kpis)}
-        for k, v in params.items():
-            st.session_state[f"opt_{k}"] = v
-        # Merke den gewählten Run
-        st.session_state.selected_run = selected
-        st.success(f"Run {selected} für Backtest ausgewählt und Parameter gespeichert.")
-
-    # Wenn ein Run gewählt wurde, durchführen
-    if st.session_state.get('selected_run', None) is not None:
-        sel_num = st.session_state.selected_run
-        sel_row = df[df["number"] == sel_num].iloc[0]
-        params = {c: sel_row[c] for c in sel_row.index if c not in ("number","value",*kpis)}
-        run_kwargs = {**fixed_kwargs, **params}
-        if "num_stocks" not in run_kwargs:
-            run_kwargs["num_stocks"] = fixed_kwargs.get("num_stocks")
-        if "window_days" not in run_kwargs:
-            run_kwargs["window_days"] = fixed_kwargs.get("window_days")
-
-        eng_sel = SharpeBacktestEngine(price_df, **run_kwargs)
-        eng_sel.run_with_next_month_allocation()
-
-        st.subheader(f"🔍 Backtest-Ergebnisse für Run {sel_num}")
-        st.markdown("---")
-        st.subheader("🔍 KPI-Übersicht des gewählten Runs")
-        if not eng_sel.performance_metrics.empty:
-            st.dataframe(eng_sel.performance_metrics, hide_index=True, use_container_width=True)
-        st.markdown("---")
-        st.subheader("📈 Portfolio-Verlauf des gewählten Runs")
-        if not eng_sel.portfolio_value.empty:
-            st.line_chart(eng_sel.portfolio_value)
 
     # ------- C) Best-Run erneut ausführen --------------------------
     best_params = study.best_params
