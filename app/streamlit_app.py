@@ -2184,6 +2184,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
             "month": optimizer_context.get("month"),
         }
         st.session_state.auto_run_backtest = True
+        st.session_state.page_selector = "Backtester"  # Switch page
         st.rerun()
 
     if run_btn:
