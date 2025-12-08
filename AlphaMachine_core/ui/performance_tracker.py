@@ -412,27 +412,17 @@ def _render_attribution_table(
     df = pd.DataFrame(holdings)
 
     if is_universe_table and portfolio_tickers:
-        # For universe table: sort portfolio tickers first (in order), then others by contribution
+        # For universe table: sort portfolio tickers first (alphabetically), then others alphabetically
         portfolio_set = set(portfolio_tickers)
         df["in_portfolio"] = df["ticker"].isin(portfolio_set)
-        df["portfolio_order"] = df["ticker"].apply(
-            lambda t: portfolio_tickers.index(t) if t in portfolio_set else 9999
-        )
 
-        # Sort: portfolio tickers first (in portfolio order), then others by |contribution|
-        df = df.sort_values(
-            ["in_portfolio", "portfolio_order", "contribution"],
-            ascending=[False, True, False],
-            key=lambda x: abs(x) if x.name == "contribution" else x
-        )
-        # Re-sort non-portfolio tickers by |contribution|
-        in_port = df[df["in_portfolio"]].copy()
-        not_in_port = df[~df["in_portfolio"]].copy()
-        not_in_port = not_in_port.sort_values("contribution", key=abs, ascending=False)
+        # Sort: portfolio tickers first (alphabetically), then others alphabetically
+        in_port = df[df["in_portfolio"]].copy().sort_values("ticker")
+        not_in_port = df[~df["in_portfolio"]].copy().sort_values("ticker")
         df = pd.concat([in_port, not_in_port], ignore_index=True)
     else:
-        # Sort by contribution (absolute value) descending
-        df = df.sort_values("contribution", key=abs, ascending=False)
+        # Sort alphabetically by ticker
+        df = df.sort_values("ticker")
 
     # Store which tickers are not in portfolio (for highlighting)
     if is_universe_table and portfolio_tickers:
