@@ -350,3 +350,190 @@ def compare_portfolio_to_benchmark(
         "portfolio_nav": portfolio_nav,
         "benchmark_nav": benchmark_nav,
     }
+
+
+def calculate_stock_attribution(
+    portfolio_id: int,
+    source: str,
+    month: str,
+    tracker: "PortfolioTracker",
+) -> dict:
+    """
+    Calculate stock-level attribution for a specific month.
+
+    Shows weight, return, and contribution (weight × return) for each stock
+    in both the portfolio and the benchmark universe.
+
+    Args:
+        portfolio_id: Portfolio ID to analyze
+        source: Data source for benchmark universe (e.g., "Topweights")
+        month: Month in format "YYYY-MM"
+        tracker: PortfolioTracker instance
+
+    Returns:
+        Dictionary with:
+        - portfolio_holdings: List of {ticker, weight, return, contribution}
+        - universe_holdings: List of {ticker, weight, return, contribution}
+        - portfolio_total: Total portfolio return for the month
+        - benchmark_total: Total benchmark return for the month
+        - alpha: Portfolio return - benchmark return
+    """
+    from datetime import timedelta
+    from calendar import monthrange
+
+    # Parse month to get date range
+    year, mon = int(month[:4]), int(month[5:7])
+    month_start = date(year, mon, 1)
+    _, last_day = monthrange(year, mon)
+    month_end = date(year, mon, last_day)
+
+    # Cap end date at today if month is current/future
+    today = date.today()
+    if month_end > today:
+        month_end = today
+
+    with Session(engine) as session:
+        # Get portfolio holdings at start of month
+        holdings = tracker.get_holdings(portfolio_id, month_start)
+
+        # Get universe tickers
+        universe_tickers = get_universe_tickers_for_date(source, month_start, session)
+
+        if not universe_tickers:
+            logger.warning(f"No universe tickers found for source '{source}' on {month_start}")
+            return {
+                "portfolio_holdings": [],
+                "universe_holdings": [],
+                "portfolio_total": 0.0,
+                "benchmark_total": 0.0,
+                "alpha": 0.0,
+            }
+
+        # Collect all tickers we need prices for
+        portfolio_tickers = [h.ticker for h in holdings] if holdings else []
+        all_tickers = list(set(portfolio_tickers + universe_tickers))
+
+        # Get price data for start and end of month
+        query = text("""
+            WITH month_prices AS (
+                SELECT
+                    ticker,
+                    date,
+                    COALESCE(adjusted_close, close) as price,
+                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date ASC) as rn_first,
+                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) as rn_last
+                FROM price_data
+                WHERE ticker = ANY(:tickers)
+                AND date >= :month_start
+                AND date <= :month_end
+            )
+            SELECT
+                ticker,
+                MAX(CASE WHEN rn_first = 1 THEN price END) as start_price,
+                MAX(CASE WHEN rn_last = 1 THEN price END) as end_price
+            FROM month_prices
+            GROUP BY ticker
+        """)
+
+        result = session.execute(
+            query,
+            {
+                "tickers": all_tickers,
+                "month_start": month_start,
+                "month_end": month_end,
+            }
+        )
+
+        # Build price lookup: ticker -> (start_price, end_price)
+        price_data = {}
+        for row in result.fetchall():
+            ticker, start_price, end_price = row
+            if start_price and end_price and start_price > 0:
+                price_data[ticker] = {
+                    "start_price": float(start_price),
+                    "end_price": float(end_price),
+                    "return": (float(end_price) / float(start_price)) - 1,
+                }
+
+        # Calculate portfolio holdings attribution
+        portfolio_holdings = []
+        portfolio_total = 0.0
+
+        if holdings:
+            # Normalize weights to sum to 1 (in case they don't)
+            total_weight = sum(float(h.weight) for h in holdings if h.weight)
+
+            for h in holdings:
+                if not h.weight:
+                    continue
+
+                weight = float(h.weight) / total_weight if total_weight > 0 else 0
+                ticker_data = price_data.get(h.ticker)
+
+                if ticker_data:
+                    ret = ticker_data["return"]
+                    contribution = weight * ret
+                    portfolio_total += contribution
+
+                    portfolio_holdings.append({
+                        "ticker": h.ticker,
+                        "weight": weight,
+                        "return": ret,
+                        "contribution": contribution,
+                    })
+                else:
+                    # No price data - still show holding with 0 return
+                    portfolio_holdings.append({
+                        "ticker": h.ticker,
+                        "weight": weight,
+                        "return": 0.0,
+                        "contribution": 0.0,
+                    })
+
+        # Calculate universe (EW benchmark) attribution
+        universe_holdings = []
+        benchmark_total = 0.0
+
+        # Count tickers with valid price data for equal weight calculation
+        valid_universe_tickers = [t for t in universe_tickers if t in price_data]
+        n_tickers = len(valid_universe_tickers)
+
+        if n_tickers > 0:
+            ew_weight = 1.0 / n_tickers
+
+            for ticker in universe_tickers:
+                ticker_data = price_data.get(ticker)
+
+                if ticker_data:
+                    ret = ticker_data["return"]
+                    contribution = ew_weight * ret
+                    benchmark_total += contribution
+
+                    universe_holdings.append({
+                        "ticker": ticker,
+                        "weight": ew_weight,
+                        "return": ret,
+                        "contribution": contribution,
+                    })
+                else:
+                    # No price data for this ticker
+                    universe_holdings.append({
+                        "ticker": ticker,
+                        "weight": 0.0,  # Excluded from benchmark
+                        "return": None,
+                        "contribution": 0.0,
+                    })
+
+        return {
+            "portfolio_holdings": portfolio_holdings,
+            "universe_holdings": universe_holdings,
+            "portfolio_total": portfolio_total,
+            "benchmark_total": benchmark_total,
+            "alpha": portfolio_total - benchmark_total,
+        }
+
+
+# Type hint for forward reference
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .tracker import PortfolioTracker

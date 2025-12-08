@@ -48,6 +48,7 @@ from .benchmark import (
     get_benchmark_metrics,
     get_benchmark_monthly_returns,
     compare_portfolio_to_benchmark,
+    calculate_stock_attribution,
 )
 
 __all__ = [
@@ -94,4 +95,5 @@ __all__ = [
     "get_benchmark_metrics",
     "get_benchmark_monthly_returns",
     "compare_portfolio_to_benchmark",
+    "calculate_stock_attribution",
 ]

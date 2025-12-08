@@ -390,12 +390,73 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
             )
 
 
+def _render_attribution_table(holdings: list, title: str):
+    """Render a styled attribution table for stock-level analysis."""
+    if not holdings:
+        st.info(f"No {title.lower()} data available")
+        return
+
+    df = pd.DataFrame(holdings)
+
+    # Sort by contribution (absolute value) descending
+    df = df.sort_values("contribution", key=abs, ascending=False)
+
+    # Add total row
+    total_row = pd.DataFrame([{
+        "ticker": "TOTAL",
+        "weight": df["weight"].sum(),
+        "return": None,
+        "contribution": df["contribution"].sum(),
+    }])
+    df = pd.concat([df, total_row], ignore_index=True)
+
+    # Format columns
+    df["weight"] = df["weight"].apply(lambda x: f"{x*100:.1f}%" if x else "0.0%")
+    df["return"] = df["return"].apply(
+        lambda x: f"{x*100:+.2f}%" if pd.notna(x) else "-"
+    )
+    df["contribution"] = df["contribution"].apply(
+        lambda x: f"{x*100:+.3f}%"
+    )
+
+    df.columns = ["Ticker", "Weight", "Return", "Contribution"]
+
+    # Color coding function
+    def color_values(val):
+        if val == "-" or val == "TOTAL":
+            return ""
+        try:
+            num = float(val.replace("%", "").replace("+", ""))
+            if num > 0:
+                return "color: #22c55e"
+            elif num < 0:
+                return "color: #ef4444"
+        except:
+            pass
+        return ""
+
+    styled = df.style.applymap(
+        color_values,
+        subset=["Return", "Contribution"]
+    ).set_properties(
+        **{"text-align": "right"},
+        subset=["Weight", "Return", "Contribution"]
+    )
+
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=min(400, 35 * len(df) + 38)
+    )
+
+
 def _render_benchmark_comparison_tab(
     tracker, portfolio_id, portfolio, variants, start_date, end_date
 ):
     """Render the Benchmark Comparison tab - compare portfolio to EW universe."""
     from ..tracking import Variants
-    from ..tracking.benchmark import compare_portfolio_to_benchmark
+    from ..tracking.benchmark import compare_portfolio_to_benchmark, calculate_stock_attribution
     from .styles import COLORS
     import plotly.graph_objects as go
     from datetime import date as date_type
@@ -673,6 +734,74 @@ def _render_benchmark_comparison_tab(
                 "Period",
                 f"{len(monthly_data)} months",
             )
+
+    # ===== Stock-Level Attribution Analysis =====
+    st.markdown("---")
+    st.markdown("### Stock-Level Attribution")
+    st.markdown(
+        "Analyze which stocks contributed most to portfolio and benchmark returns "
+        "for a specific month."
+    )
+
+    # Month selector from available months
+    if monthly_data:
+        available_months = sorted(
+            set(r["month"] for r in monthly_data),
+            reverse=True
+        )
+
+        selected_month = st.selectbox(
+            "Select month for attribution analysis",
+            options=available_months,
+            key="attribution_month_select"
+        )
+
+        if selected_month:
+            with st.spinner("Calculating stock attribution..."):
+                try:
+                    attribution = calculate_stock_attribution(
+                        portfolio_id=portfolio_id,
+                        source=source,
+                        month=selected_month,
+                        tracker=tracker,
+                    )
+                except Exception as e:
+                    st.error(f"Error calculating attribution: {str(e)}")
+                    attribution = None
+
+            if attribution:
+                # Display in two columns
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### Portfolio Holdings")
+                    _render_attribution_table(attribution["portfolio_holdings"], "Portfolio")
+
+                with col2:
+                    st.markdown("#### Universe (EW Benchmark)")
+                    _render_attribution_table(attribution["universe_holdings"], "Benchmark")
+
+                # Summary metrics
+                st.markdown("---")
+                mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+                mcol1.metric(
+                    "Portfolio Return",
+                    f"{attribution['portfolio_total']*100:+.2f}%"
+                )
+                mcol2.metric(
+                    "Benchmark Return",
+                    f"{attribution['benchmark_total']*100:+.2f}%"
+                )
+                mcol3.metric(
+                    "Alpha",
+                    f"{attribution['alpha']*100:+.2f}%"
+                )
+                mcol4.metric(
+                    "Holdings / Universe",
+                    f"{len(attribution['portfolio_holdings'])} / {len(attribution['universe_holdings'])}"
+                )
+    else:
+        st.info("No monthly data available for attribution analysis.")
 
 
 def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date):
