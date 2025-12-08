@@ -188,6 +188,410 @@ def calculate_ew_benchmark_returns(
         return result_df
 
 
+def calculate_ew_benchmark_returns_buyhold(
+    source: str,
+    start_date: date,
+    end_date: date,
+    use_adjusted_close: bool = True,
+) -> pd.DataFrame:
+    """
+    Calculate equal-weight BUY-AND-HOLD benchmark returns for a given source.
+
+    Unlike calculate_ew_benchmark_returns (daily rebalanced), this:
+    - Sets equal weights at start of each month
+    - Lets positions drift with prices (no daily rebalancing)
+    - Rebalances only at month boundaries when universe changes
+
+    This matches the real-world investment process where positions are
+    established at month-end and held until next rebalancing.
+
+    Args:
+        source: Data source (e.g., "Topweights", "TR20")
+        start_date: Start date
+        end_date: End date
+        use_adjusted_close: Whether to use adjusted close prices (default True)
+
+    Returns:
+        DataFrame with columns: trade_date, daily_return, nav, active_tickers
+    """
+    from datetime import timedelta
+
+    with Session(engine) as session:
+        # Get all ticker periods for this source
+        ticker_periods = session.exec(
+            select(TickerPeriod)
+            .where(TickerPeriod.source == source)
+            .where(TickerPeriod.start_date <= end_date)
+            .where(TickerPeriod.end_date >= start_date)
+        ).all()
+
+        if not ticker_periods:
+            logger.warning(f"No ticker periods found for source '{source}'")
+            return pd.DataFrame()
+
+        # Get all unique tickers
+        all_tickers = set(tp.ticker for tp in ticker_periods)
+
+        logger.info(f"Found {len(all_tickers)} unique tickers for source '{source}' (buy-and-hold)")
+
+        # Fetch all price data with lookback for first month
+        lookback_date = start_date - timedelta(days=10)
+
+        query = text("""
+            SELECT ticker, date as trade_date, close, adjusted_close
+            FROM price_data
+            WHERE ticker = ANY(:tickers)
+            AND date >= :lookback_date
+            AND date <= :end_date
+            ORDER BY date, ticker
+        """)
+
+        result = session.execute(query, {
+            "tickers": list(all_tickers),
+            "lookback_date": lookback_date,
+            "end_date": end_date,
+        })
+
+        rows = result.fetchall()
+        if not rows:
+            logger.warning("No price data found for buy-and-hold benchmark")
+            return pd.DataFrame()
+
+        # Convert to DataFrame and pivot
+        price_df = pd.DataFrame(rows, columns=["ticker", "trade_date", "close", "adjusted_close"])
+        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"])
+
+        if use_adjusted_close and price_df["adjusted_close"].notna().any():
+            price_df["price"] = price_df["adjusted_close"].fillna(price_df["close"])
+        else:
+            price_df["price"] = price_df["close"]
+
+        price_pivot = price_df.pivot(index="trade_date", columns="ticker", values="price")
+
+        # Build active mask (which tickers are in universe on each date)
+        active_mask = pd.DataFrame(False, index=price_pivot.index, columns=price_pivot.columns)
+        for tp in ticker_periods:
+            if tp.ticker in active_mask.columns:
+                mask = (active_mask.index >= pd.Timestamp(tp.start_date)) & \
+                       (active_mask.index <= pd.Timestamp(tp.end_date))
+                active_mask.loc[mask, tp.ticker] = True
+
+        # Filter to start_date onwards
+        price_pivot = price_pivot[price_pivot.index >= pd.Timestamp(start_date)]
+        active_mask = active_mask[active_mask.index >= pd.Timestamp(start_date)]
+
+        if price_pivot.empty:
+            return pd.DataFrame()
+
+        # Calculate buy-and-hold NAV
+        # For each month: set equal weights at month start, track position values
+        nav_series = []
+        cumulative_nav = 100.0
+
+        # Add month column for grouping
+        price_pivot_with_month = price_pivot.copy()
+        price_pivot_with_month["month"] = price_pivot_with_month.index.to_period("M")
+
+        for month, month_prices in price_pivot_with_month.groupby("month"):
+            month_prices = month_prices.drop(columns=["month"])
+            month_mask = active_mask.loc[month_prices.index]
+
+            # Get tickers active at start of month
+            first_day = month_prices.index[0]
+            active_tickers_series = month_mask.loc[first_day]
+            active_ticker_list = active_tickers_series[active_tickers_series].index.tolist()
+
+            if not active_ticker_list:
+                # No active tickers this month - carry forward NAV
+                for day in month_prices.index:
+                    nav_series.append({
+                        "trade_date": day,
+                        "nav": cumulative_nav,
+                        "active_tickers": 0,
+                    })
+                continue
+
+            # Get start prices for active tickers
+            start_prices = month_prices.loc[first_day, active_ticker_list]
+            valid_tickers = start_prices.dropna().index.tolist()
+
+            if not valid_tickers:
+                for day in month_prices.index:
+                    nav_series.append({
+                        "trade_date": day,
+                        "nav": cumulative_nav,
+                        "active_tickers": 0,
+                    })
+                continue
+
+            # Equal weight at start of month
+            n_tickers = len(valid_tickers)
+            weight_per_ticker = 1.0 / n_tickers
+            start_prices_valid = start_prices[valid_tickers]
+
+            # Calculate position values for each day
+            # Position value = (initial_weight) * (current_price / start_price)
+            # Sum of position values gives portfolio value relative to 1.0
+            month_start_nav = cumulative_nav
+
+            for day in month_prices.index:
+                day_prices = month_prices.loc[day, valid_tickers]
+
+                # Handle missing prices by forward-filling
+                day_prices = day_prices.fillna(method="ffill")
+
+                # Position value relative to start
+                # Each position: weight * (current_price / start_price)
+                price_ratios = day_prices / start_prices_valid
+                position_values = weight_per_ticker * price_ratios
+
+                # Daily NAV = start_nav * sum of position values
+                # (sum of position values = portfolio return factor)
+                daily_nav = month_start_nav * position_values.sum()
+
+                nav_series.append({
+                    "trade_date": day,
+                    "nav": daily_nav,
+                    "active_tickers": len(valid_tickers),
+                })
+
+            # Update cumulative NAV for next month (last day's NAV)
+            if nav_series:
+                cumulative_nav = nav_series[-1]["nav"]
+
+        # Build result DataFrame
+        if not nav_series:
+            return pd.DataFrame()
+
+        result_df = pd.DataFrame(nav_series)
+        result_df = result_df.set_index("trade_date")
+        result_df["daily_return"] = result_df["nav"].pct_change()
+
+        logger.info(
+            f"Calculated EW buy-and-hold benchmark: {len(result_df)} trading days, "
+            f"avg {result_df['active_tickers'].mean():.1f} active tickers/day"
+        )
+
+        return result_df
+
+
+def calculate_portfolio_monthly_returns_buyhold(
+    portfolio_id: int,
+    start_date: date,
+    end_date: date,
+    tracker: "PortfolioTracker",
+) -> dict[str, float]:
+    """
+    Calculate monthly returns for portfolio using buy-and-hold methodology.
+
+    For each month:
+    1. Get holdings at start of month
+    2. Calculate each ticker's return: (end_price / start_price) - 1
+    3. Monthly return = Σ(weight × ticker_return)
+
+    This is the same methodology used in calculate_stock_attribution(),
+    ensuring consistency between the monthly table and attribution analysis.
+
+    Args:
+        portfolio_id: Portfolio ID
+        start_date: Start date
+        end_date: End date
+        tracker: PortfolioTracker instance
+
+    Returns:
+        Dictionary mapping month (YYYY-MM) to return
+    """
+    from calendar import monthrange
+
+    monthly_returns = {}
+
+    # Generate list of months in range
+    current = date(start_date.year, start_date.month, 1)
+    while current <= end_date:
+        month_str = current.strftime("%Y-%m")
+        year, mon = current.year, current.month
+        _, last_day = monthrange(year, mon)
+        month_end = date(year, mon, last_day)
+
+        # Cap at end_date or today
+        today = date.today()
+        actual_end = min(month_end, end_date, today)
+
+        # Get holdings at start of month
+        holdings = tracker.get_holdings(portfolio_id, current)
+
+        if not holdings:
+            # Move to next month
+            if mon == 12:
+                current = date(year + 1, 1, 1)
+            else:
+                current = date(year, mon + 1, 1)
+            continue
+
+        # Get tickers and their weights
+        portfolio_tickers = [h.ticker for h in holdings if h.weight]
+        if not portfolio_tickers:
+            if mon == 12:
+                current = date(year + 1, 1, 1)
+            else:
+                current = date(year, mon + 1, 1)
+            continue
+
+        # Normalize weights
+        total_weight = sum(float(h.weight) for h in holdings if h.weight)
+        weights = {h.ticker: float(h.weight) / total_weight for h in holdings if h.weight}
+
+        # Get price data for start and end of month
+        with Session(engine) as session:
+            query = text("""
+                WITH month_prices AS (
+                    SELECT
+                        ticker,
+                        date,
+                        COALESCE(adjusted_close, close) as price,
+                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date ASC) as rn_first,
+                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) as rn_last
+                    FROM price_data
+                    WHERE ticker = ANY(:tickers)
+                    AND date >= :month_start
+                    AND date <= :month_end
+                )
+                SELECT
+                    ticker,
+                    MAX(CASE WHEN rn_first = 1 THEN price END) as start_price,
+                    MAX(CASE WHEN rn_last = 1 THEN price END) as end_price
+                FROM month_prices
+                GROUP BY ticker
+            """)
+
+            result = session.execute(query, {
+                "tickers": portfolio_tickers,
+                "month_start": current,
+                "month_end": actual_end,
+            })
+
+            # Calculate monthly return using buy-and-hold
+            monthly_return = 0.0
+            for row in result.fetchall():
+                ticker, start_price, end_price = row
+                if start_price and end_price and start_price > 0 and ticker in weights:
+                    ticker_return = (float(end_price) / float(start_price)) - 1
+                    monthly_return += weights[ticker] * ticker_return
+
+            monthly_returns[month_str] = monthly_return
+
+        # Move to next month
+        if mon == 12:
+            current = date(year + 1, 1, 1)
+        else:
+            current = date(year, mon + 1, 1)
+
+    return monthly_returns
+
+
+def calculate_benchmark_monthly_returns_buyhold(
+    source: str,
+    start_date: date,
+    end_date: date,
+    use_adjusted_close: bool = True,
+) -> dict[str, float]:
+    """
+    Calculate monthly returns for EW benchmark using buy-and-hold methodology.
+
+    For each month:
+    1. Get universe tickers at start of month
+    2. Set equal weights (1/N)
+    3. Monthly return = Σ(weight × ticker_return)
+
+    This matches calculate_stock_attribution() for the benchmark.
+
+    Args:
+        source: Data source
+        start_date: Start date
+        end_date: End date
+        use_adjusted_close: Whether to use adjusted close prices
+
+    Returns:
+        Dictionary mapping month (YYYY-MM) to return
+    """
+    from calendar import monthrange
+
+    monthly_returns = {}
+
+    with Session(engine) as session:
+        # Generate list of months in range
+        current = date(start_date.year, start_date.month, 1)
+        while current <= end_date:
+            month_str = current.strftime("%Y-%m")
+            year, mon = current.year, current.month
+            _, last_day = monthrange(year, mon)
+            month_end = date(year, mon, last_day)
+
+            # Cap at end_date or today
+            today = date.today()
+            actual_end = min(month_end, end_date, today)
+
+            # Get universe tickers at start of month
+            universe_tickers = get_universe_tickers_for_date(source, current, session)
+
+            if not universe_tickers:
+                if mon == 12:
+                    current = date(year + 1, 1, 1)
+                else:
+                    current = date(year, mon + 1, 1)
+                continue
+
+            # Get price data for start and end of month
+            query = text("""
+                WITH month_prices AS (
+                    SELECT
+                        ticker,
+                        date,
+                        COALESCE(adjusted_close, close) as price,
+                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date ASC) as rn_first,
+                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) as rn_last
+                    FROM price_data
+                    WHERE ticker = ANY(:tickers)
+                    AND date >= :month_start
+                    AND date <= :month_end
+                )
+                SELECT
+                    ticker,
+                    MAX(CASE WHEN rn_first = 1 THEN price END) as start_price,
+                    MAX(CASE WHEN rn_last = 1 THEN price END) as end_price
+                FROM month_prices
+                GROUP BY ticker
+            """)
+
+            result = session.execute(query, {
+                "tickers": universe_tickers,
+                "month_start": current,
+                "month_end": actual_end,
+            })
+
+            # Calculate returns for each ticker
+            ticker_returns = {}
+            for row in result.fetchall():
+                ticker, start_price, end_price = row
+                if start_price and end_price and start_price > 0:
+                    ticker_returns[ticker] = (float(end_price) / float(start_price)) - 1
+
+            # Equal weight calculation
+            if ticker_returns:
+                n_tickers = len(ticker_returns)
+                ew_weight = 1.0 / n_tickers
+                monthly_return = sum(ret * ew_weight for ret in ticker_returns.values())
+                monthly_returns[month_str] = monthly_return
+
+            # Move to next month
+            if mon == 12:
+                current = date(year + 1, 1, 1)
+            else:
+                current = date(year, mon + 1, 1)
+
+    return monthly_returns
+
+
 def get_benchmark_metrics(
     source: str,
     start_date: date,

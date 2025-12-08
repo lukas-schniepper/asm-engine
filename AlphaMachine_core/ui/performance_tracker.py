@@ -501,7 +501,12 @@ def _render_benchmark_comparison_tab(
 ):
     """Render the Benchmark Comparison tab - compare portfolio to EW universe."""
     from ..tracking import Variants
-    from ..tracking.benchmark import compare_portfolio_to_benchmark, calculate_stock_attribution
+    from ..tracking.benchmark import (
+        compare_portfolio_to_benchmark,
+        calculate_stock_attribution,
+        calculate_portfolio_monthly_returns_buyhold,
+        calculate_benchmark_monthly_returns_buyhold,
+    )
     from .styles import COLORS
     import plotly.graph_objects as go
     from datetime import date as date_type
@@ -677,9 +682,39 @@ def _render_benchmark_comparison_tab(
 
     # ===== Monthly Comparison Table =====
     st.markdown("---")
-    st.markdown("### Monthly Returns Comparison")
+    st.markdown("### Monthly Returns Comparison (Buy-and-Hold)")
+    st.caption(
+        "Returns calculated using buy-and-hold methodology: "
+        "weight × (month_end_price / month_start_price - 1). "
+        "This matches the attribution analysis below."
+    )
 
-    monthly_data = comparison["monthly_comparison"]
+    # Calculate monthly returns using buy-and-hold methodology
+    # This ensures consistency with the attribution analysis
+    with st.spinner("Calculating buy-and-hold monthly returns..."):
+        portfolio_monthly_bh = calculate_portfolio_monthly_returns_buyhold(
+            portfolio_id, start_date, end_date, tracker
+        )
+        benchmark_monthly_bh = calculate_benchmark_monthly_returns_buyhold(
+            source, start_date, end_date, use_adjusted_close=True
+        )
+
+    # Build monthly_data from buy-and-hold calculations
+    all_months = sorted(set(portfolio_monthly_bh.keys()) | set(benchmark_monthly_bh.keys()))
+    monthly_data = []
+    for month in all_months:
+        port_ret = portfolio_monthly_bh.get(month)
+        bench_ret = benchmark_monthly_bh.get(month)
+        diff = None
+        if port_ret is not None and bench_ret is not None:
+            diff = port_ret - bench_ret
+        monthly_data.append({
+            "month": month,
+            "portfolio_return": port_ret,
+            "benchmark_return": bench_ret,
+            "difference": diff,
+        })
+
     if not monthly_data:
         st.info("No monthly comparison data available.")
     else:
@@ -857,7 +892,7 @@ def _render_benchmark_comparison_tab(
                     f"{len(attribution['portfolio_holdings'])} / {len(attribution['universe_holdings'])}"
                 )
 
-                # Compare with monthly table values
+                # Validate alignment with monthly table values
                 month_record = next(
                     (r for r in monthly_data if r["month"] == selected_month),
                     None
@@ -866,31 +901,17 @@ def _render_benchmark_comparison_tab(
                     monthly_port = month_record.get("portfolio_return")
                     monthly_bench = month_record.get("benchmark_return")
 
-                    # Check if there's a meaningful difference
+                    # Check alignment (both now use buy-and-hold methodology)
                     port_diff = abs((monthly_port or 0) - attribution["portfolio_total"]) if monthly_port else 0
                     bench_diff = abs((monthly_bench or 0) - attribution["benchmark_total"]) if monthly_bench else 0
 
-                    if port_diff > 0.001 or bench_diff > 0.001:
-                        with st.expander("Why do these differ from the Monthly Returns table?"):
-                            st.markdown(
-                                "**Monthly Returns table** uses daily-compounded returns with constant weights "
-                                "(daily rebalanced)."
-                            )
-                            st.markdown(
-                                "**Attribution table** uses simple buy-and-hold: weight × (month_end_price / month_start_price - 1)"
-                            )
-                            st.markdown("---")
-                            rcol1, rcol2 = st.columns(2)
-                            with rcol1:
-                                st.markdown("**Portfolio**")
-                                st.write(f"Monthly table: {(monthly_port or 0)*100:+.2f}%")
-                                st.write(f"Attribution: {attribution['portfolio_total']*100:+.2f}%")
-                                st.write(f"Difference: {((monthly_port or 0) - attribution['portfolio_total'])*100:+.2f}%")
-                            with rcol2:
-                                st.markdown("**Benchmark**")
-                                st.write(f"Monthly table: {(monthly_bench or 0)*100:+.2f}%")
-                                st.write(f"Attribution: {attribution['benchmark_total']*100:+.2f}%")
-                                st.write(f"Difference: {((monthly_bench or 0) - attribution['benchmark_total'])*100:+.2f}%")
+                    # Small differences can occur due to rounding or missing prices
+                    if port_diff > 0.005 or bench_diff > 0.005:
+                        st.warning(
+                            f"Calculation mismatch detected: Portfolio diff={port_diff*100:.2f}%, "
+                            f"Benchmark diff={bench_diff*100:.2f}%. "
+                            "This may indicate missing price data or calculation issues."
+                        )
     else:
         st.info("No monthly data available for attribution analysis.")
 

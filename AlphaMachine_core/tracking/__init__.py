@@ -45,10 +45,13 @@ from .registration import (
 )
 from .benchmark import (
     calculate_ew_benchmark_returns,
+    calculate_ew_benchmark_returns_buyhold,
     get_benchmark_metrics,
     get_benchmark_monthly_returns,
     compare_portfolio_to_benchmark,
     calculate_stock_attribution,
+    calculate_portfolio_monthly_returns_buyhold,
+    calculate_benchmark_monthly_returns_buyhold,
 )
 
 __all__ = [
@@ -92,8 +95,11 @@ __all__ = [
     "check_portfolio_name_exists",
     # Benchmark
     "calculate_ew_benchmark_returns",
+    "calculate_ew_benchmark_returns_buyhold",
     "get_benchmark_metrics",
     "get_benchmark_monthly_returns",
     "compare_portfolio_to_benchmark",
     "calculate_stock_attribution",
+    "calculate_portfolio_monthly_returns_buyhold",
+    "calculate_benchmark_monthly_returns_buyhold",
 ]
