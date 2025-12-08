@@ -440,7 +440,7 @@ def _render_attribution_table(
 
     # Clean up helper columns before concat
     if "in_portfolio" in df.columns:
-        df = df.drop(columns=["in_portfolio", "portfolio_order"])
+        df = df.drop(columns=["in_portfolio"])
 
     df = pd.concat([df, total_row], ignore_index=True)
 

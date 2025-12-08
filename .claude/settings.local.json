@@ -16,7 +16,9 @@
       "Bash(gh run cancel:*)",
       "Bash(git reset:*)",
       "Bash(gh workflow:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git rm:*)",
+      "Bash(set:*)"
     ],
     "deny": [],
     "ask": []
