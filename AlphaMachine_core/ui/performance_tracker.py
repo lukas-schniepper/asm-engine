@@ -390,16 +390,55 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
             )
 
 
-def _render_attribution_table(holdings: list, title: str):
-    """Render a styled attribution table for stock-level analysis."""
+def _render_attribution_table(
+    holdings: list,
+    title: str,
+    portfolio_tickers: list = None,
+    is_universe_table: bool = False,
+):
+    """
+    Render a styled attribution table for stock-level analysis.
+
+    Args:
+        holdings: List of holding dicts with ticker, weight, return, contribution
+        title: Table title (for info messages)
+        portfolio_tickers: List of tickers in the portfolio (for highlighting in universe table)
+        is_universe_table: If True, sort portfolio tickers first and highlight non-portfolio tickers
+    """
     if not holdings:
         st.info(f"No {title.lower()} data available")
         return
 
     df = pd.DataFrame(holdings)
 
-    # Sort by contribution (absolute value) descending
-    df = df.sort_values("contribution", key=abs, ascending=False)
+    if is_universe_table and portfolio_tickers:
+        # For universe table: sort portfolio tickers first (in order), then others by contribution
+        portfolio_set = set(portfolio_tickers)
+        df["in_portfolio"] = df["ticker"].isin(portfolio_set)
+        df["portfolio_order"] = df["ticker"].apply(
+            lambda t: portfolio_tickers.index(t) if t in portfolio_set else 9999
+        )
+
+        # Sort: portfolio tickers first (in portfolio order), then others by |contribution|
+        df = df.sort_values(
+            ["in_portfolio", "portfolio_order", "contribution"],
+            ascending=[False, True, False],
+            key=lambda x: abs(x) if x.name == "contribution" else x
+        )
+        # Re-sort non-portfolio tickers by |contribution|
+        in_port = df[df["in_portfolio"]].copy()
+        not_in_port = df[~df["in_portfolio"]].copy()
+        not_in_port = not_in_port.sort_values("contribution", key=abs, ascending=False)
+        df = pd.concat([in_port, not_in_port], ignore_index=True)
+    else:
+        # Sort by contribution (absolute value) descending
+        df = df.sort_values("contribution", key=abs, ascending=False)
+
+    # Store which tickers are not in portfolio (for highlighting)
+    if is_universe_table and portfolio_tickers:
+        not_in_portfolio_tickers = set(df["ticker"]) - set(portfolio_tickers)
+    else:
+        not_in_portfolio_tickers = set()
 
     # Add total row
     total_row = pd.DataFrame([{
@@ -408,6 +447,11 @@ def _render_attribution_table(holdings: list, title: str):
         "return": None,
         "contribution": df["contribution"].sum(),
     }])
+
+    # Clean up helper columns before concat
+    if "in_portfolio" in df.columns:
+        df = df.drop(columns=["in_portfolio", "portfolio_order"])
+
     df = pd.concat([df, total_row], ignore_index=True)
 
     # Format columns
@@ -421,7 +465,7 @@ def _render_attribution_table(holdings: list, title: str):
 
     df.columns = ["Ticker", "Weight", "Return", "Contribution"]
 
-    # Color coding function
+    # Color coding function for return/contribution values
     def color_values(val):
         if val == "-" or val == "TOTAL":
             return ""
@@ -435,6 +479,13 @@ def _render_attribution_table(holdings: list, title: str):
             pass
         return ""
 
+    # Row-level background styling for non-portfolio tickers
+    def highlight_non_portfolio(row):
+        ticker = row["Ticker"]
+        if ticker in not_in_portfolio_tickers:
+            return ["background-color: #e0f2fe"] * len(row)  # Light blue
+        return [""] * len(row)
+
     styled = df.style.applymap(
         color_values,
         subset=["Return", "Contribution"]
@@ -442,6 +493,10 @@ def _render_attribution_table(holdings: list, title: str):
         **{"text-align": "right"},
         subset=["Weight", "Return", "Contribution"]
     )
+
+    # Apply row highlighting for universe table
+    if is_universe_table and not_in_portfolio_tickers:
+        styled = styled.apply(highlight_non_portfolio, axis=1)
 
     st.dataframe(
         styled,
@@ -770,16 +825,26 @@ def _render_benchmark_comparison_tab(
                     attribution = None
 
             if attribution:
+                # Get portfolio ticker list for highlighting in universe table
+                portfolio_tickers = [h["ticker"] for h in attribution["portfolio_holdings"]]
+                n_portfolio = len(attribution["portfolio_holdings"])
+                n_universe = len(attribution["universe_holdings"])
+
                 # Display in two columns
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.markdown("#### Portfolio Holdings")
+                    st.markdown(f"#### Portfolio Holdings ({n_portfolio} Tickers)")
                     _render_attribution_table(attribution["portfolio_holdings"], "Portfolio")
 
                 with col2:
-                    st.markdown("#### Universe (EW Benchmark)")
-                    _render_attribution_table(attribution["universe_holdings"], "Benchmark")
+                    st.markdown(f"#### Universe (EW Benchmark, {n_universe} Tickers)")
+                    _render_attribution_table(
+                        attribution["universe_holdings"],
+                        "Benchmark",
+                        portfolio_tickers=portfolio_tickers,
+                        is_universe_table=True,
+                    )
 
                 # Summary metrics
                 st.markdown("---")
