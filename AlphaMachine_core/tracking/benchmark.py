@@ -364,6 +364,10 @@ def calculate_stock_attribution(
     Shows weight, return, and contribution (weight × return) for each stock
     in both the portfolio and the benchmark universe.
 
+    Uses simple buy-and-hold methodology:
+    - Portfolio: weight at month start × (end_price / start_price - 1)
+    - Benchmark: 1/N equal weight × (end_price / start_price - 1)
+
     Args:
         portfolio_id: Portfolio ID to analyze
         source: Data source for benchmark universe (e.g., "Topweights")

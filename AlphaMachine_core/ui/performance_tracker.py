@@ -782,10 +782,11 @@ def _render_benchmark_comparison_tab(
 
     # ===== Stock-Level Attribution Analysis =====
     st.markdown("---")
-    st.markdown("### Stock-Level Attribution")
+    st.markdown("### Stock-Level Attribution (Buy-and-Hold)")
     st.markdown(
         "Analyze which stocks contributed most to portfolio and benchmark returns "
-        "for a specific month."
+        "for a specific month. Uses simple buy-and-hold methodology: "
+        "weight × (end_price / start_price - 1)."
     )
 
     # Month selector from available months
@@ -855,6 +856,41 @@ def _render_benchmark_comparison_tab(
                     "Holdings / Universe",
                     f"{len(attribution['portfolio_holdings'])} / {len(attribution['universe_holdings'])}"
                 )
+
+                # Compare with monthly table values
+                month_record = next(
+                    (r for r in monthly_data if r["month"] == selected_month),
+                    None
+                )
+                if month_record:
+                    monthly_port = month_record.get("portfolio_return")
+                    monthly_bench = month_record.get("benchmark_return")
+
+                    # Check if there's a meaningful difference
+                    port_diff = abs((monthly_port or 0) - attribution["portfolio_total"]) if monthly_port else 0
+                    bench_diff = abs((monthly_bench or 0) - attribution["benchmark_total"]) if monthly_bench else 0
+
+                    if port_diff > 0.001 or bench_diff > 0.001:
+                        with st.expander("Why do these differ from the Monthly Returns table?"):
+                            st.markdown(
+                                "**Monthly Returns table** uses daily-compounded returns with constant weights "
+                                "(daily rebalanced)."
+                            )
+                            st.markdown(
+                                "**Attribution table** uses simple buy-and-hold: weight × (month_end_price / month_start_price - 1)"
+                            )
+                            st.markdown("---")
+                            rcol1, rcol2 = st.columns(2)
+                            with rcol1:
+                                st.markdown("**Portfolio**")
+                                st.write(f"Monthly table: {(monthly_port or 0)*100:+.2f}%")
+                                st.write(f"Attribution: {attribution['portfolio_total']*100:+.2f}%")
+                                st.write(f"Difference: {((monthly_port or 0) - attribution['portfolio_total'])*100:+.2f}%")
+                            with rcol2:
+                                st.markdown("**Benchmark**")
+                                st.write(f"Monthly table: {(monthly_bench or 0)*100:+.2f}%")
+                                st.write(f"Attribution: {attribution['benchmark_total']*100:+.2f}%")
+                                st.write(f"Difference: {((monthly_bench or 0) - attribution['benchmark_total'])*100:+.2f}%")
     else:
         st.info("No monthly data available for attribution analysis.")
 
