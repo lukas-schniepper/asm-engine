@@ -522,16 +522,16 @@ class PortfolioTracker:
                 )
 
                 if prev_overlay_nav_df.empty:
-                    # First day - start at initial NAV
-                    prev_overlay_nav = initial_nav
+                    # First day - overlay NAV equals raw NAV (same starting point)
+                    # This ensures all variants start at the same value for fair comparison
+                    adjusted_nav = raw_nav
+                    overlay_daily_return = 0.0
                 else:
                     prev_overlay_nav = prev_overlay_nav_df["nav"].iloc[-1]
-
-                # Calculate overlay return: raw daily return scaled by allocation
-                overlay_daily_return = daily_return * allocation
-
-                # Calculate new overlay NAV: previous overlay NAV * (1 + overlay return)
-                adjusted_nav = prev_overlay_nav * (1 + overlay_daily_return)
+                    # Calculate overlay return: raw daily return scaled by allocation
+                    overlay_daily_return = daily_return * allocation
+                    # Calculate new overlay NAV: previous overlay NAV * (1 + overlay return)
+                    adjusted_nav = prev_overlay_nav * (1 + overlay_daily_return)
 
                 overlay_cumulative = (adjusted_nav / initial_nav) - 1 if initial_nav else 0.0
                 self.record_nav(
