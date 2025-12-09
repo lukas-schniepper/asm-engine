@@ -35,7 +35,7 @@ def get_chart_layout(
             "x": 0.02,
         } if title else None,
         "height": height,
-        "margin": {"l": 60, "r": 40, "t": 50 if title else 20, "b": 50},
+        "margin": {"l": 60, "r": 40, "t": 80 if title else 40, "b": 50},
         "paper_bgcolor": COLORS["bg_card"],
         "plot_bgcolor": COLORS["bg_card"],
         "font": {"family": "Inter, sans-serif", "color": COLORS["text_primary"]},

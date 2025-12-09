@@ -38,6 +38,74 @@ from .metrics import (
 logger = logging.getLogger(__name__)
 
 
+def calculate_shares_from_weights(
+    holdings_with_weights: list[dict],
+    nav_value: Decimal,
+    prices: dict[str, Decimal],
+) -> list[dict]:
+    """
+    Convert weight-based holdings to shares-based holdings.
+
+    At rebalance time, calculates how many shares each position should have
+    based on its target weight and the current NAV/prices.
+
+    Formula: shares = (weight × NAV) / price
+
+    This is the industry-standard approach for buy-and-hold portfolios:
+    - Set share counts at rebalance
+    - Let position values drift with prices between rebalances
+
+    Args:
+        holdings_with_weights: List of dicts with 'ticker', 'weight'
+            (weights should sum to 1.0)
+        nav_value: Current portfolio NAV (e.g., 100.0 at inception)
+        prices: Current prices for each ticker
+
+    Returns:
+        List of holding dicts with 'ticker', 'weight', 'shares', 'entry_price'
+
+    Example:
+        >>> holdings = [{"ticker": "AAPL", "weight": 0.5}, {"ticker": "MSFT", "weight": 0.5}]
+        >>> prices = {"AAPL": Decimal("150.00"), "MSFT": Decimal("300.00")}
+        >>> result = calculate_shares_from_weights(holdings, Decimal("100"), prices)
+        >>> # AAPL: shares = (0.5 × 100) / 150 = 0.3333
+        >>> # MSFT: shares = (0.5 × 100) / 300 = 0.1667
+    """
+    result = []
+
+    for h in holdings_with_weights:
+        ticker = h["ticker"]
+        weight = Decimal(str(h.get("weight", 0)))
+        price = prices.get(ticker)
+
+        if price and price > 0 and weight > 0:
+            # Position value = weight × NAV
+            # Shares = position_value / price
+            position_value = weight * nav_value
+            shares = position_value / price
+
+            result.append({
+                "ticker": ticker,
+                "weight": weight,
+                "shares": shares,
+                "entry_price": price,
+            })
+        else:
+            # No valid price - keep weight only (backward compatible)
+            logger.warning(
+                f"Cannot calculate shares for {ticker}: "
+                f"price={price}, weight={weight}"
+            )
+            result.append({
+                "ticker": ticker,
+                "weight": weight,
+                "shares": None,
+                "entry_price": price if price else None,
+            })
+
+    return result
+
+
 class PortfolioTracker:
     """
     Main portfolio tracking engine.

@@ -99,6 +99,81 @@ def get_trading_days(start_date: date, end_date: date) -> list[date]:
     return [d.date() for d in trading_days]
 
 
+def _ensure_holdings_have_shares(
+    tracker,
+    holdings,
+    previous_nav: float,
+    price_data: dict[str, float],
+    trade_date: date,
+) -> bool:
+    """
+    Ensure all holdings have shares populated.
+
+    If any holdings are missing shares (from legacy data or new rebalance),
+    calculate them using previous NAV and current prices, then update in DB.
+
+    This enables proper buy-and-hold NAV calculation going forward.
+
+    Returns:
+        True if shares were calculated/updated, False if already populated
+    """
+    from decimal import Decimal
+    from AlphaMachine_core.tracking import calculate_shares_from_weights
+
+    # Check if any holdings are missing shares
+    holdings_missing_shares = [h for h in holdings if h.shares is None]
+
+    if not holdings_missing_shares:
+        return False  # All holdings have shares
+
+    logger.info(
+        f"Found {len(holdings_missing_shares)} holdings without shares, "
+        f"calculating from weights using NAV={previous_nav:.2f}"
+    )
+
+    # Build weight-based holdings list
+    holdings_with_weights = [
+        {"ticker": h.ticker, "weight": float(h.weight) if h.weight else 0}
+        for h in holdings_missing_shares
+    ]
+
+    # Convert prices to Decimal
+    prices_decimal = {
+        ticker: Decimal(str(price))
+        for ticker, price in price_data.items()
+        if price is not None
+    }
+
+    # Calculate shares
+    holdings_with_shares = calculate_shares_from_weights(
+        holdings_with_weights,
+        Decimal(str(previous_nav)),
+        prices_decimal,
+    )
+
+    # Update holdings in database with calculated shares
+    from sqlmodel import Session
+    from AlphaMachine_core.db import engine
+    from AlphaMachine_core.tracking.models import PortfolioHolding
+
+    with Session(engine) as session:
+        for h_orig, h_new in zip(holdings_missing_shares, holdings_with_shares):
+            if h_new.get("shares") is not None:
+                # Get the holding from DB and update
+                db_holding = session.get(PortfolioHolding, h_orig.id)
+                if db_holding:
+                    db_holding.shares = h_new["shares"]
+                    db_holding.entry_price = h_new.get("entry_price")
+                    logger.debug(
+                        f"Updated {h_orig.ticker}: shares={h_new['shares']:.6f}, "
+                        f"entry_price={h_new.get('entry_price')}"
+                    )
+        session.commit()
+
+    logger.info(f"Populated shares for {len(holdings_missing_shares)} holdings")
+    return True
+
+
 def update_portfolio_nav(
     tracker,
     portfolio,
@@ -145,6 +220,15 @@ def update_portfolio_nav(
         else:
             previous_raw_nav = prev_nav_df["nav"].iloc[-1]
             initial_nav = prev_nav_df["nav"].iloc[0]
+
+        # Ensure holdings have shares (for proper buy-and-hold NAV calculation)
+        shares_updated = _ensure_holdings_have_shares(
+            tracker, holdings, previous_raw_nav, price_data, trade_date
+        )
+
+        # If shares were just populated, reload holdings to get updated data
+        if shares_updated:
+            holdings = tracker.get_holdings(portfolio.id, trade_date)
 
         # Calculate raw NAV using current and previous prices
         raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)

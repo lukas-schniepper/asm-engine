@@ -6,11 +6,50 @@ Provides functions to register backtested portfolios for tracking.
 
 import logging
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _get_prices_for_tickers(tickers: list[str], trade_date: date) -> dict[str, Decimal]:
+    """
+    Get prices for tickers as of a specific date.
+
+    Uses database price_data table. Falls back to previous trading days
+    if no price for exact date.
+
+    Returns:
+        Dict mapping ticker to Decimal price
+    """
+    from sqlmodel import Session, select
+    from ..db import engine
+    from ..models import PriceData
+
+    prices = {}
+
+    with Session(engine) as session:
+        for ticker in tickers:
+            # Get most recent price on or before trade_date
+            stmt = (
+                select(PriceData)
+                .where(PriceData.ticker == ticker)
+                .where(PriceData.trade_date <= trade_date)
+                .order_by(PriceData.trade_date.desc())
+                .limit(1)
+            )
+            result = session.exec(stmt).first()
+
+            if result:
+                # Use adjusted_close if available, else close
+                price = result.adjusted_close if result.adjusted_close else result.close
+                prices[ticker] = Decimal(str(price))
+            else:
+                logger.warning(f"No price found for {ticker} on or before {trade_date}")
+
+    return prices
 
 
 def register_portfolio_from_backtest(
@@ -36,7 +75,7 @@ def register_portfolio_from_backtest(
         Dict with registration result including portfolio_id
     """
     try:
-        from .tracker import get_tracker
+        from .tracker import get_tracker, calculate_shares_from_weights
         from .models import Variants
 
         tracker = get_tracker()
@@ -61,19 +100,45 @@ def register_portfolio_from_backtest(
             description=description,
         )
 
-        # Record current holdings
+        # Record current holdings with shares (for proper buy-and-hold tracking)
+        holdings_list = []
         if not holdings_df.empty:
-            holdings_list = []
+            # Build weight-only holdings list first
+            holdings_with_weights = []
             for _, row in holdings_df.iterrows():
                 holding = {
                     "ticker": row.get("ticker") or row.get("Ticker") or row.name,
                     "weight": row.get("weight") or row.get("Weight") or row.get("Target Weight", 0),
                 }
-                holdings_list.append(holding)
+                holdings_with_weights.append(holding)
+
+            # Get current NAV (last value from backtest) and prices
+            current_nav = Decimal(str(nav_history.iloc[-1])) if not nav_history.empty else Decimal("100")
+            effective_date = date.today()
+
+            # Get prices for holdings
+            tickers = [h["ticker"] for h in holdings_with_weights]
+            prices = _get_prices_for_tickers(tickers, effective_date)
+
+            if prices:
+                # Calculate shares from weights using current NAV and prices
+                holdings_list = calculate_shares_from_weights(
+                    holdings_with_weights, current_nav, prices
+                )
+                logger.info(
+                    f"Calculated shares for {len(holdings_list)} holdings "
+                    f"with NAV={current_nav:.2f}"
+                )
+            else:
+                # Fallback: record weights only (backward compatible)
+                holdings_list = holdings_with_weights
+                logger.warning(
+                    "No prices available - recording weights only (shares will be None)"
+                )
 
             tracker.record_holdings(
                 portfolio_id=portfolio.id,
-                effective_date=date.today(),
+                effective_date=effective_date,
                 holdings=holdings_list,
             )
 

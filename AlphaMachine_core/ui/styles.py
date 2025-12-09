@@ -53,7 +53,7 @@ COLORS = {
 VARIANT_COLORS = {
     "raw": "#2563eb",
     "conservative": "#10b981",
-    "trend_regime_v2": "#8b5cf6",
+    "trend_regime_v2": "#dc2626",  # Red for better visibility
     "spy": "#f59e0b",
 }
 

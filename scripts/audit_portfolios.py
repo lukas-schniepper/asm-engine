@@ -1,361 +1,191 @@
 #!/usr/bin/env python3
-"""
-Portfolio Data Integrity Audit Script.
-
-Checks all portfolios for:
-1. Duplicate holdings
-2. Weight consistency (should sum to 100%)
-3. Zero-return anomalies
-4. NAV calculation accuracy
-"""
+"""Detailed Portfolio Audit Script."""
 
 import os
 import sys
 from pathlib import Path
-from datetime import date, timedelta
-from decimal import Decimal
-from collections import Counter
+from datetime import date
 
-# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Load DATABASE_URL
-import toml
-from dotenv import load_dotenv
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
+def _load_secrets():
     secrets_path = project_root / ".streamlit" / "secrets.toml"
     if secrets_path.exists():
-        secrets = toml.load(secrets_path)
-        DATABASE_URL = secrets.get("DATABASE_URL")
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        with open(secrets_path, "rb") as f:
+            secrets = tomllib.load(f)
+        for key, value in secrets.items():
+            if key not in os.environ and isinstance(value, str):
+                os.environ[key] = value
 
-if not DATABASE_URL:
-    print("ERROR: DATABASE_URL not found")
-    sys.exit(1)
+_load_secrets()
 
-os.environ["DATABASE_URL"] = DATABASE_URL
-
-from sqlmodel import Session, select, func
-from sqlalchemy import create_engine
-
-engine = create_engine(DATABASE_URL, echo=False)
-
+from sqlmodel import Session, select
+from AlphaMachine_core.db import engine
 from AlphaMachine_core.tracking.models import (
-    PortfolioDefinition,
-    PortfolioHolding,
-    PortfolioDailyNAV,
-    Variants,
+    PortfolioDefinition, PortfolioDailyNAV, PortfolioHolding, PortfolioMetric
 )
-from AlphaMachine_core.models import PriceData
 
+def check_metrics_sanity(m):
+    """Check a PortfolioMetric object for sanity."""
+    issues = []
+    tr = float(m.total_return) if m.total_return is not None else None
+    if tr is not None and abs(tr) > 10:
+        issues.append(f"Total return {tr*100:.1f}% seems extreme")
+    cagr = float(m.cagr) if m.cagr is not None else None
+    if cagr is not None and abs(cagr) > 5:
+        issues.append(f"CAGR {cagr*100:.1f}% seems extreme")
+    sharpe = float(m.sharpe_ratio) if m.sharpe_ratio is not None else None
+    if sharpe is not None and abs(sharpe) > 10:
+        issues.append(f"Sharpe {sharpe:.2f} seems extreme")
+    vol = float(m.volatility) if m.volatility is not None else None
+    if vol is not None and vol > 2:
+        issues.append(f"Volatility {vol*100:.1f}% seems extreme")
+    mdd = float(m.max_drawdown) if m.max_drawdown is not None else None
+    if mdd is not None and mdd < -1:
+        issues.append(f"Max drawdown {mdd*100:.1f}% is impossible")
+    return issues
 
-def audit_holdings():
-    """Audit all portfolio holdings for duplicates and weight issues."""
-    print("=" * 80)
-    print("PHASE 1: HOLDINGS AUDIT")
-    print("=" * 80)
+def audit_portfolio(session, p):
+    issues = []
+    print(f"\n{'='*80}")
+    print(f"PORTFOLIO: {p.name} (id={p.id})")
+    print(f"{'='*80}")
+    print(f"Start Date: {p.start_date} | Source: {p.source}")
 
-    portfolios_with_issues = []
+    navs_raw = session.exec(
+        select(PortfolioDailyNAV).where(PortfolioDailyNAV.portfolio_id == p.id)
+        .where(PortfolioDailyNAV.variant == "raw")
+        .order_by(PortfolioDailyNAV.trade_date)
+    ).all()
 
-    with Session(engine) as session:
-        portfolios = session.exec(
-            select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
+    if not navs_raw:
+        print("[!!] NO NAV DATA")
+        return ["No NAV data"]
+
+    print(f"\n--- NAV Data (raw) ---")
+    print(f"Records: {len(navs_raw)} | Range: {navs_raw[0].trade_date} to {navs_raw[-1].trade_date}")
+    print(f"First NAV: {navs_raw[0].nav:.4f} | Last NAV: {navs_raw[-1].nav:.4f}")
+
+    first_nav = navs_raw[0].nav
+    if first_nav < 10 or first_nav > 1000:
+        msg = f"First NAV {first_nav:.2f} unusual (expected ~100)"
+        print(f"[!!] {msg}")
+        issues.append(msg)
+
+    actual_return = (navs_raw[-1].nav / navs_raw[0].nav - 1)
+    stored_cum_return = navs_raw[-1].cumulative_return
+    print(f"Calculated Return: {actual_return*100:.2f}% | Stored: {stored_cum_return*100:.2f}%")
+
+    if abs(actual_return - stored_cum_return) > 0.01:
+        msg = f"Return mismatch: calc={actual_return*100:.2f}% vs stored={stored_cum_return*100:.2f}%"
+        print(f"[!!] {msg}")
+        issues.append(msg)
+
+    holdings = session.exec(select(PortfolioHolding).where(PortfolioHolding.portfolio_id == p.id)).all()
+    holding_dates = sorted(set(h.effective_date for h in holdings))
+    nav_dates = [n.trade_date for n in navs_raw]
+
+    print(f"\n--- Holdings ---")
+    print(f"Records: {len(holdings)} | Dates: {holding_dates}")
+    with_shares = len([h for h in holdings if h.shares])
+    without_shares = len([h for h in holdings if not h.shares])
+    print(f"With shares: {with_shares} | Without: {without_shares}")
+
+    if without_shares:
+        msg = f"{without_shares} holdings missing shares"
+        print(f"[!!] {msg}")
+        issues.append(msg)
+
+    if holding_dates and nav_dates:
+        first_holding = min(holding_dates)
+        first_nav_date = min(nav_dates)
+        if first_holding > first_nav_date:
+            gap = (first_holding - first_nav_date).days
+            msg = f"Holdings start {gap}d after NAV"
+            print(f"[!!] {msg}")
+            issues.append(msg)
+
+    metrics = session.exec(select(PortfolioMetric).where(PortfolioMetric.portfolio_id == p.id)).all()
+    print(f"\n--- Metrics ---")
+
+    if metrics:
+        # Group by variant and period_type
+        by_variant = {}
+        for m in metrics:
+            key = f"{m.variant}_{m.period_type}"
+            by_variant[key] = m
+
+        for key, m in sorted(by_variant.items()):
+            print(f"\n{m.variant.upper()} ({m.period_type}): {m.period_start} to {m.period_end}")
+
+            def fmt(val, pct=False):
+                if val is None:
+                    return "N/A"
+                v = float(val)
+                return f"{v*100:.2f}%" if pct else f"{v:.2f}"
+
+            print(f"  Total Return: {fmt(m.total_return, True)}")
+            print(f"  CAGR: {fmt(m.cagr, True)}")
+            print(f"  Volatility: {fmt(m.volatility, True)}")
+            print(f"  Max Drawdown: {fmt(m.max_drawdown, True)}")
+            print(f"  Sharpe: {fmt(m.sharpe_ratio)}")
+            print(f"  Sortino: {fmt(m.sortino_ratio)}")
+            print(f"  Calmar: {fmt(m.calmar_ratio)}")
+            print(f"  Win Rate: {fmt(m.win_rate, True)}")
+
+            for issue in check_metrics_sanity(m):
+                print(f"  [!!] {issue}")
+                issues.append(f"{m.variant}_{m.period_type}: {issue}")
+    else:
+        print("No metrics stored")
+
+    print(f"\n--- Variants ---")
+    variants = session.exec(
+        select(PortfolioDailyNAV.variant).where(PortfolioDailyNAV.portfolio_id == p.id).distinct()
+    ).all()
+    for v in variants:
+        vnavs = session.exec(
+            select(PortfolioDailyNAV).where(PortfolioDailyNAV.portfolio_id == p.id)
+            .where(PortfolioDailyNAV.variant == v).order_by(PortfolioDailyNAV.trade_date)
         ).all()
+        if vnavs:
+            ret = (vnavs[-1].nav / vnavs[0].nav - 1) * 100 if vnavs[0].nav > 0 else 0
+            print(f"{v}: {len(vnavs)} recs, {vnavs[0].nav:.2f} -> {vnavs[-1].nav:.2f} ({ret:+.2f}%)")
 
-        for p in sorted(portfolios, key=lambda x: x.name):
-            holdings = session.exec(
-                select(PortfolioHolding).where(PortfolioHolding.portfolio_id == p.id)
-            ).all()
-
-            if not holdings:
-                print(f"[SKIP] {p.name}: No holdings")
-                continue
-
-            tickers = [h.ticker for h in holdings]
-            unique_tickers = set(tickers)
-            total_weight = sum(float(h.weight or 0) for h in holdings)
-
-            has_duplicates = len(holdings) != len(unique_tickers)
-            weight_issue = abs(total_weight - 1.0) > 0.01  # More than 1% off
-
-            status = "OK"
-            issues = []
-
-            if has_duplicates:
-                dup_count = len(holdings) - len(unique_tickers)
-                issues.append(f"{dup_count} duplicates")
-                status = "ERROR"
-
-            if weight_issue:
-                issues.append(f"weight={total_weight:.2%}")
-                status = "ERROR"
-
-            if status == "ERROR":
-                portfolios_with_issues.append({
-                    "portfolio": p,
-                    "issues": issues,
-                    "holdings": holdings,
-                })
-                print(f"[{status}] {p.name}: {len(holdings)} holdings, {len(unique_tickers)} unique - {' | '.join(issues)}")
-            else:
-                print(f"[OK]   {p.name}: {len(holdings)} holdings, weight={total_weight:.2%}")
-
-    return portfolios_with_issues
-
-
-def audit_nav_returns():
-    """Audit NAV data for zero-return anomalies."""
-    print()
-    print("=" * 80)
-    print("PHASE 2: NAV RETURNS AUDIT")
-    print("=" * 80)
-
-    anomalies = []
-
-    with Session(engine) as session:
-        portfolios = session.exec(
-            select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
-        ).all()
-
-        for p in sorted(portfolios, key=lambda x: x.name):
-            # Get RAW NAV data
-            nav_records = session.exec(
-                select(PortfolioDailyNAV)
-                .where(PortfolioDailyNAV.portfolio_id == p.id)
-                .where(PortfolioDailyNAV.variant == Variants.RAW)
-                .order_by(PortfolioDailyNAV.trade_date)
-            ).all()
-
-            if len(nav_records) < 2:
-                continue
-
-            # Check for suspicious zero returns
-            zero_return_count = 0
-            suspicious_zeros = []
-
-            for i, nav in enumerate(nav_records[1:], 1):  # Skip first day
-                prev_nav = nav_records[i-1]
-
-                # Check if daily return is exactly 0 but NAV should have changed
-                if nav.daily_return is not None and float(nav.daily_return) == 0:
-                    # Check if this is a weekday (not first day of portfolio)
-                    if nav.trade_date > p.start_date:
-                        zero_return_count += 1
-
-                        # Is NAV identical to previous? That's suspicious
-                        if float(nav.nav) == float(prev_nav.nav):
-                            suspicious_zeros.append(nav.trade_date)
-
-            if suspicious_zeros:
-                anomalies.append({
-                    "portfolio": p,
-                    "suspicious_zeros": suspicious_zeros,
-                })
-                print(f"[WARN] {p.name}: {len(suspicious_zeros)} suspicious 0% returns")
-                for d in suspicious_zeros[:5]:  # Show first 5
-                    print(f"       - {d}")
-                if len(suspicious_zeros) > 5:
-                    print(f"       - ... and {len(suspicious_zeros) - 5} more")
-            else:
-                print(f"[OK]   {p.name}: {len(nav_records)} NAV records checked")
-
-    return anomalies
-
-
-def fix_holdings(portfolios_with_issues, dry_run=True):
-    """Fix portfolios with duplicate holdings."""
-    print()
-    print("=" * 80)
-    print(f"PHASE 3: FIX HOLDINGS {'(DRY RUN)' if dry_run else ''}")
-    print("=" * 80)
-
-    fixed_portfolios = []
-
-    with Session(engine) as session:
-        for item in portfolios_with_issues:
-            p = item["portfolio"]
-            holdings = item["holdings"]
-
-            # Re-fetch in this session
-            holdings = session.exec(
-                select(PortfolioHolding).where(PortfolioHolding.portfolio_id == p.id)
-            ).all()
-
-            # Group by ticker, keep first occurrence
-            seen_tickers = {}
-            to_delete = []
-
-            for h in holdings:
-                if h.ticker in seen_tickers:
-                    to_delete.append(h)
-                else:
-                    seen_tickers[h.ticker] = h
-
-            if dry_run:
-                print(f"[DRY] {p.name}: Would remove {len(to_delete)} duplicates, keep {len(seen_tickers)}")
-            else:
-                print(f"[FIX] {p.name}: Removing {len(to_delete)} duplicates...")
-
-                for h in to_delete:
-                    session.delete(h)
-
-                # Recalculate weights
-                unique_count = len(seen_tickers)
-                new_weight = Decimal(str(round(1.0 / unique_count, 6)))
-
-                for ticker, h in seen_tickers.items():
-                    h.weight = new_weight
-                    session.add(h)
-
-                session.commit()
-
-                # Delete NAV data (needs recalculation)
-                navs = session.exec(
-                    select(PortfolioDailyNAV).where(PortfolioDailyNAV.portfolio_id == p.id)
-                ).all()
-
-                for nav in navs:
-                    session.delete(nav)
-                session.commit()
-
-                fixed_portfolios.append(p)
-                print(f"       Set weight to {new_weight:.4%} for {unique_count} tickers")
-                print(f"       Deleted {len(navs)} NAV records (need backfill)")
-
-    return fixed_portfolios
-
-
-def validate_nav_calculation(portfolio_id, sample_size=5):
-    """Validate NAV calculations against actual price data."""
-    print()
-    print(f"Validating NAV calculation for portfolio {portfolio_id}...")
-
-    with Session(engine) as session:
-        # Get holdings
-        holdings = session.exec(
-            select(PortfolioHolding).where(PortfolioHolding.portfolio_id == portfolio_id)
-        ).all()
-
-        if not holdings:
-            print("  No holdings found")
-            return
-
-        tickers = [h.ticker for h in holdings]
-        weights = {h.ticker: float(h.weight) for h in holdings}
-
-        # Get NAV data
-        nav_records = session.exec(
-            select(PortfolioDailyNAV)
-            .where(PortfolioDailyNAV.portfolio_id == portfolio_id)
-            .where(PortfolioDailyNAV.variant == Variants.RAW)
-            .order_by(PortfolioDailyNAV.trade_date)
-        ).all()
-
-        if len(nav_records) < 2:
-            print("  Not enough NAV data")
-            return
-
-        print(f"  Holdings: {len(holdings)}, NAV records: {len(nav_records)}")
-
-        # Sample and validate
-        errors = []
-        for i in range(1, min(sample_size + 1, len(nav_records))):
-            current = nav_records[i]
-            previous = nav_records[i-1]
-
-            # Get prices for both dates
-            curr_prices = session.exec(
-                select(PriceData)
-                .where(PriceData.ticker.in_(tickers))
-                .where(PriceData.trade_date == current.trade_date)
-            ).all()
-
-            prev_prices = session.exec(
-                select(PriceData)
-                .where(PriceData.ticker.in_(tickers))
-                .where(PriceData.trade_date == previous.trade_date)
-            ).all()
-
-            curr_price_map = {p.ticker: p.close for p in curr_prices}
-            prev_price_map = {p.ticker: p.close for p in prev_prices}
-
-            # Calculate expected return
-            expected_return = 0.0
-            for ticker, weight in weights.items():
-                curr = curr_price_map.get(ticker)
-                prev = prev_price_map.get(ticker)
-                if curr and prev and prev > 0:
-                    ticker_return = (curr / prev) - 1
-                    expected_return += weight * ticker_return
-
-            actual_return = float(current.daily_return) if current.daily_return else 0
-
-            diff = abs(expected_return - actual_return)
-            if diff > 0.001:  # More than 0.1% difference
-                errors.append({
-                    "date": current.trade_date,
-                    "expected": expected_return,
-                    "actual": actual_return,
-                    "diff": diff,
-                })
-
-            status = "MATCH" if diff <= 0.001 else "MISMATCH"
-            print(f"  {current.trade_date}: expected={expected_return*100:+.2f}%, actual={actual_return*100:+.2f}% [{status}]")
-
-        if errors:
-            print(f"  WARNING: {len(errors)} mismatches found!")
-        else:
-            print(f"  All {sample_size} samples validated correctly")
-
+    return issues
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Audit portfolio data integrity")
-    parser.add_argument("--fix", action="store_true", help="Actually fix issues (default: dry run)")
-    parser.add_argument("--validate", type=int, help="Validate NAV for specific portfolio ID")
-    args = parser.parse_args()
-
-    # Phase 1: Audit holdings
-    holdings_issues = audit_holdings()
-
-    # Phase 2: Audit NAV returns
-    nav_anomalies = audit_nav_returns()
-
-    # Phase 3: Fix holdings (if requested)
-    if holdings_issues:
-        fixed = fix_holdings(holdings_issues, dry_run=not args.fix)
-
-        if not args.fix and holdings_issues:
-            print()
-            print("To fix these issues, run:")
-            print("  python scripts/audit_portfolios.py --fix")
-
-    # Phase 4: Validate specific portfolio
-    if args.validate:
-        validate_nav_calculation(args.validate)
-
-    # Summary
-    print()
     print("=" * 80)
+    print("DETAILED PORTFOLIO METRICS AUDIT")
+    print("=" * 80)
+
+    all_issues = {}
+    with Session(engine) as session:
+        portfolios = session.exec(
+            select(PortfolioDefinition).where(PortfolioDefinition.is_active == True)
+            .order_by(PortfolioDefinition.id)
+        ).all()
+        for p in portfolios:
+            issues = audit_portfolio(session, p)
+            if issues:
+                all_issues[p.name] = issues
+
+    print("\n" + "=" * 80)
     print("AUDIT SUMMARY")
     print("=" * 80)
-    print(f"Holdings issues: {len(holdings_issues)} portfolios")
-    print(f"NAV anomalies: {len(nav_anomalies)} portfolios")
-
-    if holdings_issues or nav_anomalies:
-        print()
-        print("RECOMMENDED ACTIONS:")
-        if holdings_issues:
-            print("1. Run: python scripts/audit_portfolios.py --fix")
-            print("2. Re-run NAV backfill for affected portfolios")
-        if nav_anomalies:
-            print("3. Investigate NAV anomalies and recalculate if needed")
-
-    return 0
-
+    if all_issues:
+        print("\nPortfolios with issues:")
+        for name, issues in all_issues.items():
+            print(f"\n{name}:")
+            for issue in issues:
+                print(f"  - {issue}")
+    else:
+        print("\nAll portfolios passed!")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

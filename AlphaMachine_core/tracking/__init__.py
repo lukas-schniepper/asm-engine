@@ -20,7 +20,7 @@ from .models import (
     Variants,
     PeriodTypes,
 )
-from .tracker import PortfolioTracker, get_tracker
+from .tracker import PortfolioTracker, get_tracker, calculate_shares_from_weights
 from .overlay_adapter import OverlayAdapter, get_overlay_adapter, OVERLAY_REGISTRY
 from .s3_adapter import S3DataLoader, get_s3_loader, load_features, load_spy
 from .metrics import (
@@ -66,6 +66,7 @@ __all__ = [
     # Tracker
     "PortfolioTracker",
     "get_tracker",
+    "calculate_shares_from_weights",
     # Overlay
     "OverlayAdapter",
     "get_overlay_adapter",
