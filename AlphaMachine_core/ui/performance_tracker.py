@@ -1325,12 +1325,40 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     st.markdown("---")
     st.markdown("##### Daily Details")
 
-    selected_month = st.selectbox(
-        "Select month:",
-        options=all_months,
-        format_func=lambda x: f"{x} (MTD)" if x == current_month else x,
-        key="daily_details_month",
-    )
+    # Controls row: month selector and allocation toggle
+    col_month, col_alloc = st.columns([3, 2])
+    with col_month:
+        selected_month = st.selectbox(
+            "Select month:",
+            options=all_months,
+            format_func=lambda x: f"{x} (MTD)" if x == current_month else x,
+            key="daily_details_month",
+        )
+    with col_alloc:
+        st.markdown("")  # Spacer to align with selectbox
+        show_allocations = st.checkbox(
+            "Show Model Allocations (from S3)",
+            key="show_allocations_toggle",
+            help="Show target and actual allocations for Conservative and Trend Regime models",
+        )
+
+    # Load allocation history from S3 if toggle is enabled
+    allocation_data = {}
+    if show_allocations:
+        try:
+            from ..tracking.s3_adapter import S3DataLoader
+            s3_loader = S3DataLoader()
+            for model in ["conservative", "trend_regime_v2"]:
+                try:
+                    alloc_df = s3_loader.load_allocation_history(model)
+                    if not alloc_df.empty:
+                        # Convert date to string for matching
+                        alloc_df["date_str"] = alloc_df["date"].dt.strftime("%Y-%m-%d")
+                        allocation_data[model] = alloc_df.set_index("date_str")
+                except Exception as e:
+                    logger.warning(f"Could not load allocation history for {model}: {e}")
+        except Exception as e:
+            st.warning(f"Could not load allocation data from S3: {e}")
 
     if selected_month:
         # Get all days for this month across all portfolios
@@ -1363,6 +1391,20 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                                 row[col_name] = "-"
                         else:
                             row[col_name] = "-"
+
+                        # Add allocation columns for overlay variants if enabled
+                        if show_allocations and variant in ["conservative", "trend_regime_v2"]:
+                            if variant in allocation_data:
+                                alloc_df = allocation_data[variant]
+                                if day in alloc_df.index:
+                                    target_alloc = alloc_df.loc[day, "target_allocation"]
+                                    actual_alloc = alloc_df.loc[day, "allocation"]
+                                    row[f"{variant_abbrev.get(variant, variant)} Target"] = f"{target_alloc*100:.0f}%"
+                                    row[f"{variant_abbrev.get(variant, variant)} Actual"] = f"{actual_alloc*100:.0f}%"
+                                else:
+                                    row[f"{variant_abbrev.get(variant, variant)} Target"] = "-"
+                                    row[f"{variant_abbrev.get(variant, variant)} Actual"] = "-"
+
                 daily_table_data.append(row)
 
             if daily_table_data:
