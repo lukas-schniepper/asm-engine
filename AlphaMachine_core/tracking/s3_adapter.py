@@ -71,6 +71,9 @@ class S3DataLoader:
         self.cache_enabled = cache_enabled
         self.cache_ttl = timedelta(hours=cache_ttl_hours)
 
+        # Try to load AWS credentials from Streamlit secrets if available
+        self._load_aws_credentials_from_secrets()
+
         # Initialize S3 client if boto3 is available
         self._s3_client = None
         if BOTO3_AVAILABLE:
@@ -88,6 +91,26 @@ class S3DataLoader:
             except Exception as e:
                 logger.warning(f"S3 initialization error: {e}. Will use cached data only.")
                 self._s3_client = None
+
+    def _load_aws_credentials_from_secrets(self):
+        """Load AWS credentials from Streamlit secrets if available."""
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets'):
+                # Check for AWS credentials in Streamlit secrets
+                if 'AWS_ACCESS_KEY_ID' in st.secrets and 'AWS_SECRET_ACCESS_KEY' in st.secrets:
+                    os.environ['AWS_ACCESS_KEY_ID'] = st.secrets['AWS_ACCESS_KEY_ID']
+                    os.environ['AWS_SECRET_ACCESS_KEY'] = st.secrets['AWS_SECRET_ACCESS_KEY']
+                    logger.info("Loaded AWS credentials from Streamlit secrets")
+                # Also check in nested 'aws' section
+                elif 'aws' in st.secrets:
+                    aws_secrets = st.secrets['aws']
+                    if 'access_key_id' in aws_secrets and 'secret_access_key' in aws_secrets:
+                        os.environ['AWS_ACCESS_KEY_ID'] = aws_secrets['access_key_id']
+                        os.environ['AWS_SECRET_ACCESS_KEY'] = aws_secrets['secret_access_key']
+                        logger.info("Loaded AWS credentials from Streamlit secrets (aws section)")
+        except Exception as e:
+            logger.debug(f"Could not load AWS credentials from Streamlit secrets: {e}")
 
         # Ensure cache directory exists
         if self.cache_enabled:
