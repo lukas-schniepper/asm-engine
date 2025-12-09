@@ -1394,16 +1394,25 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
                         # Add allocation columns for overlay variants if enabled
                         if show_allocations and variant in ["conservative", "trend_regime_v2"]:
+                            abbrev = variant_abbrev.get(variant, variant)
                             if variant in allocation_data:
                                 alloc_df = allocation_data[variant]
                                 if day in alloc_df.index:
-                                    target_alloc = alloc_df.loc[day, "target_allocation"]
-                                    actual_alloc = alloc_df.loc[day, "allocation"]
-                                    row[f"{variant_abbrev.get(variant, variant)} Target"] = f"{target_alloc*100:.0f}%"
-                                    row[f"{variant_abbrev.get(variant, variant)} Actual"] = f"{actual_alloc*100:.0f}%"
+                                    try:
+                                        target_alloc = float(alloc_df.loc[day, "target_allocation"])
+                                        actual_alloc = float(alloc_df.loc[day, "allocation"])
+                                        row[f"{abbrev} Target"] = f"{target_alloc*100:.0f}%"
+                                        row[f"{abbrev} Actual"] = f"{actual_alloc*100:.0f}%"
+                                    except Exception:
+                                        row[f"{abbrev} Target"] = "-"
+                                        row[f"{abbrev} Actual"] = "-"
                                 else:
-                                    row[f"{variant_abbrev.get(variant, variant)} Target"] = "-"
-                                    row[f"{variant_abbrev.get(variant, variant)} Actual"] = "-"
+                                    row[f"{abbrev} Target"] = "-"
+                                    row[f"{abbrev} Actual"] = "-"
+                            else:
+                                # S3 data not loaded for this model
+                                row[f"{abbrev} Target"] = "N/A"
+                                row[f"{abbrev} Actual"] = "N/A"
 
                 daily_table_data.append(row)
 
