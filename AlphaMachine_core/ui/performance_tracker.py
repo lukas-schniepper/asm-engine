@@ -1984,17 +1984,45 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     returns_data = {}
     performance_data = []  # For risk-return scatter
 
+    # Diagnostic: Track why portfolios are excluded from correlation
+    corr_diagnostics = []
+
     for portfolio_name in portfolios_with_data:
         portfolio_id = portfolio_options[portfolio_name]
         clean_pname = clean_name(portfolio_name)
 
         for variant in selected_variants:
+            col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
             nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
-            if nav_df.empty or "nav" not in nav_df.columns:
+
+            if nav_df.empty:
+                corr_diagnostics.append({
+                    "portfolio": col_name,
+                    "status": "❌ Empty NAV",
+                    "reason": "get_nav_series returned empty DataFrame",
+                    "rows": 0,
+                })
+                continue
+
+            if "nav" not in nav_df.columns:
+                corr_diagnostics.append({
+                    "portfolio": col_name,
+                    "status": "❌ No NAV col",
+                    "reason": f"Columns: {list(nav_df.columns)}",
+                    "rows": len(nav_df),
+                })
                 continue
 
             portfolio_nav = nav_df["nav"]
-            if len(portfolio_nav) < 30:
+            nav_len = len(portfolio_nav)
+
+            if nav_len < 30:
+                corr_diagnostics.append({
+                    "portfolio": col_name,
+                    "status": "❌ < 30 days",
+                    "reason": f"Only {nav_len} data points (need 30+)",
+                    "rows": nav_len,
+                })
                 continue
 
             # Use pre-computed daily returns if available, else calculate
@@ -2003,8 +2031,13 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             else:
                 returns = calculate_returns(portfolio_nav)
 
-            col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
             returns_data[col_name] = returns
+            corr_diagnostics.append({
+                "portfolio": col_name,
+                "status": "✅ Included",
+                "reason": f"{len(returns)} returns, dates: {returns.index.min().date()} to {returns.index.max().date()}",
+                "rows": nav_len,
+            })
 
             # Collect metrics for risk-return scatter
             from ..tracking.metrics import calculate_cagr, calculate_volatility
@@ -2074,6 +2107,34 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             st.caption(f"Need at least 30 aligned trading days for correlation. Found: {len(returns_df)}")
     else:
         st.caption("Select at least 2 portfolios to view correlation matrix.")
+
+    # Diagnostic expander - shows why portfolios were included/excluded
+    if corr_diagnostics:
+        with st.expander("🔍 Correlation Matrix Diagnostics", expanded=False):
+            st.markdown(f"**Input:** {len(portfolios_with_data)} portfolios × {len(selected_variants)} variants = {len(portfolios_with_data) * len(selected_variants)} combinations")
+            st.markdown(f"**Output:** {len(returns_data)} series included in correlation matrix")
+
+            # Summary counts
+            included = sum(1 for d in corr_diagnostics if d["status"].startswith("✅"))
+            excluded = len(corr_diagnostics) - included
+            st.markdown(f"**Included:** {included} | **Excluded:** {excluded}")
+
+            # Show diagnostic table
+            diag_df = pd.DataFrame(corr_diagnostics)
+            st.dataframe(diag_df, use_container_width=True, hide_index=True)
+
+            # Additional debug: show date ranges of included series
+            if returns_data:
+                st.markdown("**Date Alignment Check:**")
+                date_ranges = []
+                for name, returns in returns_data.items():
+                    date_ranges.append({
+                        "Series": name,
+                        "Start": returns.index.min().date(),
+                        "End": returns.index.max().date(),
+                        "Count": len(returns),
+                    })
+                st.dataframe(pd.DataFrame(date_ranges), use_container_width=True, hide_index=True)
 
     # ===== Risk-Return Scatter Plot =====
     if len(performance_data) >= 2:
