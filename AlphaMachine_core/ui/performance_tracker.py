@@ -1609,6 +1609,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     from .styles import format_percentage, get_variant_display_name, VARIANT_COLORS, COLORS
     from datetime import date, timedelta
     import pandas as pd
+    import numpy as np
 
     st.markdown("### Multi-Portfolio Returns Comparison")
     st.markdown("Compare returns across multiple portfolios with expandable month/day details.")
@@ -1967,6 +1968,125 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=35 * len(daily_df) + 38)
         else:
             st.info("No daily data available for this month.")
+
+    # ===== Correlation Matrix Section =====
+    # Senior quant approach: correlate daily returns, not prices
+    # Use inner join for date alignment (only days where all portfolios have data)
+    st.markdown("---")
+    st.markdown("#### Portfolio Correlation Matrix")
+    st.markdown("Correlation of daily returns between selected portfolios. Higher correlation = less diversification benefit.")
+
+    # Build returns DataFrame for correlation calculation
+    from ..tracking.metrics import calculate_returns
+    from .charts import create_correlation_heatmap, create_efficient_frontier_scatter
+
+    # Collect daily returns for each portfolio/variant combination
+    returns_data = {}
+    performance_data = []  # For risk-return scatter
+
+    for portfolio_name in portfolios_with_data:
+        portfolio_id = portfolio_options[portfolio_name]
+        clean_pname = clean_name(portfolio_name)
+
+        for variant in selected_variants:
+            nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+            if nav_df.empty or "nav" not in nav_df.columns:
+                continue
+
+            portfolio_nav = nav_df["nav"]
+            if len(portfolio_nav) < 30:
+                continue
+
+            # Use pre-computed daily returns if available, else calculate
+            if "daily_return" in nav_df.columns:
+                returns = nav_df["daily_return"].dropna()
+            else:
+                returns = calculate_returns(portfolio_nav)
+
+            col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
+            returns_data[col_name] = returns
+
+            # Collect metrics for risk-return scatter
+            from ..tracking.metrics import calculate_cagr, calculate_volatility
+            try:
+                cagr = calculate_cagr(portfolio_nav)
+                vol = calculate_volatility(returns)
+                if cagr != 0 and vol != 0:
+                    performance_data.append({
+                        'name': col_name,
+                        'return': cagr,
+                        'volatility': vol,
+                        'sharpe': cagr / vol if vol > 0 else 0,
+                    })
+            except Exception:
+                pass
+
+    if len(returns_data) >= 2:
+        # Align returns by date (inner join - only dates present in all series)
+        returns_df = pd.DataFrame(returns_data)
+        returns_df = returns_df.dropna()
+
+        if len(returns_df) >= 30:
+            # Calculate correlation matrix
+            corr_matrix = returns_df.corr()
+
+            col1, col2 = st.columns([3, 2])
+
+            with col1:
+                # Correlation heatmap
+                heatmap = create_correlation_heatmap(
+                    corr_matrix,
+                    title="Returns Correlation Matrix",
+                    height=max(350, 40 * len(corr_matrix)),
+                )
+                st.plotly_chart(heatmap, use_container_width=True)
+
+            with col2:
+                # Summary statistics
+                st.markdown("**Correlation Summary**")
+
+                # Get off-diagonal correlations
+                mask = ~np.eye(len(corr_matrix), dtype=bool)
+                off_diag = corr_matrix.values[mask]
+
+                st.metric("Average Correlation", f"{np.mean(off_diag):.3f}")
+                st.metric("Max Correlation", f"{np.max(off_diag):.3f}")
+                st.metric("Min Correlation", f"{np.min(off_diag):.3f}")
+                st.metric("Obs. Days (Aligned)", f"{len(returns_df)}")
+
+                st.markdown("---")
+                st.markdown("**Interpretation:**")
+                st.caption(
+                    "**< 0.3**: Low correlation (good diversification)  \n"
+                    "**0.3 - 0.7**: Moderate correlation  \n"
+                    "**> 0.7**: High correlation (limited diversification)"
+                )
+
+            # Show raw correlation values in expandable section
+            with st.expander("View Raw Correlation Values"):
+                # Format correlation matrix for display
+                styled_corr = corr_matrix.style.background_gradient(
+                    cmap='RdYlGn_r', vmin=-1, vmax=1
+                ).format("{:.3f}")
+                st.dataframe(styled_corr, use_container_width=True)
+
+        else:
+            st.caption(f"Need at least 30 aligned trading days for correlation. Found: {len(returns_df)}")
+    else:
+        st.caption("Select at least 2 portfolios to view correlation matrix.")
+
+    # ===== Risk-Return Scatter Plot =====
+    if len(performance_data) >= 2:
+        st.markdown("---")
+        st.markdown("#### Risk-Return Profile")
+        st.markdown("Annualized return vs volatility. Higher and to the left is better (higher return per unit risk).")
+
+        scatter = create_efficient_frontier_scatter(
+            performance_data,
+            title="Portfolio Risk-Return Profile",
+            height=400,
+        )
+        st.plotly_chart(scatter, use_container_width=True)
 
 
 def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
