@@ -4,10 +4,11 @@ Benchmark Data Adapter.
 Provides access to benchmark data (SPY, QQQ, etc.) for calculating
 benchmark-relative metrics like Beta, Alpha, and Information Ratio.
 
-Uses Yahoo Finance for data with caching to avoid repeated API calls.
+Uses EODHD API for data with caching to avoid repeated API calls.
 """
 
 import logging
+import os
 from datetime import date, timedelta
 from typing import Optional
 
@@ -38,9 +39,34 @@ class BenchmarkAdapter:
     }
 
     def __init__(self):
-        """Initialize the benchmark adapter with cache."""
+        """Initialize the benchmark adapter with EODHD client and cache."""
         self._cache: dict[str, pd.DataFrame] = {}
         self._cache_expiry: dict[str, date] = {}
+        self._eodhd_client = None
+
+    def _get_eodhd_client(self):
+        """Lazy initialization of EODHD client."""
+        if self._eodhd_client is None:
+            from AlphaMachine_core.data_sources.eodhd_http_client import EODHDHttpClient
+
+            api_key = os.getenv('EODHD_API_KEY')
+            if not api_key:
+                # Try Streamlit secrets as fallback
+                try:
+                    import streamlit as st
+                    api_key = st.secrets.get('EODHD_API_KEY')
+                except:
+                    pass
+
+            if not api_key:
+                raise ValueError(
+                    "EODHD_API_KEY not found in environment or Streamlit secrets. "
+                    "Please add to .streamlit/secrets.toml"
+                )
+
+            self._eodhd_client = EODHDHttpClient(api_key)
+
+        return self._eodhd_client
 
     def get_benchmark_nav(
         self,
@@ -131,9 +157,9 @@ class BenchmarkAdapter:
             if self._cache_expiry.get(cache_key, date.min) >= date.today():
                 return self._cache[cache_key]
 
-        # Fetch from Yahoo Finance
+        # Fetch from EODHD
         try:
-            df = self._fetch_from_yfinance(symbol, start_date, end_date)
+            df = self._fetch_from_eodhd(symbol, start_date, end_date)
             if not df.empty:
                 self._cache[cache_key] = df
                 self._cache_expiry[cache_key] = date.today() + timedelta(days=1)
@@ -142,14 +168,14 @@ class BenchmarkAdapter:
             logger.error(f"Error fetching benchmark data for {symbol}: {e}")
             return pd.DataFrame()
 
-    def _fetch_from_yfinance(
+    def _fetch_from_eodhd(
         self,
         symbol: str,
         start_date: date,
         end_date: date,
     ) -> pd.DataFrame:
         """
-        Fetch data from Yahoo Finance.
+        Fetch data from EODHD API.
 
         Args:
             symbol: Ticker symbol
@@ -160,29 +186,33 @@ class BenchmarkAdapter:
             DataFrame with OHLCV data
         """
         try:
-            import yfinance as yf
+            client = self._get_eodhd_client()
 
             # Add buffer days for returns calculation
             buffer_start = start_date - timedelta(days=10)
 
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(start=buffer_start, end=end_date + timedelta(days=1))
+            df = client.get_eod_data(
+                ticker=symbol,
+                start_date=buffer_start.strftime('%Y-%m-%d'),
+                end_date=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'),
+            )
 
             if df.empty:
-                logger.warning(f"No data returned from yfinance for {symbol}")
+                logger.warning(f"No data returned from EODHD for {symbol}")
                 return pd.DataFrame()
 
             # Ensure timezone-naive index
-            if df.index.tz is not None:
+            if hasattr(df.index, 'tz') and df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
 
             return df
 
-        except ImportError:
-            logger.error("yfinance not installed. Run: pip install yfinance")
+        except ValueError as e:
+            # EODHD API key not configured
+            logger.error(f"EODHD configuration error: {e}")
             return pd.DataFrame()
         except Exception as e:
-            logger.error(f"yfinance error for {symbol}: {e}")
+            logger.error(f"EODHD error for {symbol}: {e}")
             return pd.DataFrame()
 
     def list_benchmarks(self) -> dict[str, str]:
