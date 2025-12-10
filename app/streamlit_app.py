@@ -2343,7 +2343,7 @@ def show_portfolio_selection_ui():
     st.markdown("Select optimal portfolios for live trading based on risk-adjusted metrics and diversification.")
 
     try:
-        from AlphaMachine_core.tracking.tracker import PerformanceTracker
+        from AlphaMachine_core.tracking.tracker import PortfolioTracker
         from AlphaMachine_core.tracking import Variants
         from AlphaMachine_core.selection import (
             find_optimal_portfolio_combination,
@@ -2358,7 +2358,7 @@ def show_portfolio_selection_ui():
         return
 
     # Initialize tracker
-    tracker = PerformanceTracker()
+    tracker = PortfolioTracker()
 
     # Get all portfolios
     all_portfolios = tracker.list_portfolios(active_only=True)
