@@ -2349,8 +2349,10 @@ def show_portfolio_selection_ui():
             find_optimal_portfolio_combination,
             simulate_combined_portfolio,
             calculate_candidate_metrics,
+            optimize_portfolio_weights,
             OPTIMIZATION_PRESETS,
             DEFAULT_WEIGHTS,
+            WEIGHT_METHODS,
         )
         from AlphaMachine_core.ui.charts import create_correlation_heatmap, create_nav_chart
     except ImportError as e:
@@ -2430,6 +2432,21 @@ def show_portfolio_selection_ui():
         max_value=5,
         value=3,
         help="Number of portfolios to recommend",
+    )
+
+    # Weight allocation method
+    weight_method_options = list(WEIGHT_METHODS.keys())
+    weight_method_labels = list(WEIGHT_METHODS.values())
+    selected_weight_method = st.sidebar.radio(
+        "Weight Allocation",
+        options=weight_method_options,
+        format_func=lambda x: WEIGHT_METHODS[x],
+        index=0,
+        help="How to allocate weights to selected portfolios:\n"
+             "- **Equal Weight**: All portfolios get same weight\n"
+             "- **Risk Parity**: Lower volatility = higher weight\n"
+             "- **Min Variance**: Minimize portfolio variance\n"
+             "- **Max Sharpe**: Maximize Sharpe ratio",
     )
 
     # Preset selection
@@ -2703,17 +2720,38 @@ def show_portfolio_selection_ui():
     if recommended:
         selected_combo = list(recommended["combination"])
 
-        # Weight sliders
+        # Calculate optimized weights
+        weight_result = optimize_portfolio_weights(
+            candidates,
+            selected_combo,
+            method=selected_weight_method,
+        )
+
+        if "error" in weight_result:
+            st.warning(f"Weight optimization failed: {weight_result['error']}. Using equal weights.")
+            optimized_weights = {name: 1.0 / len(selected_combo) for name in selected_combo}
+            weight_method_name = "Equal Weight"
+        else:
+            optimized_weights = weight_result["weights"]
+            weight_method_name = weight_result["method"]
+
+        # Show weight method info
+        st.markdown(f"**Weight Method:** {weight_method_name}")
+        if "metrics" in weight_result and "description" in weight_result.get("metrics", {}):
+            st.caption(weight_result["metrics"]["description"])
+
+        # Weight sliders (initialized with optimized weights, but adjustable)
         st.markdown("**Portfolio Weights:**")
         weight_cols = st.columns(len(selected_combo))
         sim_weights = []
 
         for i, (col, name) in enumerate(zip(weight_cols, selected_combo)):
+            default_w = optimized_weights.get(name, 1.0 / len(selected_combo))
             w = col.slider(
                 name[:20],
                 min_value=0.0,
                 max_value=1.0,
-                value=1.0 / len(selected_combo),
+                value=float(default_w),
                 step=0.05,
                 key=f"ps_sim_weight_{i}",
             )
@@ -2723,6 +2761,15 @@ def show_portfolio_selection_ui():
         total_weight = sum(sim_weights)
         if total_weight > 0:
             sim_weights = [w / total_weight for w in sim_weights]
+
+        # Show extra metrics for advanced weight methods
+        if selected_weight_method != "equal" and "metrics" in weight_result:
+            metrics_info = weight_result["metrics"]
+            if "expected_sharpe" in metrics_info:
+                st.caption(f"Expected Sharpe: {metrics_info['expected_sharpe']:.2f}, "
+                          f"Expected Vol: {metrics_info['expected_vol']*100:.1f}%")
+            elif "portfolio_vol" in metrics_info:
+                st.caption(f"Optimized Portfolio Vol: {metrics_info['portfolio_vol']*100:.1f}%")
 
         # Run simulation
         sim_result = simulate_combined_portfolio(

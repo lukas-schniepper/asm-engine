@@ -12,8 +12,10 @@ from .optimizer import (
     calculate_ulcer_index,
     calculate_upi,
     normalize_metrics,
+    optimize_portfolio_weights,
     OPTIMIZATION_PRESETS,
     DEFAULT_WEIGHTS,
+    WEIGHT_METHODS,
 )
 
 __all__ = [
@@ -23,6 +25,8 @@ __all__ = [
     "calculate_ulcer_index",
     "calculate_upi",
     "normalize_metrics",
+    "optimize_portfolio_weights",
     "OPTIMIZATION_PRESETS",
     "DEFAULT_WEIGHTS",
+    "WEIGHT_METHODS",
 ]

@@ -520,3 +520,167 @@ def get_low_correlation_pairs(
     pairs.sort(key=lambda x: x["correlation"])
 
     return pairs
+
+
+# =============================================================================
+# WEIGHT OPTIMIZATION
+# =============================================================================
+
+WEIGHT_METHODS = {
+    "equal": "Equal Weight",
+    "risk_parity": "Risk Parity",
+    "min_variance": "Minimum Variance",
+    "max_sharpe": "Max Sharpe",
+}
+
+
+def optimize_portfolio_weights(
+    portfolio_returns: Dict[str, pd.Series],
+    selected: List[str],
+    method: str = "equal",
+) -> Dict:
+    """
+    Optimize portfolio weights using various methods.
+
+    Args:
+        portfolio_returns: Daily returns by portfolio name
+        selected: List of selected portfolio names
+        method: Optimization method - "equal", "risk_parity", "min_variance", "max_sharpe"
+
+    Returns:
+        Dictionary with:
+        - weights: Dict of {portfolio_name: weight}
+        - method: Method used
+        - metrics: Additional info about the optimization
+    """
+    if not selected or len(selected) < 2:
+        # Single portfolio or empty - return equal weight
+        if selected:
+            return {
+                "weights": {selected[0]: 1.0},
+                "method": method,
+                "metrics": {},
+            }
+        return {"error": "No portfolios selected"}
+
+    # Build returns DataFrame
+    returns_df = pd.DataFrame({
+        name: portfolio_returns[name] for name in selected
+        if name in portfolio_returns
+    }).dropna()
+
+    if len(returns_df) < 30:
+        return {"error": "Insufficient aligned data points"}
+
+    n = len(selected)
+
+    if method == "equal":
+        weights = {name: 1.0 / n for name in selected}
+        return {
+            "weights": weights,
+            "method": "Equal Weight",
+            "metrics": {"description": "All portfolios weighted equally"},
+        }
+
+    elif method == "risk_parity":
+        # Risk Parity: Weight inversely proportional to volatility
+        # Each portfolio contributes equal risk to total portfolio
+        vols = returns_df.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+        inv_vols = 1.0 / vols
+        raw_weights = inv_vols / inv_vols.sum()
+        weights = {name: float(raw_weights[name]) for name in selected}
+        return {
+            "weights": weights,
+            "method": "Risk Parity",
+            "metrics": {
+                "description": "Weighted by inverse volatility",
+                "volatilities": {name: float(vols[name]) for name in selected},
+            },
+        }
+
+    elif method == "min_variance":
+        # Minimum Variance Portfolio
+        # w* = (Σ^-1 * 1) / (1' * Σ^-1 * 1)
+        cov_matrix = returns_df.cov() * TRADING_DAYS_PER_YEAR
+        try:
+            cov_inv = np.linalg.inv(cov_matrix.values)
+            ones = np.ones(n)
+            raw_weights = cov_inv @ ones
+            raw_weights = raw_weights / raw_weights.sum()
+            # Ensure non-negative weights (long only)
+            raw_weights = np.maximum(raw_weights, 0)
+            if raw_weights.sum() > 0:
+                raw_weights = raw_weights / raw_weights.sum()
+            else:
+                raw_weights = np.ones(n) / n
+            weights = {name: float(raw_weights[i]) for i, name in enumerate(selected)}
+            return {
+                "weights": weights,
+                "method": "Minimum Variance",
+                "metrics": {
+                    "description": "Minimizes total portfolio variance",
+                    "portfolio_vol": float(np.sqrt(raw_weights @ cov_matrix.values @ raw_weights)),
+                },
+            }
+        except np.linalg.LinAlgError:
+            # Singular matrix - fall back to equal weight
+            weights = {name: 1.0 / n for name in selected}
+            return {
+                "weights": weights,
+                "method": "Minimum Variance (fallback to equal)",
+                "metrics": {"description": "Covariance matrix singular, using equal weight"},
+            }
+
+    elif method == "max_sharpe":
+        # Maximum Sharpe Ratio Portfolio
+        # w* = (Σ^-1 * μ) / (1' * Σ^-1 * μ)
+        cov_matrix = returns_df.cov() * TRADING_DAYS_PER_YEAR
+        mean_returns = returns_df.mean() * TRADING_DAYS_PER_YEAR
+        try:
+            cov_inv = np.linalg.inv(cov_matrix.values)
+            raw_weights = cov_inv @ mean_returns.values
+            # Normalize to sum to 1
+            if raw_weights.sum() != 0:
+                raw_weights = raw_weights / raw_weights.sum()
+            else:
+                raw_weights = np.ones(n) / n
+            # Ensure non-negative weights (long only)
+            raw_weights = np.maximum(raw_weights, 0)
+            if raw_weights.sum() > 0:
+                raw_weights = raw_weights / raw_weights.sum()
+            else:
+                raw_weights = np.ones(n) / n
+            weights = {name: float(raw_weights[i]) for i, name in enumerate(selected)}
+
+            # Calculate resulting Sharpe
+            port_return = raw_weights @ mean_returns.values
+            port_vol = float(np.sqrt(raw_weights @ cov_matrix.values @ raw_weights))
+            port_sharpe = port_return / port_vol if port_vol > 0 else 0
+
+            return {
+                "weights": weights,
+                "method": "Max Sharpe",
+                "metrics": {
+                    "description": "Maximizes portfolio Sharpe ratio",
+                    "expected_return": float(port_return),
+                    "expected_vol": port_vol,
+                    "expected_sharpe": float(port_sharpe),
+                },
+            }
+        except np.linalg.LinAlgError:
+            # Singular matrix - fall back to equal weight
+            weights = {name: 1.0 / n for name in selected}
+            return {
+                "weights": weights,
+                "method": "Max Sharpe (fallback to equal)",
+                "metrics": {"description": "Covariance matrix singular, using equal weight"},
+            }
+
+    else:
+        # Unknown method - default to equal
+        weights = {name: 1.0 / n for name in selected}
+        return {
+            "weights": weights,
+            "method": "Equal Weight",
+            "metrics": {"description": f"Unknown method '{method}', defaulting to equal"},
+        }
