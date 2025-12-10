@@ -1,15 +1,25 @@
 """
 Performance Metrics Calculation Module.
 
-Provides functions for calculating standard performance metrics:
+Provides functions for calculating standard and institutional-grade performance metrics:
+
+Basic Metrics:
 - Returns (daily, cumulative, annualized)
-- Sharpe Ratio
-- Sortino Ratio
-- CAGR
-- Maximum Drawdown
-- Calmar Ratio
-- Volatility
-- Win Rate
+- Sharpe Ratio, Sortino Ratio, Calmar Ratio
+- CAGR, Maximum Drawdown, Volatility, Win Rate
+
+Institutional Risk Metrics:
+- Value at Risk (VaR) and Conditional VaR (CVaR/Expected Shortfall)
+- Beta and Alpha (Jensen's Alpha)
+- Information Ratio and Tracking Error
+- Portfolio-Benchmark Correlation
+
+Rolling Metrics:
+- Rolling Sharpe Ratio, Volatility, Correlation, Beta
+
+Advanced Drawdown Analysis:
+- Drawdown duration, recovery time, time underwater
+- Worst N drawdowns with full details
 
 All calculations follow industry-standard formulas and are designed
 to work with NAV time series data.
@@ -468,3 +478,636 @@ def compare_variants(
         results[variant] = metrics
 
     return pd.DataFrame(results)
+
+
+# =============================================================================
+# INSTITUTIONAL-LEVEL RISK METRICS
+# =============================================================================
+
+
+def calculate_var(
+    returns: pd.Series,
+    confidence: float = 0.95,
+    method: str = "historical",
+) -> float:
+    """
+    Calculate Value at Risk (VaR).
+
+    VaR measures the worst expected loss at a given confidence level.
+
+    Args:
+        returns: Daily returns series
+        confidence: Confidence level (0.95 = 95% VaR, 0.99 = 99% VaR)
+        method: "historical" (percentile-based) or "parametric" (assumes normal distribution)
+
+    Returns:
+        VaR as negative decimal (e.g., -0.02 means 2% daily loss not exceeded 95% of time)
+    """
+    if len(returns) < 10:
+        return 0.0
+
+    if method == "historical":
+        return float(returns.quantile(1 - confidence))
+    else:
+        # Parametric (assumes normal distribution)
+        from scipy import stats
+        z = stats.norm.ppf(1 - confidence)
+        return float(returns.mean() + z * returns.std())
+
+
+def calculate_cvar(
+    returns: pd.Series,
+    confidence: float = 0.95,
+) -> float:
+    """
+    Calculate Conditional VaR (CVaR), also known as Expected Shortfall.
+
+    CVaR is the average loss beyond the VaR threshold - captures tail risk.
+
+    Args:
+        returns: Daily returns series
+        confidence: Confidence level (0.95 = 95% CVaR)
+
+    Returns:
+        CVaR as negative decimal (e.g., -0.03 means average loss of 3% in worst 5% of days)
+    """
+    if len(returns) < 10:
+        return 0.0
+
+    var = calculate_var(returns, confidence, method="historical")
+    tail_returns = returns[returns <= var]
+
+    if len(tail_returns) == 0:
+        return var
+
+    return float(tail_returns.mean())
+
+
+def calculate_beta(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+) -> float:
+    """
+    Calculate portfolio beta relative to benchmark.
+
+    Beta measures systematic risk exposure:
+    - Beta > 1: More volatile than benchmark
+    - Beta < 1: Less volatile than benchmark
+    - Beta = 1: Same volatility as benchmark
+
+    Formula: Beta = Cov(Portfolio, Benchmark) / Var(Benchmark)
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns (e.g., SPY)
+
+    Returns:
+        Beta coefficient
+    """
+    # Align series by index
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+
+    if len(aligned) < 10:
+        return 0.0
+
+    port_ret = aligned.iloc[:, 0]
+    bench_ret = aligned.iloc[:, 1]
+
+    covariance = port_ret.cov(bench_ret)
+    benchmark_var = bench_ret.var()
+
+    if benchmark_var == 0 or np.isnan(benchmark_var):
+        return 0.0
+
+    return float(covariance / benchmark_var)
+
+
+def calculate_alpha(
+    portfolio_nav: pd.Series,
+    benchmark_nav: pd.Series,
+    risk_free_rate: float = 0.0,
+) -> float:
+    """
+    Calculate Jensen's Alpha (annualized).
+
+    Alpha measures risk-adjusted outperformance - the excess return not explained
+    by market exposure (beta).
+
+    Formula: Alpha = Portfolio Return - [Rf + Beta × (Benchmark Return - Rf)]
+
+    Args:
+        portfolio_nav: Portfolio NAV series
+        benchmark_nav: Benchmark NAV series
+        risk_free_rate: Annual risk-free rate (default 0)
+
+    Returns:
+        Alpha as annualized decimal (e.g., 0.05 = 5% annual alpha)
+    """
+    if len(portfolio_nav) < 10 or len(benchmark_nav) < 10:
+        return 0.0
+
+    port_returns = calculate_returns(portfolio_nav)
+    bench_returns = calculate_returns(benchmark_nav)
+
+    port_cagr = calculate_cagr(portfolio_nav)
+    bench_cagr = calculate_cagr(benchmark_nav)
+    beta = calculate_beta(port_returns, bench_returns)
+
+    # Jensen's Alpha formula
+    alpha = port_cagr - (risk_free_rate + beta * (bench_cagr - risk_free_rate))
+
+    return float(alpha)
+
+
+def calculate_tracking_error(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+) -> float:
+    """
+    Calculate annualized Tracking Error (active risk).
+
+    Tracking Error measures how closely portfolio follows the benchmark.
+    Lower TE = more passive/index-like, Higher TE = more active management.
+
+    Formula: TE = StdDev(Portfolio Returns - Benchmark Returns) × √252
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns
+
+    Returns:
+        Annualized tracking error as decimal (e.g., 0.08 = 8%)
+    """
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+
+    if len(aligned) < 2:
+        return 0.0
+
+    active_returns = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    return float(active_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
+
+
+def calculate_information_ratio(
+    portfolio_nav: pd.Series,
+    benchmark_nav: pd.Series,
+) -> float:
+    """
+    Calculate Information Ratio (IR).
+
+    IR measures active management skill - excess return per unit of active risk.
+
+    Formula: IR = Annualized Active Return / Tracking Error
+
+    Interpretation:
+    - IR > 0.5: Good active manager
+    - IR > 1.0: Excellent active manager
+    - IR < 0: Underperforming benchmark after adjusting for tracking error
+
+    Args:
+        portfolio_nav: Portfolio NAV series
+        benchmark_nav: Benchmark NAV series
+
+    Returns:
+        Information Ratio
+    """
+    if len(portfolio_nav) < 10 or len(benchmark_nav) < 10:
+        return 0.0
+
+    port_returns = calculate_returns(portfolio_nav)
+    bench_returns = calculate_returns(benchmark_nav)
+
+    aligned = pd.concat([port_returns, bench_returns], axis=1).dropna()
+
+    if len(aligned) < 10:
+        return 0.0
+
+    active_returns = aligned.iloc[:, 0] - aligned.iloc[:, 1]
+    active_mean_annual = active_returns.mean() * TRADING_DAYS_PER_YEAR
+
+    te = calculate_tracking_error(port_returns, bench_returns)
+
+    if te == 0 or np.isnan(te):
+        return 0.0
+
+    return float(active_mean_annual / te)
+
+
+def calculate_correlation(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+) -> float:
+    """
+    Calculate correlation between portfolio and benchmark returns.
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns
+
+    Returns:
+        Correlation coefficient (-1 to 1)
+    """
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+
+    if len(aligned) < 10:
+        return 0.0
+
+    return float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
+
+
+# =============================================================================
+# ROLLING METRICS
+# =============================================================================
+
+
+def calculate_rolling_sharpe(
+    returns: pd.Series,
+    window: int = 60,
+    risk_free_rate: float = 0.0,
+) -> pd.Series:
+    """
+    Calculate rolling Sharpe ratio.
+
+    Args:
+        returns: Daily returns series
+        window: Rolling window in days (default 60 ~3 months)
+        risk_free_rate: Annual risk-free rate
+
+    Returns:
+        Series of rolling Sharpe ratios
+    """
+    if len(returns) < window:
+        return pd.Series(dtype=float)
+
+    daily_rf = (1 + risk_free_rate) ** (1 / TRADING_DAYS_PER_YEAR) - 1
+    excess = returns - daily_rf
+
+    rolling_mean = excess.rolling(window).mean()
+    rolling_std = excess.rolling(window).std()
+
+    # Avoid division by zero
+    rolling_sharpe = rolling_mean / rolling_std.replace(0, np.nan)
+    rolling_sharpe = rolling_sharpe * np.sqrt(TRADING_DAYS_PER_YEAR)
+
+    return rolling_sharpe
+
+
+def calculate_rolling_volatility(
+    returns: pd.Series,
+    window: int = 60,
+) -> pd.Series:
+    """
+    Calculate rolling annualized volatility.
+
+    Args:
+        returns: Daily returns series
+        window: Rolling window in days (default 60 ~3 months)
+
+    Returns:
+        Series of rolling annualized volatility
+    """
+    if len(returns) < window:
+        return pd.Series(dtype=float)
+
+    return returns.rolling(window).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+
+
+def calculate_rolling_correlation(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    window: int = 60,
+) -> pd.Series:
+    """
+    Calculate rolling correlation to benchmark.
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns
+        window: Rolling window in days (default 60 ~3 months)
+
+    Returns:
+        Series of rolling correlations
+    """
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+
+    if len(aligned) < window:
+        return pd.Series(dtype=float)
+
+    return aligned.iloc[:, 0].rolling(window).corr(aligned.iloc[:, 1])
+
+
+def calculate_rolling_beta(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    window: int = 60,
+) -> pd.Series:
+    """
+    Calculate rolling beta to benchmark.
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns
+        window: Rolling window in days (default 60 ~3 months)
+
+    Returns:
+        Series of rolling betas
+    """
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+    aligned.columns = ['portfolio', 'benchmark']
+
+    if len(aligned) < window:
+        return pd.Series(dtype=float)
+
+    def calc_beta(x):
+        if len(x) < 10:
+            return np.nan
+        port = x['portfolio']
+        bench = x['benchmark']
+        cov = port.cov(bench)
+        var = bench.var()
+        return cov / var if var > 0 else np.nan
+
+    return aligned.rolling(window).apply(
+        lambda x: calc_beta(pd.DataFrame({'portfolio': x.iloc[:len(x)//2], 'benchmark': x.iloc[len(x)//2:]})),
+        raw=False
+    ).iloc[:, 0] if False else aligned.iloc[:, 0].rolling(window).cov(aligned.iloc[:, 1]) / aligned.iloc[:, 1].rolling(window).var()
+
+
+# =============================================================================
+# ADVANCED DRAWDOWN ANALYSIS
+# =============================================================================
+
+
+def analyze_drawdowns(nav_series: pd.Series) -> dict:
+    """
+    Comprehensive drawdown analysis.
+
+    Args:
+        nav_series: NAV time series
+
+    Returns:
+        Dictionary with:
+        - current_drawdown: Current drawdown level
+        - current_duration_days: Days in current drawdown
+        - max_drawdown: Maximum historical drawdown
+        - max_duration_days: Longest drawdown duration
+        - avg_drawdown: Average drawdown depth
+        - avg_duration_days: Average drawdown duration
+        - num_drawdowns: Number of distinct drawdown periods
+        - time_underwater_pct: Percentage of time in drawdown
+    """
+    if len(nav_series) < 2:
+        return {
+            'current_drawdown': 0.0,
+            'current_duration_days': 0,
+            'max_drawdown': 0.0,
+            'max_duration_days': 0,
+            'avg_drawdown': 0.0,
+            'avg_duration_days': 0,
+            'num_drawdowns': 0,
+            'time_underwater_pct': 0.0,
+        }
+
+    running_max = nav_series.expanding().max()
+    drawdowns = (nav_series - running_max) / running_max
+    in_drawdown = drawdowns < 0
+
+    # Find all drawdown periods
+    drawdown_periods = []
+    in_dd = False
+    dd_start = None
+    dd_worst = 0.0
+
+    for idx, (date_idx, dd_val) in enumerate(drawdowns.items()):
+        if dd_val < 0 and not in_dd:
+            # Start of drawdown
+            in_dd = True
+            dd_start = date_idx
+            dd_worst = dd_val
+        elif dd_val < 0 and in_dd:
+            # Continue drawdown, track worst
+            if dd_val < dd_worst:
+                dd_worst = dd_val
+        elif dd_val >= 0 and in_dd:
+            # End of drawdown
+            in_dd = False
+            duration = (date_idx - dd_start).days if hasattr(date_idx, '__sub__') else 0
+            drawdown_periods.append({
+                'start': dd_start,
+                'end': date_idx,
+                'duration_days': duration,
+                'depth': dd_worst,
+            })
+            dd_worst = 0.0
+
+    # Handle if we're still in a drawdown
+    current_dd = float(drawdowns.iloc[-1]) if len(drawdowns) > 0 else 0.0
+    current_duration = 0
+    if in_dd and dd_start is not None:
+        last_date = nav_series.index[-1]
+        current_duration = (last_date - dd_start).days if hasattr(last_date, '__sub__') else 0
+
+    # Calculate statistics
+    max_duration = max([d['duration_days'] for d in drawdown_periods]) if drawdown_periods else 0
+    avg_dd = np.mean([d['depth'] for d in drawdown_periods]) if drawdown_periods else 0.0
+    avg_duration = int(np.mean([d['duration_days'] for d in drawdown_periods])) if drawdown_periods else 0
+    time_underwater = float(in_drawdown.sum() / len(in_drawdown)) if len(in_drawdown) > 0 else 0.0
+
+    return {
+        'current_drawdown': current_dd,
+        'current_duration_days': current_duration,
+        'max_drawdown': float(drawdowns.min()) if len(drawdowns) > 0 else 0.0,
+        'max_duration_days': max_duration,
+        'avg_drawdown': float(avg_dd),
+        'avg_duration_days': avg_duration,
+        'num_drawdowns': len(drawdown_periods),
+        'time_underwater_pct': time_underwater,
+    }
+
+
+def get_worst_drawdowns(nav_series: pd.Series, n: int = 5) -> pd.DataFrame:
+    """
+    Get the N worst drawdowns with full details.
+
+    Args:
+        nav_series: NAV time series
+        n: Number of worst drawdowns to return (default 5)
+
+    Returns:
+        DataFrame with columns:
+        - peak_date: Date of peak before drawdown
+        - trough_date: Date of maximum drawdown
+        - recovery_date: Date when NAV recovered to peak (None if not recovered)
+        - peak_nav: NAV at peak
+        - trough_nav: NAV at trough
+        - drawdown_pct: Drawdown percentage (negative)
+        - duration_days: Days from peak to trough
+        - recovery_days: Days from trough to recovery (None if not recovered)
+    """
+    if len(nav_series) < 2:
+        return pd.DataFrame()
+
+    running_max = nav_series.expanding().max()
+    drawdowns = (nav_series - running_max) / running_max
+
+    # Find all drawdown events (local minima in drawdown series)
+    drawdown_events = []
+    in_dd = False
+    dd_start = None
+    dd_worst = 0.0
+    dd_worst_idx = None
+
+    for idx, (date_idx, dd_val) in enumerate(drawdowns.items()):
+        if dd_val < 0 and not in_dd:
+            in_dd = True
+            dd_start = date_idx
+            dd_worst = dd_val
+            dd_worst_idx = date_idx
+        elif dd_val < 0 and in_dd:
+            if dd_val < dd_worst:
+                dd_worst = dd_val
+                dd_worst_idx = date_idx
+        elif dd_val >= 0 and in_dd:
+            in_dd = False
+            drawdown_events.append({
+                'trough_idx': dd_worst_idx,
+                'trough_dd': dd_worst,
+                'recovery_idx': date_idx,
+            })
+            dd_worst = 0.0
+
+    # Handle current drawdown (not yet recovered)
+    if in_dd and dd_worst_idx is not None:
+        drawdown_events.append({
+            'trough_idx': dd_worst_idx,
+            'trough_dd': dd_worst,
+            'recovery_idx': None,
+        })
+
+    # Sort by magnitude (most negative first)
+    drawdown_events.sort(key=lambda x: x['trough_dd'])
+    worst_n = drawdown_events[:n]
+
+    results = []
+    for event in worst_n:
+        trough_idx = event['trough_idx']
+        recovery_idx = event['recovery_idx']
+
+        # Find peak (last time at high water mark before trough)
+        pre_trough_max = running_max.loc[:trough_idx]
+        peak_mask = nav_series.loc[:trough_idx] == pre_trough_max
+        peak_dates = nav_series.loc[:trough_idx][peak_mask].index
+        peak_idx = peak_dates[-1] if len(peak_dates) > 0 else trough_idx
+
+        # Calculate durations
+        duration_days = (trough_idx - peak_idx).days if hasattr(trough_idx, '__sub__') else 0
+        recovery_days = (recovery_idx - trough_idx).days if recovery_idx is not None and hasattr(recovery_idx, '__sub__') else None
+
+        results.append({
+            'peak_date': peak_idx,
+            'trough_date': trough_idx,
+            'recovery_date': recovery_idx,
+            'peak_nav': float(nav_series.loc[peak_idx]),
+            'trough_nav': float(nav_series.loc[trough_idx]),
+            'drawdown_pct': float(event['trough_dd']),
+            'duration_days': duration_days,
+            'recovery_days': recovery_days,
+        })
+
+    return pd.DataFrame(results)
+
+
+# =============================================================================
+# COMPREHENSIVE INSTITUTIONAL METRICS
+# =============================================================================
+
+
+def calculate_institutional_metrics(
+    portfolio_nav: pd.Series,
+    benchmark_nav: Optional[pd.Series] = None,
+    risk_free_rate: float = 0.0,
+) -> dict:
+    """
+    Calculate all institutional-grade performance metrics in one call.
+
+    This is the main function for institutional reporting, calculating:
+    - Basic performance metrics (return, CAGR, Sharpe, Sortino, etc.)
+    - Risk metrics (VaR, CVaR at 95% and 99%)
+    - Benchmark-relative metrics (Beta, Alpha, IR, TE, Correlation)
+    - Drawdown analytics (current, max, duration, time underwater)
+
+    Args:
+        portfolio_nav: Portfolio NAV series
+        benchmark_nav: Optional benchmark NAV series (e.g., SPY)
+        risk_free_rate: Annual risk-free rate (default 0)
+
+    Returns:
+        Dictionary with all metrics
+    """
+    if len(portfolio_nav) < 2:
+        return {
+            # Basic metrics
+            'total_return': 0.0,
+            'cagr': 0.0,
+            'volatility': 0.0,
+            'sharpe_ratio': 0.0,
+            'sortino_ratio': 0.0,
+            'max_drawdown': 0.0,
+            'calmar_ratio': 0.0,
+            'win_rate': 0.0,
+            # Risk metrics
+            'var_95': 0.0,
+            'cvar_95': 0.0,
+            'var_99': 0.0,
+            'cvar_99': 0.0,
+            # Drawdown metrics
+            'current_drawdown': 0.0,
+            'current_dd_duration': 0,
+            'max_dd_duration': 0,
+            'time_underwater_pct': 0.0,
+        }
+
+    returns = calculate_returns(portfolio_nav)
+
+    # Basic metrics (existing)
+    metrics = {
+        'total_return': calculate_total_return(portfolio_nav),
+        'cagr': calculate_cagr(portfolio_nav),
+        'volatility': calculate_volatility(returns),
+        'sharpe_ratio': calculate_sharpe_ratio(returns, risk_free_rate),
+        'sortino_ratio': calculate_sortino_ratio(returns, risk_free_rate),
+        'max_drawdown': calculate_max_drawdown(portfolio_nav),
+        'calmar_ratio': calculate_calmar_ratio(portfolio_nav),
+        'win_rate': calculate_win_rate(returns),
+    }
+
+    # Risk metrics (new)
+    metrics.update({
+        'var_95': calculate_var(returns, 0.95),
+        'cvar_95': calculate_cvar(returns, 0.95),
+        'var_99': calculate_var(returns, 0.99),
+        'cvar_99': calculate_cvar(returns, 0.99),
+    })
+
+    # Benchmark-relative metrics (if benchmark provided)
+    if benchmark_nav is not None and len(benchmark_nav) >= 10:
+        bench_returns = calculate_returns(benchmark_nav)
+        metrics.update({
+            'beta': calculate_beta(returns, bench_returns),
+            'alpha': calculate_alpha(portfolio_nav, benchmark_nav, risk_free_rate),
+            'tracking_error': calculate_tracking_error(returns, bench_returns),
+            'information_ratio': calculate_information_ratio(portfolio_nav, benchmark_nav),
+            'correlation': calculate_correlation(returns, bench_returns),
+        })
+
+    # Drawdown metrics (enhanced)
+    dd_analysis = analyze_drawdowns(portfolio_nav)
+    metrics.update({
+        'current_drawdown': dd_analysis['current_drawdown'],
+        'current_dd_duration': dd_analysis['current_duration_days'],
+        'max_dd_duration': dd_analysis['max_duration_days'],
+        'avg_drawdown': dd_analysis['avg_drawdown'],
+        'num_drawdowns': dd_analysis['num_drawdowns'],
+        'time_underwater_pct': dd_analysis['time_underwater_pct'],
+    })
+
+    return metrics

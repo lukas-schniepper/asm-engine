@@ -210,9 +210,11 @@ def _render_performance_tracker():
     # Main content area
     tabs = st.tabs([
         "Overview",
+        "Risk Analytics",
         "Performance Comparison",
         "Benchmark Comparison",
         "Multi-Portfolio Compare",
+        "Drawdown Analysis",
         "Allocation History",
         "Signal Analysis",
         "Scraper View",
@@ -225,37 +227,51 @@ def _render_performance_tracker():
             start_date, end_date, nav_data
         )
 
-    # ===== Tab 2: Performance Comparison =====
+    # ===== Tab 2: Risk Analytics (NEW) =====
     with tabs[1]:
+        _render_risk_analytics_tab(
+            tracker, selected_portfolio_id, selected_variants,
+            start_date, end_date, nav_data
+        )
+
+    # ===== Tab 3: Performance Comparison =====
+    with tabs[2]:
         _render_comparison_tab(
             tracker, selected_portfolio_id, selected_variants,
             start_date, end_date
         )
 
-    # ===== Tab 3: Benchmark Comparison =====
-    with tabs[2]:
+    # ===== Tab 4: Benchmark Comparison =====
+    with tabs[3]:
         _render_benchmark_comparison_tab(
             tracker, selected_portfolio_id, portfolio, selected_variants,
             start_date, end_date
         )
 
-    # ===== Tab 4: Multi-Portfolio Comparison =====
-    with tabs[3]:
+    # ===== Tab 5: Multi-Portfolio Comparison =====
+    with tabs[4]:
         _render_multi_portfolio_comparison_tab(tracker, start_date, end_date)
 
-    # ===== Tab 5: Allocation History =====
-    with tabs[4]:
+    # ===== Tab 6: Drawdown Analysis (NEW) =====
+    with tabs[5]:
+        _render_drawdown_analysis_tab(
+            tracker, selected_portfolio_id, selected_variants,
+            start_date, end_date, nav_data
+        )
+
+    # ===== Tab 7: Allocation History =====
+    with tabs[6]:
         _render_allocation_tab(
             tracker, selected_portfolio_id, selected_variants,
             start_date, end_date
         )
 
-    # ===== Tab 6: Signal Analysis =====
-    with tabs[5]:
+    # ===== Tab 8: Signal Analysis =====
+    with tabs[7]:
         _render_signals_tab(tracker, start_date, end_date)
 
-    # ===== Tab 7: Scraper View =====
-    with tabs[6]:
+    # ===== Tab 9: Scraper View =====
+    with tabs[8]:
         _render_scraper_view_tab(tracker, start_date, end_date)
 
 
@@ -265,7 +281,16 @@ def _render_overview_tab(
     """Render the Overview tab."""
     from .components import render_kpi_grid, format_metrics_for_display
     from .charts import create_nav_chart, create_drawdown_chart
-    from ..tracking.metrics import calculate_drawdown_series
+    from ..tracking.metrics import (
+        calculate_drawdown_series,
+        calculate_returns,
+        calculate_var,
+        calculate_cvar,
+        calculate_beta,
+        calculate_alpha,
+        calculate_information_ratio,
+    )
+    from ..tracking.benchmark_adapter import get_benchmark_adapter
 
     st.markdown("### Portfolio Performance Overview")
 
@@ -277,6 +302,53 @@ def _render_overview_tab(
 
     kpis = format_metrics_for_display(perf)
     st.markdown(render_kpi_grid(kpis), unsafe_allow_html=True)
+
+    # Second row: Institutional Risk Metrics
+    st.markdown("#### Risk Metrics (vs SPY)")
+
+    if primary_variant in nav_data:
+        portfolio_nav = nav_data[primary_variant]
+        portfolio_returns = calculate_returns(portfolio_nav)
+
+        # Get SPY benchmark data
+        try:
+            benchmark_adapter = get_benchmark_adapter()
+            benchmark_nav = benchmark_adapter.get_benchmark_nav(
+                "SPY", start_date, end_date, normalize=False
+            )
+            benchmark_returns = benchmark_adapter.get_benchmark_returns(
+                "SPY", start_date, end_date
+            )
+
+            # Align returns
+            aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+            if len(aligned) >= 30:
+                aligned_port = aligned.iloc[:, 0]
+                aligned_bench = aligned.iloc[:, 1]
+
+                # Calculate metrics
+                beta = calculate_beta(aligned_port, aligned_bench)
+                alpha = calculate_alpha(portfolio_nav, benchmark_nav)
+                info_ratio = calculate_information_ratio(portfolio_nav, benchmark_nav)
+                var_95 = calculate_var(aligned_port, 0.95)
+                cvar_95 = calculate_cvar(aligned_port, 0.95)
+
+                # Display second row of KPIs
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    st.metric("Beta", f"{beta:.2f}")
+                with col2:
+                    st.metric("Alpha (Ann.)", f"{alpha*100:+.2f}%")
+                with col3:
+                    st.metric("Info Ratio", f"{info_ratio:.2f}")
+                with col4:
+                    st.metric("VaR (95%)", f"{var_95*100:.2f}%")
+                with col5:
+                    st.metric("CVaR (95%)", f"{cvar_95*100:.2f}%")
+            else:
+                st.caption("Insufficient data for risk metrics (need 30+ days).")
+        except Exception as e:
+            st.caption(f"Could not calculate risk metrics: {e}")
 
     # NAV Chart
     st.markdown("---")
@@ -307,14 +379,25 @@ def _render_overview_tab(
 
 
 def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date):
-    """Render the Performance Comparison tab."""
+    """Render the Performance Comparison tab with institutional metrics."""
     from .components import render_comparison_table
     from .charts import create_returns_bar_chart, create_comparison_chart
     from ..tracking import PeriodTypes
+    from ..tracking.metrics import (
+        calculate_returns,
+        calculate_var,
+        calculate_cvar,
+        calculate_beta,
+        calculate_alpha,
+        calculate_tracking_error,
+        calculate_information_ratio,
+        calculate_institutional_metrics,
+    )
+    from ..tracking.benchmark_adapter import get_benchmark_adapter
 
     st.markdown("### Variant Comparison")
 
-    # Get metrics for all variants
+    # Get basic metrics for all variants
     comparison_df = tracker.compare_variants(portfolio_id, start_date, end_date)
 
     if comparison_df.empty:
@@ -324,11 +407,92 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
     # Filter to selected variants
     comparison_df = comparison_df[[v for v in variants if v in comparison_df.columns]]
 
-    # Render comparison table
+    # Add institutional metrics section
+    st.markdown("#### Core Performance Metrics")
+
+    # Render basic comparison table
     st.markdown(
         render_comparison_table(comparison_df.T),  # Transpose so variants are columns
         unsafe_allow_html=True,
     )
+
+    # ===== Enhanced Institutional Metrics Table =====
+    st.markdown("---")
+    st.markdown("#### Institutional Risk Metrics (vs SPY)")
+
+    # Get NAV data for each variant and calculate institutional metrics
+    try:
+        benchmark_adapter = get_benchmark_adapter()
+        benchmark_nav = benchmark_adapter.get_benchmark_nav(
+            "SPY", start_date, end_date, normalize=False
+        )
+        benchmark_returns = benchmark_adapter.get_benchmark_returns(
+            "SPY", start_date, end_date
+        )
+
+        if benchmark_nav.empty:
+            st.caption("Could not load SPY benchmark data.")
+        else:
+            institutional_data = []
+
+            for variant in variants:
+                nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+                if nav_df.empty or "nav" not in nav_df.columns:
+                    continue
+
+                portfolio_nav = nav_df["nav"]
+                portfolio_returns = calculate_returns(portfolio_nav)
+
+                # Align with benchmark
+                aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+                if len(aligned) < 30:
+                    continue
+
+                aligned_port = aligned.iloc[:, 0]
+                aligned_bench = aligned.iloc[:, 1]
+
+                # Calculate all institutional metrics
+                inst_metrics = {
+                    "Variant": variant.replace("_", " ").title(),
+                    "VaR (95%)": f"{calculate_var(aligned_port, 0.95)*100:.2f}%",
+                    "CVaR (95%)": f"{calculate_cvar(aligned_port, 0.95)*100:.2f}%",
+                    "VaR (99%)": f"{calculate_var(aligned_port, 0.99)*100:.2f}%",
+                    "CVaR (99%)": f"{calculate_cvar(aligned_port, 0.99)*100:.2f}%",
+                    "Beta": f"{calculate_beta(aligned_port, aligned_bench):.2f}",
+                    "Alpha (Ann.)": f"{calculate_alpha(portfolio_nav, benchmark_nav)*100:+.2f}%",
+                    "Tracking Error": f"{calculate_tracking_error(aligned_port, aligned_bench)*100:.2f}%",
+                    "Info Ratio": f"{calculate_information_ratio(portfolio_nav, benchmark_nav):.2f}",
+                }
+                institutional_data.append(inst_metrics)
+
+            if institutional_data:
+                inst_df = pd.DataFrame(institutional_data)
+
+                # Style the dataframe
+                def color_risk_metrics(val):
+                    if isinstance(val, str) and "%" in val:
+                        try:
+                            num = float(val.replace("%", "").replace("+", ""))
+                            # For VaR/CVaR (negative numbers are worse)
+                            if num < -2:
+                                return "color: #ef4444"  # Red for high risk
+                            elif num > 0:
+                                return "color: #22c55e"  # Green for positive
+                        except:
+                            pass
+                    return ""
+
+                styled_inst = inst_df.style.applymap(
+                    color_risk_metrics,
+                    subset=["VaR (95%)", "CVaR (95%)", "VaR (99%)", "CVaR (99%)", "Alpha (Ann.)"]
+                ).set_properties(**{"text-align": "center"})
+
+                st.dataframe(styled_inst, use_container_width=True, hide_index=True)
+            else:
+                st.caption("Insufficient data to calculate institutional metrics.")
+
+    except Exception as e:
+        st.caption(f"Could not calculate institutional metrics: {e}")
 
     # Returns bar chart
     st.markdown("---")
@@ -1060,6 +1224,383 @@ def _render_signals_tab(tracker, start_date, end_date):
             st.info(f"Total trades in period: {len(trades)}")
         else:
             st.info("No trades executed in the selected period.")
+
+
+def _render_risk_analytics_tab(
+    tracker, portfolio_id, variants, start_date, end_date, nav_data
+):
+    """Render the Risk Analytics tab with VaR, Beta/Alpha, and rolling metrics."""
+    from ..tracking.metrics import (
+        calculate_returns,
+        calculate_var,
+        calculate_cvar,
+        calculate_beta,
+        calculate_alpha,
+        calculate_tracking_error,
+        calculate_information_ratio,
+        calculate_correlation,
+        calculate_rolling_sharpe,
+        calculate_rolling_volatility,
+        calculate_rolling_correlation,
+        calculate_rolling_beta,
+    )
+    from ..tracking.benchmark_adapter import get_benchmark_adapter
+    from .charts import (
+        create_var_histogram,
+        create_scatter_regression,
+        create_rolling_metrics_chart,
+    )
+    from .styles import COLORS
+    import numpy as np
+
+    st.markdown("### Risk Analytics")
+    st.markdown("Institutional-grade risk metrics including VaR, Beta, Alpha, and rolling analytics.")
+
+    # Benchmark selector
+    benchmark_adapter = get_benchmark_adapter()
+    benchmark_options = benchmark_adapter.list_benchmarks()
+
+    col1, col2 = st.columns([2, 3])
+    with col1:
+        selected_benchmark = st.selectbox(
+            "Benchmark",
+            options=list(benchmark_options.keys()),
+            format_func=lambda x: f"{x} - {benchmark_options[x]}",
+            key="risk_benchmark_select",
+        )
+
+    with col2:
+        rolling_window = st.selectbox(
+            "Rolling Window",
+            options=[30, 60, 90, 252],
+            index=1,  # Default to 60 days
+            format_func=lambda x: f"{x} days" + (" (~3mo)" if x == 60 else " (~1yr)" if x == 252 else ""),
+            key="risk_rolling_window",
+        )
+
+    # Get benchmark data
+    benchmark_nav = benchmark_adapter.get_benchmark_nav(
+        selected_benchmark, start_date, end_date, normalize=False
+    )
+    benchmark_returns = benchmark_adapter.get_benchmark_returns(
+        selected_benchmark, start_date, end_date
+    )
+
+    if benchmark_nav.empty:
+        st.warning(f"Could not load benchmark data for {selected_benchmark}. Make sure yfinance is installed.")
+        return
+
+    # Select variant to analyze
+    variant_to_analyze = st.selectbox(
+        "Analyze Variant",
+        options=variants,
+        format_func=lambda x: x.replace("_", " ").title(),
+        key="risk_variant_select",
+    )
+
+    if variant_to_analyze not in nav_data:
+        st.warning(f"No NAV data for {variant_to_analyze}.")
+        return
+
+    portfolio_nav = nav_data[variant_to_analyze]
+    portfolio_returns = calculate_returns(portfolio_nav)
+
+    # Align returns with benchmark
+    aligned_data = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+    if len(aligned_data) < 30:
+        st.warning("Insufficient data for risk analysis. Need at least 30 days of aligned returns.")
+        return
+
+    aligned_port_returns = aligned_data.iloc[:, 0]
+    aligned_bench_returns = aligned_data.iloc[:, 1]
+
+    # ===== Risk Metrics Section =====
+    st.markdown("---")
+    st.markdown("#### Value at Risk & Risk Metrics")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # VaR metrics
+        var_95 = calculate_var(aligned_port_returns, 0.95)
+        var_99 = calculate_var(aligned_port_returns, 0.99)
+        cvar_95 = calculate_cvar(aligned_port_returns, 0.95)
+        cvar_99 = calculate_cvar(aligned_port_returns, 0.99)
+
+        st.markdown("**Value at Risk (VaR)**")
+        vcol1, vcol2 = st.columns(2)
+        vcol1.metric("95% VaR (Daily)", f"{var_95*100:.2f}%")
+        vcol2.metric("99% VaR (Daily)", f"{var_99*100:.2f}%")
+
+        st.markdown("**Conditional VaR (Expected Shortfall)**")
+        vcol1, vcol2 = st.columns(2)
+        vcol1.metric("95% CVaR", f"{cvar_95*100:.2f}%")
+        vcol2.metric("99% CVaR", f"{cvar_99*100:.2f}%")
+
+        # VaR histogram
+        var_chart = create_var_histogram(
+            aligned_port_returns, var_95, var_99,
+            title="Return Distribution with VaR",
+            height=300,
+        )
+        st.plotly_chart(var_chart, use_container_width=True)
+
+    with col2:
+        # Beta & Alpha metrics
+        beta = calculate_beta(aligned_port_returns, aligned_bench_returns)
+        alpha = calculate_alpha(portfolio_nav, benchmark_nav)
+        tracking_error = calculate_tracking_error(aligned_port_returns, aligned_bench_returns)
+        info_ratio = calculate_information_ratio(portfolio_nav, benchmark_nav)
+        correlation = calculate_correlation(aligned_port_returns, aligned_bench_returns)
+
+        st.markdown(f"**Beta & Alpha (vs {selected_benchmark})**")
+        bcol1, bcol2 = st.columns(2)
+        bcol1.metric("Beta", f"{beta:.2f}")
+        bcol2.metric("Alpha (Ann.)", f"{alpha*100:+.2f}%")
+
+        st.markdown("**Active Risk Metrics**")
+        bcol1, bcol2 = st.columns(2)
+        bcol1.metric("Tracking Error", f"{tracking_error*100:.2f}%")
+        bcol2.metric("Information Ratio", f"{info_ratio:.2f}")
+
+        st.metric("Correlation", f"{correlation:.2f}")
+
+        # Scatter plot
+        scatter_chart = create_scatter_regression(
+            aligned_port_returns, aligned_bench_returns, beta, alpha,
+            title=f"Portfolio vs {selected_benchmark}",
+            height=300,
+        )
+        st.plotly_chart(scatter_chart, use_container_width=True)
+
+    # ===== Rolling Metrics Section =====
+    st.markdown("---")
+    st.markdown(f"#### Rolling Metrics ({rolling_window}-Day Window)")
+
+    # Calculate rolling metrics
+    rolling_sharpe = calculate_rolling_sharpe(aligned_port_returns, rolling_window)
+    rolling_vol = calculate_rolling_volatility(aligned_port_returns, rolling_window)
+    rolling_corr = calculate_rolling_correlation(aligned_port_returns, aligned_bench_returns, rolling_window)
+    rolling_beta = calculate_rolling_beta(aligned_port_returns, aligned_bench_returns, rolling_window)
+
+    # Rolling Sharpe chart
+    col1, col2 = st.columns(2)
+
+    with col1:
+        sharpe_chart = create_rolling_metrics_chart(
+            {"Rolling Sharpe": rolling_sharpe},
+            title="Rolling Sharpe Ratio",
+            height=280,
+        )
+        st.plotly_chart(sharpe_chart, use_container_width=True)
+
+    with col2:
+        vol_chart = create_rolling_metrics_chart(
+            {"Rolling Volatility": rolling_vol},
+            title="Rolling Volatility (Annualized)",
+            height=280,
+        )
+        st.plotly_chart(vol_chart, use_container_width=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        corr_chart = create_rolling_metrics_chart(
+            {"Rolling Correlation": rolling_corr},
+            title=f"Rolling Correlation (vs {selected_benchmark})",
+            height=280,
+        )
+        st.plotly_chart(corr_chart, use_container_width=True)
+
+    with col2:
+        beta_chart = create_rolling_metrics_chart(
+            {"Rolling Beta": rolling_beta},
+            title=f"Rolling Beta (vs {selected_benchmark})",
+            height=280,
+        )
+        st.plotly_chart(beta_chart, use_container_width=True)
+
+
+def _render_drawdown_analysis_tab(
+    tracker, portfolio_id, variants, start_date, end_date, nav_data
+):
+    """Render the Drawdown Analysis tab with detailed drawdown metrics and tables."""
+    from ..tracking.metrics import (
+        analyze_drawdowns,
+        get_worst_drawdowns,
+        calculate_drawdown_series,
+    )
+    from .charts import create_drawdown_highlight_chart
+    from .styles import COLORS
+
+    st.markdown("### Drawdown Analysis")
+    st.markdown("Comprehensive analysis of portfolio drawdowns including duration, recovery, and time underwater.")
+
+    # Select variant to analyze
+    variant_to_analyze = st.selectbox(
+        "Analyze Variant",
+        options=variants,
+        format_func=lambda x: x.replace("_", " ").title(),
+        key="dd_variant_select",
+    )
+
+    if variant_to_analyze not in nav_data:
+        st.warning(f"No NAV data for {variant_to_analyze}.")
+        return
+
+    portfolio_nav = nav_data[variant_to_analyze]
+
+    if len(portfolio_nav) < 10:
+        st.warning("Insufficient data for drawdown analysis.")
+        return
+
+    # Get drawdown analysis
+    dd_analysis = analyze_drawdowns(portfolio_nav)
+    drawdown_series = calculate_drawdown_series(portfolio_nav)
+
+    # ===== Summary Metrics =====
+    st.markdown("---")
+    st.markdown("#### Drawdown Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "Current Drawdown",
+            f"{dd_analysis['current_drawdown']*100:.2f}%",
+            delta=f"{dd_analysis['current_duration_days']} days" if dd_analysis['current_duration_days'] > 0 else "At high",
+        )
+
+    with col2:
+        st.metric(
+            "Max Drawdown",
+            f"{dd_analysis['max_drawdown']*100:.2f}%",
+        )
+
+    with col3:
+        st.metric(
+            "Avg Drawdown",
+            f"{dd_analysis['avg_drawdown']*100:.2f}%",
+        )
+
+    with col4:
+        st.metric(
+            "Time Underwater",
+            f"{dd_analysis['time_underwater_pct']*100:.1f}%",
+        )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Max Duration", f"{dd_analysis['max_duration_days']} days")
+
+    with col2:
+        st.metric("Avg Duration", f"{dd_analysis['avg_duration_days']} days")
+
+    with col3:
+        st.metric("# of Drawdowns", f"{dd_analysis['num_drawdowns']}")
+
+    with col4:
+        pass  # Placeholder for alignment
+
+    # ===== Drawdown Chart with Highlights =====
+    st.markdown("---")
+    st.markdown("#### Underwater Plot")
+
+    # Get worst drawdowns for highlighting
+    n_worst = st.slider("Highlight top N worst drawdowns", 1, 10, 5, key="dd_highlight_n")
+    worst_dds = get_worst_drawdowns(portfolio_nav, n=n_worst)
+
+    dd_chart = create_drawdown_highlight_chart(
+        drawdown_series,
+        worst_dds,
+        title="Drawdown Analysis (Worst Periods Highlighted)",
+        height=350,
+    )
+    st.plotly_chart(dd_chart, use_container_width=True)
+
+    # ===== Worst Drawdowns Table =====
+    st.markdown("---")
+    st.markdown("#### Worst Drawdowns")
+
+    if worst_dds.empty:
+        st.info("No drawdown periods found in the selected date range.")
+    else:
+        # Format for display
+        display_df = worst_dds.copy()
+        display_df["Rank"] = range(1, len(display_df) + 1)
+
+        # Format dates
+        display_df["Peak Date"] = display_df["peak_date"].apply(
+            lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else "-"
+        )
+        display_df["Trough Date"] = display_df["trough_date"].apply(
+            lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else "-"
+        )
+        display_df["Recovery Date"] = display_df["recovery_date"].apply(
+            lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else "Not Recovered"
+        )
+
+        # Format percentages
+        display_df["Drawdown"] = display_df["drawdown_pct"].apply(lambda x: f"{x*100:.2f}%")
+        display_df["Duration"] = display_df["duration_days"].apply(lambda x: f"{x} days")
+        display_df["Recovery Time"] = display_df["recovery_days"].apply(
+            lambda x: f"{int(x)} days" if pd.notna(x) else "N/A"
+        )
+
+        # Select columns for display
+        display_cols = [
+            "Rank", "Peak Date", "Trough Date", "Recovery Date",
+            "Drawdown", "Duration", "Recovery Time"
+        ]
+        final_df = display_df[display_cols]
+
+        # Style the table
+        def color_drawdown(val):
+            if "%" in str(val):
+                try:
+                    num = float(val.replace("%", ""))
+                    if num < -10:
+                        return "color: #dc3545; font-weight: 600"
+                    elif num < -5:
+                        return "color: #ef4444"
+                    else:
+                        return "color: #f97316"
+                except:
+                    pass
+            return ""
+
+        styled_df = final_df.style.applymap(
+            color_drawdown, subset=["Drawdown"]
+        ).set_properties(
+            **{"text-align": "center"}
+        )
+
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+    # ===== Compare Variants Drawdowns =====
+    if len(variants) > 1:
+        st.markdown("---")
+        st.markdown("#### Variant Comparison")
+
+        comparison_data = []
+        for variant in variants:
+            if variant in nav_data:
+                var_nav = nav_data[variant]
+                var_dd = analyze_drawdowns(var_nav)
+                comparison_data.append({
+                    "Variant": variant.replace("_", " ").title(),
+                    "Max DD": f"{var_dd['max_drawdown']*100:.2f}%",
+                    "Avg DD": f"{var_dd['avg_drawdown']*100:.2f}%",
+                    "Max Duration": f"{var_dd['max_duration_days']} days",
+                    "Avg Duration": f"{var_dd['avg_duration_days']} days",
+                    "Time Underwater": f"{var_dd['time_underwater_pct']*100:.1f}%",
+                    "# Drawdowns": var_dd['num_drawdowns'],
+                })
+
+        if comparison_data:
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
 
 def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_end_date):

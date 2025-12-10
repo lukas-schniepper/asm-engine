@@ -437,3 +437,340 @@ def create_comparison_chart(
     fig.update_layout(**layout)
 
     return fig
+
+
+# =============================================================================
+# INSTITUTIONAL RISK CHARTS
+# =============================================================================
+
+
+def create_var_histogram(
+    returns: pd.Series,
+    var_95: float,
+    var_99: float,
+    title: str = "Return Distribution with VaR",
+    height: int = 350,
+) -> go.Figure:
+    """
+    Create a return distribution histogram with VaR lines.
+
+    Args:
+        returns: Daily returns series
+        var_95: 95% VaR value
+        var_99: 99% VaR value
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    import numpy as np
+
+    fig = go.Figure()
+
+    # Histogram of returns
+    returns_pct = returns * 100  # Convert to percentage
+
+    fig.add_trace(go.Histogram(
+        x=returns_pct,
+        nbinsx=50,
+        name="Daily Returns",
+        marker_color=COLORS["primary"],
+        opacity=0.7,
+        hovertemplate="Return: %{x:.2f}%<br>Count: %{y}<extra></extra>",
+    ))
+
+    # VaR lines
+    fig.add_vline(
+        x=var_95 * 100,
+        line_dash="dash",
+        line_color=COLORS["warning"],
+        annotation_text=f"95% VaR: {var_95*100:.2f}%",
+        annotation_position="top left",
+    )
+
+    fig.add_vline(
+        x=var_99 * 100,
+        line_dash="dash",
+        line_color=COLORS["negative"],
+        annotation_text=f"99% VaR: {var_99*100:.2f}%",
+        annotation_position="top left",
+    )
+
+    layout = get_chart_layout(title, height, show_legend=False)
+    layout["xaxis"]["title"] = "Daily Return (%)"
+    layout["xaxis"]["ticksuffix"] = "%"
+    layout["yaxis"]["title"] = "Frequency"
+    fig.update_layout(**layout)
+
+    return fig
+
+
+def create_scatter_regression(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    beta: float,
+    alpha: float,
+    title: str = "Portfolio vs Benchmark Returns",
+    height: int = 400,
+) -> go.Figure:
+    """
+    Create a scatter plot with regression line for beta/alpha visualization.
+
+    Args:
+        portfolio_returns: Portfolio daily returns
+        benchmark_returns: Benchmark daily returns
+        beta: Calculated beta value
+        alpha: Calculated alpha value (annualized)
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    import numpy as np
+
+    # Align returns
+    aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+    aligned.columns = ['portfolio', 'benchmark']
+
+    port_pct = aligned['portfolio'] * 100
+    bench_pct = aligned['benchmark'] * 100
+
+    fig = go.Figure()
+
+    # Scatter points
+    fig.add_trace(go.Scatter(
+        x=bench_pct,
+        y=port_pct,
+        mode="markers",
+        name="Daily Returns",
+        marker=dict(
+            color=COLORS["primary"],
+            size=4,
+            opacity=0.5,
+        ),
+        hovertemplate="Benchmark: %{x:.2f}%<br>Portfolio: %{y:.2f}%<extra></extra>",
+    ))
+
+    # Regression line
+    x_range = np.linspace(bench_pct.min(), bench_pct.max(), 100)
+    daily_alpha = alpha / 252 * 100  # Convert annualized alpha to daily %
+    y_line = daily_alpha + beta * x_range
+
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=y_line,
+        mode="lines",
+        name=f"β={beta:.2f}, α={alpha*100:.1f}%/yr",
+        line=dict(color=COLORS["negative"], width=2),
+    ))
+
+    # Zero lines
+    fig.add_hline(y=0, line_dash="dot", line_color=COLORS["border"])
+    fig.add_vline(x=0, line_dash="dot", line_color=COLORS["border"])
+
+    layout = get_chart_layout(title, height)
+    layout["xaxis"]["title"] = "Benchmark Return (%)"
+    layout["yaxis"]["title"] = "Portfolio Return (%)"
+    layout["xaxis"]["ticksuffix"] = "%"
+    layout["yaxis"]["ticksuffix"] = "%"
+    fig.update_layout(**layout)
+
+    return fig
+
+
+def create_rolling_metrics_chart(
+    metrics_dict: dict[str, pd.Series],
+    title: str = "Rolling Metrics",
+    height: int = 350,
+) -> go.Figure:
+    """
+    Create a multi-line chart for rolling metrics.
+
+    Args:
+        metrics_dict: Dict mapping metric names to series
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    fig = go.Figure()
+
+    colors = [COLORS["chart_1"], COLORS["chart_2"], COLORS["chart_3"],
+              COLORS["chart_4"], COLORS["chart_5"]]
+
+    for i, (name, series) in enumerate(metrics_dict.items()):
+        if series.empty:
+            continue
+
+        color = colors[i % len(colors)]
+
+        fig.add_trace(go.Scatter(
+            x=series.index,
+            y=series.values,
+            name=name,
+            mode="lines",
+            line=dict(color=color, width=2),
+            hovertemplate=f"{name}: %{{y:.2f}}<extra></extra>",
+        ))
+
+    layout = get_chart_layout(title, height)
+    layout["xaxis"]["title"] = "Date"
+    fig.update_layout(**layout)
+
+    return fig
+
+
+def create_drawdown_highlight_chart(
+    drawdown_series: pd.Series,
+    worst_drawdowns: pd.DataFrame,
+    title: str = "Drawdown Analysis",
+    height: int = 350,
+) -> go.Figure:
+    """
+    Create a drawdown chart with worst periods highlighted.
+
+    Args:
+        drawdown_series: Drawdown series (negative values)
+        worst_drawdowns: DataFrame with worst drawdowns info
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    fig = go.Figure()
+
+    # Main drawdown area
+    dd_pct = drawdown_series * 100
+
+    fig.add_trace(go.Scatter(
+        x=dd_pct.index,
+        y=dd_pct.values,
+        name="Drawdown",
+        mode="lines",
+        fill="tozeroy",
+        line=dict(color=COLORS["negative"], width=1.5),
+        fillcolor="rgba(239, 68, 68, 0.2)",
+        hovertemplate="Drawdown: %{y:.2f}%<extra></extra>",
+    ))
+
+    # Highlight worst drawdown periods
+    if not worst_drawdowns.empty:
+        for i, row in worst_drawdowns.head(3).iterrows():
+            peak_date = row['peak_date']
+            recovery_date = row.get('recovery_date', None) or dd_pct.index[-1]
+
+            fig.add_vrect(
+                x0=peak_date,
+                x1=recovery_date,
+                fillcolor="rgba(239, 68, 68, 0.1)",
+                line_width=0,
+                annotation_text=f"#{i+1}: {row['drawdown_pct']*100:.1f}%",
+                annotation_position="top left",
+            )
+
+    layout = get_chart_layout(title, height, show_legend=False)
+    layout["yaxis"]["title"] = "Drawdown (%)"
+    layout["yaxis"]["ticksuffix"] = "%"
+    layout["xaxis"]["title"] = "Date"
+    fig.update_layout(**layout)
+
+    return fig
+
+
+def create_correlation_heatmap(
+    correlation_matrix: pd.DataFrame,
+    title: str = "Portfolio Correlation Matrix",
+    height: int = 400,
+) -> go.Figure:
+    """
+    Create a correlation heatmap for multiple portfolios.
+
+    Args:
+        correlation_matrix: DataFrame with correlation values
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    # Clean names for display
+    clean_names = [name.replace("_EqualWeight", "").replace("_", " ")
+                   for name in correlation_matrix.columns]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=correlation_matrix.values,
+        x=clean_names,
+        y=clean_names,
+        colorscale=[
+            [0, COLORS["negative"]],
+            [0.5, COLORS["bg_secondary"]],
+            [1, COLORS["positive"]],
+        ],
+        zmin=-1,
+        zmax=1,
+        text=[[f"{v:.2f}" for v in row] for row in correlation_matrix.values],
+        texttemplate="%{text}",
+        textfont={"size": 10},
+        hovertemplate="%{x}<br>%{y}<br>Correlation: %{z:.3f}<extra></extra>",
+        colorbar={"title": "Correlation"},
+    ))
+
+    layout = get_chart_layout(title, height, show_legend=False)
+    layout["xaxis"]["title"] = ""
+    layout["yaxis"]["title"] = ""
+    fig.update_layout(**layout)
+
+    return fig
+
+
+def create_efficient_frontier_scatter(
+    portfolios: list[dict],
+    title: str = "Risk-Return Profile",
+    height: int = 400,
+) -> go.Figure:
+    """
+    Create a scatter plot of portfolios on risk-return space.
+
+    Args:
+        portfolios: List of dicts with 'name', 'volatility', 'return', optionally 'sharpe'
+        title: Chart title
+        height: Chart height
+
+    Returns:
+        Plotly Figure
+    """
+    fig = go.Figure()
+
+    for portfolio in portfolios:
+        name = portfolio.get('name', 'Portfolio')
+        vol = portfolio.get('volatility', 0) * 100
+        ret = portfolio.get('return', 0) * 100
+        sharpe = portfolio.get('sharpe', None)
+
+        hover_text = f"{name}<br>Return: {ret:.1f}%<br>Volatility: {vol:.1f}%"
+        if sharpe is not None:
+            hover_text += f"<br>Sharpe: {sharpe:.2f}"
+
+        fig.add_trace(go.Scatter(
+            x=[vol],
+            y=[ret],
+            mode="markers+text",
+            name=name.replace("_EqualWeight", "").replace("_", " "),
+            marker=dict(size=12),
+            text=[name.replace("_EqualWeight", "").replace("_", " ")[:15]],
+            textposition="top center",
+            hovertemplate=hover_text + "<extra></extra>",
+        ))
+
+    layout = get_chart_layout(title, height)
+    layout["xaxis"]["title"] = "Annualized Volatility (%)"
+    layout["yaxis"]["title"] = "Annualized Return (%)"
+    layout["xaxis"]["ticksuffix"] = "%"
+    layout["yaxis"]["ticksuffix"] = "%"
+    fig.update_layout(**layout)
+
+    return fig
