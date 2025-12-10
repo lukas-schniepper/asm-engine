@@ -2472,15 +2472,14 @@ def show_portfolio_selection_ui():
     # Always show sliders (disabled for presets, enabled for custom)
     is_custom = selected_preset == "Custom"
 
+    # 5 metrics for COMBINED portfolio optimization
+    # Note: Diversification benefit is already captured in combined Sharpe/Sortino
     weight_labels = {
-        "sharpe": ("Sharpe Ratio", "Higher = prefer high Sharpe"),
-        "sortino": ("Sortino Ratio", "Higher = prefer high Sortino"),
-        "calmar": ("Calmar Ratio", "Higher = prefer high Calmar"),
-        "upi": ("Ulcer Perf. Index", "Higher = prefer high UPI"),
-        "cagr": ("CAGR", "Higher = prefer high returns"),
-        "max_dd": ("Max Drawdown", "Higher = prefer LOW drawdowns"),
-        "volatility": ("Volatility", "Higher = prefer LOW volatility"),
-        "correlation": ("Correlation", "Higher = prefer LOW correlation"),
+        "sharpe": ("Sharpe Ratio", "Risk-adjusted return (symmetric)"),
+        "sortino": ("Sortino Ratio", "Downside risk-adjusted return"),
+        "calmar": ("Calmar Ratio", "Return vs max drawdown"),
+        "upi": ("Ulcer Perf. Index", "Return vs drawdown pain"),
+        "cagr": ("CAGR", "Pure return preference"),
     }
 
     for key, (label, help_text) in weight_labels.items():
@@ -2694,21 +2693,30 @@ def show_portfolio_selection_ui():
                 f"MaxDD: {metrics['max_dd']*100:.1f}%"
             )
 
-        # Show scores
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Score", f"{recommended['total_score']:.3f}")
-        col2.metric("Avg Correlation", f"{recommended['avg_correlation']:.2f}")
-        col3.metric("Diversification Factor", f"{recommended['diversification_factor']:.2f}")
+        # Show COMBINED portfolio metrics (this is what matters!)
+        combined = recommended.get("combined_metrics", {})
+        st.markdown("**Combined Portfolio Metrics:**")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Sharpe", f"{combined.get('sharpe', 0):.2f}")
+        col2.metric("Sortino", f"{combined.get('sortino', 0):.2f}")
+        col3.metric("Calmar", f"{combined.get('calmar', 0):.2f}")
+        col4.metric("CAGR", f"{combined.get('cagr', 0)*100:.1f}%")
+        col5.metric("Max DD", f"{combined.get('max_dd', 0)*100:.1f}%")
+
+        # Show correlation info
+        st.caption(f"Avg pairwise correlation: {recommended['avg_correlation']:.2f} | Score: {recommended['total_score']:.3f}")
 
         # Show alternatives
         if result["alternatives"]:
             with st.expander("View Alternative Combinations"):
                 for i, alt in enumerate(result["alternatives"], 2):
                     combo_str = " + ".join(alt["combination"])
+                    alt_combined = alt.get("combined_metrics", {})
                     st.markdown(
                         f"**#{i}**: {combo_str}  \n"
-                        f"Score: {alt['total_score']:.3f}, "
-                        f"Avg Corr: {alt['avg_correlation']:.2f}"
+                        f"Combined Sharpe: {alt_combined.get('sharpe', 0):.2f}, "
+                        f"CAGR: {alt_combined.get('cagr', 0)*100:.1f}%, "
+                        f"Corr: {alt['avg_correlation']:.2f}"
                     )
 
     # ==========================================================================

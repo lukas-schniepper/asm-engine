@@ -30,31 +30,35 @@ from ..tracking.metrics import (
 
 
 # =============================================================================
-# OPTIMIZATION PRESETS
+# OPTIMIZATION PRESETS (5 metrics - combined portfolio focused)
 # =============================================================================
+# Note: Metrics are calculated on the COMBINED portfolio, not individual strategies.
+# Diversification benefit is already captured in the combined metrics (better Sharpe
+# when combining uncorrelated portfolios), so no separate correlation weight needed.
+#
+# - Sharpe: Return / Volatility (risk-adjusted, symmetric)
+# - Sortino: Return / Downside Vol (only penalizes losses)
+# - Calmar: CAGR / MaxDD (return vs worst drawdown)
+# - UPI: CAGR / Ulcer Index (return vs drawdown pain)
+# - CAGR: Pure return
 
 OPTIMIZATION_PRESETS = {
     "Risk-Adjusted Focus": {
-        "sharpe": 3, "sortino": 2, "calmar": 1, "upi": 2,
-        "cagr": 1, "max_dd": 2, "volatility": 1, "correlation": 2,
+        "sharpe": 3, "sortino": 2, "calmar": 2, "upi": 2, "cagr": 1,
     },
     "Absolute Returns": {
-        "sharpe": 1, "sortino": 1, "calmar": 1, "upi": 1,
-        "cagr": 3, "max_dd": 1, "volatility": 0, "correlation": 2,
+        "sharpe": 1, "sortino": 1, "calmar": 1, "upi": 1, "cagr": 3,
     },
     "Capital Preservation": {
-        "sharpe": 1, "sortino": 2, "calmar": 2, "upi": 3,
-        "cagr": 0, "max_dd": 3, "volatility": 3, "correlation": 1,
+        "sharpe": 1, "sortino": 2, "calmar": 3, "upi": 3, "cagr": 0,
     },
-    "Max Diversification": {
-        "sharpe": 1, "sortino": 0, "calmar": 0, "upi": 1,
-        "cagr": 1, "max_dd": 1, "volatility": 1, "correlation": 3,
+    "Balanced": {
+        "sharpe": 2, "sortino": 2, "calmar": 2, "upi": 2, "cagr": 2,
     },
 }
 
 DEFAULT_WEIGHTS = {
-    "sharpe": 2, "sortino": 2, "calmar": 1, "upi": 2,
-    "cagr": 2, "max_dd": 2, "volatility": 1, "correlation": 2,
+    "sharpe": 2, "sortino": 2, "calmar": 2, "upi": 2, "cagr": 1,
 }
 
 
@@ -231,83 +235,76 @@ def normalize_metrics(
 
 
 # =============================================================================
-# COMBINATION SCORING
+# COMBINATION SCORING (using COMBINED portfolio metrics)
 # =============================================================================
 
 
-def score_combination(
+def score_combination_combined(
     combo: Tuple[str, ...],
-    normalized_metrics: Dict[str, Dict[str, float]],
+    portfolio_returns: Dict[str, pd.Series],
     corr_matrix: pd.DataFrame,
     weights: Dict[str, float],
 ) -> Dict:
     """
-    Score a portfolio combination.
+    Score a portfolio combination based on COMBINED portfolio metrics.
+
+    This is the correct approach for portfolio selection - we evaluate the
+    actual combined portfolio's risk-adjusted performance, not individual metrics.
 
     Args:
         combo: Tuple of portfolio names in the combination
-        normalized_metrics: Normalized metrics for all candidates
+        portfolio_returns: Daily returns by portfolio name
         corr_matrix: Correlation matrix of all candidates
         weights: Metric weights (0-3 scale)
 
     Returns:
-        Dictionary with scoring breakdown
+        Dictionary with combined portfolio metrics and scoring
     """
     n = len(combo)
 
-    # Individual metric scores (excluding correlation)
-    metric_weights = {k: v for k, v in weights.items() if k != "correlation"}
-    total_weight = sum(metric_weights.values())
+    # Build combined returns (equal weight)
+    returns_list = [portfolio_returns[name] for name in combo]
+    returns_df = pd.DataFrame({name: portfolio_returns[name] for name in combo})
+    returns_df = returns_df.dropna()
 
-    if total_weight == 0:
-        total_weight = 1  # Avoid division by zero
+    if len(returns_df) < 30:
+        return {
+            "combination": combo,
+            "total_score": -999,
+            "error": "Insufficient aligned data",
+        }
 
-    individual_scores = []
-    for name in combo:
-        metrics = normalized_metrics[name]
-        score = sum(
-            weights.get(m, 0) * metrics.get(m, 0)
-            for m in metric_weights
-        )
-        individual_scores.append(score / total_weight)
+    # Equal weight combined returns
+    combined_returns = returns_df.mean(axis=1)
 
-    avg_individual_score = np.mean(individual_scores)
+    # Build combined NAV
+    combined_nav = (1 + combined_returns).cumprod() * 100
 
-    # Average pairwise correlation
+    # Calculate COMBINED portfolio metrics
+    combined_metrics = {
+        "sharpe": calculate_sharpe_ratio(combined_returns),
+        "sortino": calculate_sortino_ratio(combined_returns),
+        "calmar": calculate_calmar_ratio(combined_nav),
+        "upi": calculate_upi(combined_nav),
+        "cagr": calculate_cagr(combined_nav),
+        "max_dd": calculate_max_drawdown(combined_nav),
+        "volatility": calculate_volatility(combined_returns),
+    }
+
+    # Calculate average pairwise correlation
     corr_pairs = []
     for i in range(n):
         for j in range(i + 1, n):
             corr_val = corr_matrix.loc[combo[i], combo[j]]
             corr_pairs.append(corr_val)
-
     avg_correlation = np.mean(corr_pairs) if corr_pairs else 0
-
-    # Correlation penalty (higher correlation = lower score)
-    corr_weight = weights.get("correlation", 0)
-    # Normalize correlation score: 0 correlation = full bonus, 1 correlation = no bonus
-    corr_bonus = (1 - avg_correlation) * (corr_weight / 3)  # Scale by weight/max_weight
-
-    # Total score
-    total_score = avg_individual_score + corr_bonus
-
-    # Estimate combined Sharpe using diversification formula
-    # SR_combined ~ SR_avg * sqrt(n) / sqrt(1 + (n-1) * avg_corr)
-    avg_sharpe = np.mean([
-        normalized_metrics[name].get("sharpe", 0) for name in combo
-    ])
-    if avg_correlation < 0.99:
-        diversification_factor = np.sqrt(n) / np.sqrt(1 + (n - 1) * avg_correlation)
-    else:
-        diversification_factor = 1.0
 
     return {
         "combination": combo,
-        "total_score": total_score,
-        "avg_individual_score": avg_individual_score,
-        "avg_correlation": avg_correlation,
-        "corr_bonus": corr_bonus,
-        "diversification_factor": diversification_factor,
-        "estimated_combined_sharpe_improvement": diversification_factor,
+        "combined_metrics": combined_metrics,
+        "avg_correlation": avg_correlation,  # Still useful to display
+        "total_score": 0,  # Will be calculated after normalization
+        "aligned_days": len(returns_df),
     }
 
 
@@ -323,14 +320,17 @@ def find_optimal_portfolio_combination(
     min_data_points: int = 30,
 ) -> Dict:
     """
-    Find optimal combination of N portfolios.
+    Find optimal combination of N portfolios based on COMBINED portfolio metrics.
 
-    This is the main optimization function that:
-    1. Calculates metrics for each candidate
-    2. Normalizes metrics for fair comparison
-    3. Builds correlation matrix
-    4. Evaluates all C(n, n_select) combinations
-    5. Returns top recommendations
+    This optimizer evaluates the actual combined portfolio performance for each
+    combination, which is the correct approach for portfolio selection.
+
+    Algorithm:
+    1. Generate all C(n, n_select) combinations
+    2. For each combination, simulate equal-weight combined portfolio
+    3. Calculate combined portfolio metrics (Sharpe, Sortino, Calmar, UPI, CAGR)
+    4. Normalize metrics across all combinations
+    5. Score and rank combinations
 
     Args:
         portfolio_returns: Dictionary mapping candidate names to daily returns Series
@@ -340,11 +340,10 @@ def find_optimal_portfolio_combination(
 
     Returns:
         Dictionary with:
-        - recommended: Top combination with details
+        - recommended: Top combination with combined portfolio metrics
         - alternatives: Next 4 best combinations
         - all_scores: All combination scores (sorted)
-        - portfolio_metrics: Raw metrics for each portfolio
-        - normalized_metrics: Normalized metrics
+        - portfolio_metrics: Raw metrics for each individual portfolio
         - correlation_matrix: Full correlation matrix
         - candidates_count: Number of valid candidates
         - combinations_evaluated: Number of combinations scored
@@ -366,37 +365,66 @@ def find_optimal_portfolio_combination(
             "combinations_evaluated": 0,
         }
 
-    # Step 1: Calculate metrics for each candidate
+    # Step 1: Calculate metrics for each individual candidate (for display)
     portfolio_metrics = {}
     portfolio_navs = {}
 
     for name, returns in valid_candidates.items():
-        # Build NAV from returns
         nav = (1 + returns).cumprod() * 100
         nav = nav.dropna()
         portfolio_navs[name] = nav
         portfolio_metrics[name] = calculate_candidate_metrics(nav, returns)
 
-    # Step 2: Normalize metrics
-    normalized_metrics = normalize_metrics(portfolio_metrics)
-
-    # Step 3: Build correlation matrix
+    # Step 2: Build correlation matrix
     returns_df = pd.DataFrame(valid_candidates)
     returns_df = returns_df.dropna()
     corr_matrix = returns_df.corr()
 
-    # Step 4: Generate and score all combinations
+    # Step 3: Generate all combinations and calculate COMBINED metrics
     all_combos = list(combinations(valid_candidates.keys(), n_select))
 
     scores = []
     for combo in all_combos:
-        score = score_combination(combo, normalized_metrics, corr_matrix, weights)
-        scores.append(score)
+        score = score_combination_combined(combo, valid_candidates, corr_matrix, weights)
+        if score.get("total_score", 0) != -999:  # Skip invalid combinations
+            scores.append(score)
 
-    # Step 5: Sort by total score descending
+    if not scores:
+        return {
+            "error": "No valid combinations found with sufficient aligned data.",
+            "candidates_count": len(valid_candidates),
+            "combinations_evaluated": len(all_combos),
+        }
+
+    # Step 4: Normalize combined metrics across all combinations for fair scoring
+    # Extract all combined metrics for normalization
+    all_combined_metrics = {
+        f"combo_{i}": s["combined_metrics"] for i, s in enumerate(scores)
+    }
+    normalized_combined = normalize_metrics(all_combined_metrics)
+
+    # Step 5: Calculate final scores using normalized combined metrics
+    metric_keys = ["sharpe", "sortino", "calmar", "upi", "cagr"]
+    metric_weights = {k: weights.get(k, 0) for k in metric_keys}
+    total_weight = sum(metric_weights.values())
+    if total_weight == 0:
+        total_weight = 1
+
+    for i, score in enumerate(scores):
+        norm_metrics = normalized_combined[f"combo_{i}"]
+
+        # Weighted normalized score (diversification already captured in combined metrics)
+        metric_score = sum(
+            metric_weights.get(m, 0) * norm_metrics.get(m, 0)
+            for m in metric_keys
+        ) / total_weight
+
+        score["total_score"] = metric_score
+
+    # Step 6: Sort by total score descending
     scores.sort(key=lambda x: x["total_score"], reverse=True)
 
-    # Enrich top results with raw metrics
+    # Enrich top results with individual portfolio metrics
     for score in scores[:5]:
         combo = score["combination"]
         score["portfolio_details"] = {
@@ -408,7 +436,6 @@ def find_optimal_portfolio_combination(
         "alternatives": scores[1:5] if len(scores) > 1 else [],
         "all_scores": scores,
         "portfolio_metrics": portfolio_metrics,
-        "normalized_metrics": normalized_metrics,
         "correlation_matrix": corr_matrix,
         "candidates_count": len(valid_candidates),
         "combinations_evaluated": len(all_combos),
