@@ -204,7 +204,7 @@ if st.session_state.switch_to_backtester:
 
 page = st.sidebar.radio(
     "🗂️ Seite wählen",
-    ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker"],
+    ["Backtester", "Optimizer", "Data Mgmt", "Performance Tracker", "Portfolio Selection"],
     key="page_radio"
 )
 
@@ -2321,6 +2321,484 @@ def show_performance_tracker_safe():
             "The rest of the application continues to work normally."
         )
 
+
+# =============================================================================
+# === Portfolio Selection Page ===
+# =============================================================================
+def show_portfolio_selection_ui():
+    """
+    Portfolio Selection page - helps select optimal portfolios for live trading.
+
+    Features:
+    - Risk-adjusted metrics ranking
+    - Correlation analysis
+    - Optimal combination finder
+    - Combined portfolio simulation
+    """
+    import numpy as np
+    import pandas as pd
+    from datetime import date, timedelta
+
+    st.title("📊 Portfolio Selection")
+    st.markdown("Select optimal portfolios for live trading based on risk-adjusted metrics and diversification.")
+
+    try:
+        from AlphaMachine_core.tracking.tracker import PerformanceTracker
+        from AlphaMachine_core.tracking import Variants
+        from AlphaMachine_core.selection import (
+            find_optimal_portfolio_combination,
+            simulate_combined_portfolio,
+            calculate_candidate_metrics,
+            OPTIMIZATION_PRESETS,
+            DEFAULT_WEIGHTS,
+        )
+        from AlphaMachine_core.ui.charts import create_correlation_heatmap, create_nav_chart
+    except ImportError as e:
+        st.error(f"Could not import required modules: {e}")
+        return
+
+    # Initialize tracker
+    tracker = PerformanceTracker()
+
+    # Get all portfolios
+    all_portfolios = tracker.list_portfolios(active_only=True)
+    if not all_portfolios:
+        st.warning("No portfolios available.")
+        return
+
+    portfolio_map = {p.name: p.id for p in sorted(all_portfolios, key=lambda x: x.name)}
+
+    # ==========================================================================
+    # SIDEBAR CONTROLS
+    # ==========================================================================
+    st.sidebar.markdown("### Selection Settings")
+
+    # Variant selection
+    variant_options = Variants.all()
+    selected_variants = st.sidebar.multiselect(
+        "Variants to Include",
+        options=variant_options,
+        default=[Variants.RAW],
+        help="Select which strategy variants to analyze",
+    )
+
+    if not selected_variants:
+        st.warning("Please select at least one variant.")
+        return
+
+    # Date range - find available dates
+    all_min_dates = []
+    all_max_dates = []
+    for p in all_portfolios:
+        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
+        if not nav_df.empty:
+            all_min_dates.append(nav_df.index.min().date())
+            all_max_dates.append(nav_df.index.max().date())
+
+    if not all_min_dates:
+        st.warning("No NAV data available.")
+        return
+
+    available_min = min(all_min_dates)
+    available_max = max(all_max_dates)
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Date Range")
+
+    start_date = st.sidebar.date_input(
+        "Start Date",
+        value=max(available_min, available_max - timedelta(days=365)),
+        min_value=available_min,
+        max_value=available_max,
+        key="ps_start_date",
+    )
+    end_date = st.sidebar.date_input(
+        "End Date",
+        value=available_max,
+        min_value=available_min,
+        max_value=available_max,
+        key="ps_end_date",
+    )
+
+    # Number of portfolios to select
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Optimization")
+
+    n_select = st.sidebar.slider(
+        "Portfolios to Select",
+        min_value=2,
+        max_value=5,
+        value=3,
+        help="Number of portfolios to recommend",
+    )
+
+    # Preset selection
+    preset_options = ["Custom"] + list(OPTIMIZATION_PRESETS.keys())
+    selected_preset = st.sidebar.radio(
+        "Optimization Preset",
+        options=preset_options,
+        index=0,
+        help="Pre-configured weight settings or custom",
+    )
+
+    # Weight sliders
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Metric Weights (0-3)")
+    st.sidebar.caption("Higher = more important in selection")
+
+    if selected_preset != "Custom":
+        weights = OPTIMIZATION_PRESETS[selected_preset].copy()
+        st.sidebar.info(f"Using **{selected_preset}** preset weights")
+    else:
+        weights = {}
+
+    # Always show sliders (disabled for presets, enabled for custom)
+    is_custom = selected_preset == "Custom"
+
+    weight_labels = {
+        "sharpe": ("Sharpe Ratio", "Higher = prefer high Sharpe"),
+        "sortino": ("Sortino Ratio", "Higher = prefer high Sortino"),
+        "calmar": ("Calmar Ratio", "Higher = prefer high Calmar"),
+        "upi": ("Ulcer Perf. Index", "Higher = prefer high UPI"),
+        "cagr": ("CAGR", "Higher = prefer high returns"),
+        "max_dd": ("Max Drawdown", "Higher = prefer LOW drawdowns"),
+        "volatility": ("Volatility", "Higher = prefer LOW volatility"),
+        "correlation": ("Correlation", "Higher = prefer LOW correlation"),
+    }
+
+    for key, (label, help_text) in weight_labels.items():
+        default_val = weights.get(key, DEFAULT_WEIGHTS.get(key, 2))
+        if is_custom:
+            weights[key] = st.sidebar.slider(
+                label,
+                min_value=0,
+                max_value=3,
+                value=default_val,
+                help=help_text,
+                key=f"ps_weight_{key}",
+            )
+        else:
+            st.sidebar.markdown(f"**{label}**: {default_val}")
+
+    # ==========================================================================
+    # COLLECT CANDIDATE DATA
+    # ==========================================================================
+    st.markdown("---")
+
+    # Build candidates: portfolio + variant combinations
+    candidates = {}
+    candidate_navs = {}
+
+    def clean_name(name: str) -> str:
+        return name.replace("_EqualWeight", "").replace("_", " ")
+
+    with st.spinner("Loading portfolio data..."):
+        for portfolio_name, portfolio_id in portfolio_map.items():
+            for variant in selected_variants:
+                nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+
+                if nav_df.empty or "nav" not in nav_df.columns:
+                    continue
+
+                nav_series = nav_df["nav"]
+                if len(nav_series) < 30:
+                    continue
+
+                # Get returns
+                if "daily_return" in nav_df.columns:
+                    returns = nav_df["daily_return"].dropna()
+                else:
+                    returns = nav_series.pct_change().dropna()
+
+                if len(returns) < 30:
+                    continue
+
+                # Build candidate name
+                variant_short = {
+                    "raw": "Raw",
+                    "conservative": "Cons",
+                    "trend_regime_v2": "Trend",
+                }.get(variant, variant)
+
+                candidate_name = f"{clean_name(portfolio_name)} ({variant_short})"
+                candidates[candidate_name] = returns
+                candidate_navs[candidate_name] = nav_series
+
+    # ==========================================================================
+    # SECTION 1: CANDIDATE OVERVIEW
+    # ==========================================================================
+    st.markdown("### 📋 Candidate Overview")
+
+    if len(candidates) < 2:
+        st.warning(
+            f"Only {len(candidates)} candidate(s) found with 30+ days of data. "
+            "Need at least 2 candidates for optimization. "
+            "Try selecting more variants or adjusting the date range."
+        )
+        return
+
+    st.info(f"**{len(candidates)}** portfolio+variant combinations with 30+ days of data")
+
+    # Show candidate list in expander
+    with st.expander("View All Candidates", expanded=False):
+        candidate_list = sorted(candidates.keys())
+        cols = st.columns(3)
+        for i, name in enumerate(candidate_list):
+            cols[i % 3].markdown(f"• {name}")
+
+    # ==========================================================================
+    # SECTION 2: METRICS RANKING TABLE
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown("### 📈 Risk-Adjusted Metrics Ranking")
+
+    # Calculate metrics for all candidates
+    metrics_data = []
+    for name, returns in candidates.items():
+        nav = candidate_navs[name]
+        metrics = calculate_candidate_metrics(nav, returns)
+        metrics_data.append({
+            "Candidate": name,
+            "Sharpe": metrics["sharpe"],
+            "Sortino": metrics["sortino"],
+            "Calmar": metrics["calmar"],
+            "UPI": metrics["upi"],
+            "CAGR": metrics["cagr"],
+            "Max DD": metrics["max_dd"],
+            "Volatility": metrics["volatility"],
+        })
+
+    metrics_df = pd.DataFrame(metrics_data)
+
+    # Format for display
+    def format_metrics_df(df):
+        formatted = df.copy()
+        formatted["Sharpe"] = formatted["Sharpe"].apply(lambda x: f"{x:.2f}")
+        formatted["Sortino"] = formatted["Sortino"].apply(lambda x: f"{x:.2f}")
+        formatted["Calmar"] = formatted["Calmar"].apply(lambda x: f"{x:.2f}")
+        formatted["UPI"] = formatted["UPI"].apply(lambda x: f"{x:.2f}")
+        formatted["CAGR"] = formatted["CAGR"].apply(lambda x: f"{x*100:.1f}%")
+        formatted["Max DD"] = formatted["Max DD"].apply(lambda x: f"{x*100:.1f}%")
+        formatted["Volatility"] = formatted["Volatility"].apply(lambda x: f"{x*100:.1f}%")
+        return formatted
+
+    # Sort by Sharpe by default
+    metrics_df_sorted = metrics_df.sort_values("Sharpe", ascending=False)
+    st.dataframe(
+        format_metrics_df(metrics_df_sorted),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ==========================================================================
+    # SECTION 3: CORRELATION MATRIX
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown("### 🔗 Correlation Matrix")
+
+    # Build correlation matrix
+    returns_df = pd.DataFrame(candidates)
+    returns_df = returns_df.dropna()
+    corr_matrix = returns_df.corr()
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        # Heatmap
+        heatmap = create_correlation_heatmap(
+            corr_matrix,
+            title="Returns Correlation",
+            height=max(400, 30 * len(corr_matrix)),
+        )
+        st.plotly_chart(heatmap, use_container_width=True)
+
+    with col2:
+        # Low correlation pairs
+        st.markdown("**Low Correlation Pairs** (<0.4)")
+
+        low_corr_pairs = []
+        candidate_names = corr_matrix.columns.tolist()
+        for i in range(len(candidate_names)):
+            for j in range(i + 1, len(candidate_names)):
+                corr_val = corr_matrix.iloc[i, j]
+                if corr_val < 0.4:
+                    low_corr_pairs.append({
+                        "Pair": f"{candidate_names[i][:15]}... & {candidate_names[j][:15]}...",
+                        "Corr": f"{corr_val:.2f}",
+                    })
+
+        if low_corr_pairs:
+            low_corr_pairs.sort(key=lambda x: float(x["Corr"]))
+            st.dataframe(
+                pd.DataFrame(low_corr_pairs[:10]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No pairs with correlation < 0.4 found.")
+
+    # ==========================================================================
+    # SECTION 4: OPTIMAL COMBINATION FINDER
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown("### 🎯 Optimal Portfolio Combination")
+
+    with st.spinner("Finding optimal combinations..."):
+        result = find_optimal_portfolio_combination(
+            candidates,
+            n_select=n_select,
+            weights=weights,
+            min_data_points=30,
+        )
+
+    if "error" in result:
+        st.error(result["error"])
+        return
+
+    st.success(
+        f"Evaluated **{result['combinations_evaluated']}** combinations "
+        f"from {result['candidates_count']} candidates"
+    )
+
+    # Show top recommendation
+    recommended = result["recommended"]
+    if recommended:
+        st.markdown("#### 🏆 Top Recommendation")
+
+        # Show combination
+        combo_names = recommended["combination"]
+        st.markdown("**Selected Portfolios:**")
+        for i, name in enumerate(combo_names, 1):
+            metrics = result["portfolio_metrics"][name]
+            st.markdown(
+                f"{i}. **{name}** — "
+                f"Sharpe: {metrics['sharpe']:.2f}, "
+                f"CAGR: {metrics['cagr']*100:.1f}%, "
+                f"MaxDD: {metrics['max_dd']*100:.1f}%"
+            )
+
+        # Show scores
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Score", f"{recommended['total_score']:.3f}")
+        col2.metric("Avg Correlation", f"{recommended['avg_correlation']:.2f}")
+        col3.metric("Diversification Factor", f"{recommended['diversification_factor']:.2f}")
+
+        # Show alternatives
+        if result["alternatives"]:
+            with st.expander("View Alternative Combinations"):
+                for i, alt in enumerate(result["alternatives"], 2):
+                    combo_str = " + ".join(alt["combination"])
+                    st.markdown(
+                        f"**#{i}**: {combo_str}  \n"
+                        f"Score: {alt['total_score']:.3f}, "
+                        f"Avg Corr: {alt['avg_correlation']:.2f}"
+                    )
+
+    # ==========================================================================
+    # SECTION 5: COMBINED PORTFOLIO SIMULATION
+    # ==========================================================================
+    st.markdown("---")
+    st.markdown("### 📉 Combined Portfolio Simulation")
+
+    if recommended:
+        selected_combo = list(recommended["combination"])
+
+        # Weight sliders
+        st.markdown("**Portfolio Weights:**")
+        weight_cols = st.columns(len(selected_combo))
+        sim_weights = []
+
+        for i, (col, name) in enumerate(zip(weight_cols, selected_combo)):
+            w = col.slider(
+                name[:20],
+                min_value=0.0,
+                max_value=1.0,
+                value=1.0 / len(selected_combo),
+                step=0.05,
+                key=f"ps_sim_weight_{i}",
+            )
+            sim_weights.append(w)
+
+        # Normalize weights
+        total_weight = sum(sim_weights)
+        if total_weight > 0:
+            sim_weights = [w / total_weight for w in sim_weights]
+
+        # Run simulation
+        sim_result = simulate_combined_portfolio(
+            candidates,
+            selected_combo,
+            weights=sim_weights,
+        )
+
+        if "error" not in sim_result:
+            # Show combined metrics
+            col1, col2, col3, col4 = st.columns(4)
+            metrics = sim_result["metrics"]
+            col1.metric("Combined Sharpe", f"{metrics['sharpe']:.2f}")
+            col2.metric("Combined CAGR", f"{metrics['cagr']*100:.1f}%")
+            col3.metric("Combined Max DD", f"{metrics['max_dd']*100:.1f}%")
+            col4.metric("Aligned Days", sim_result["aligned_days"])
+
+            # NAV chart
+            st.markdown("**Combined vs Individual NAV:**")
+
+            # Build chart data
+            chart_data = {"Combined": sim_result["nav"]}
+            for name in selected_combo:
+                if name in candidate_navs:
+                    # Normalize to start at 100
+                    nav = candidate_navs[name]
+                    chart_data[name] = nav / nav.iloc[0] * 100
+
+            chart_df = pd.DataFrame(chart_data)
+            st.line_chart(chart_df)
+
+            # Metrics comparison
+            with st.expander("View Detailed Metrics Comparison"):
+                comparison_data = [
+                    {
+                        "Portfolio": "**Combined**",
+                        "Sharpe": f"{metrics['sharpe']:.2f}",
+                        "Sortino": f"{metrics['sortino']:.2f}",
+                        "CAGR": f"{metrics['cagr']*100:.1f}%",
+                        "Max DD": f"{metrics['max_dd']*100:.1f}%",
+                        "Volatility": f"{metrics['volatility']*100:.1f}%",
+                    }
+                ]
+                for name in selected_combo:
+                    m = result["portfolio_metrics"][name]
+                    comparison_data.append({
+                        "Portfolio": name,
+                        "Sharpe": f"{m['sharpe']:.2f}",
+                        "Sortino": f"{m['sortino']:.2f}",
+                        "CAGR": f"{m['cagr']*100:.1f}%",
+                        "Max DD": f"{m['max_dd']*100:.1f}%",
+                        "Volatility": f"{m['volatility']*100:.1f}%",
+                    })
+                st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+
+    # ==========================================================================
+    # SECTION 6: ROBUSTNESS ANALYSIS
+    # ==========================================================================
+    if recommended and "error" not in sim_result:
+        with st.expander("📊 Robustness Analysis"):
+            st.markdown("**Rolling Sharpe (60-day window):**")
+
+            rolling_sharpe = sim_result.get("rolling_sharpe")
+            if rolling_sharpe is not None and len(rolling_sharpe) > 0:
+                st.line_chart(rolling_sharpe.dropna())
+
+                sharpe_stability = sim_result.get("sharpe_stability", 0)
+                st.metric(
+                    "Sharpe Stability (StdDev)",
+                    f"{sharpe_stability:.3f}",
+                    help="Lower = more consistent performance",
+                )
+            else:
+                st.caption("Insufficient data for rolling analysis.")
+
+
 # -----------------------------------------------------------------------------
 # 5) Router
 # -----------------------------------------------------------------------------
@@ -2330,6 +2808,8 @@ elif page == "Optimizer":
     show_optimizer_ui()
 elif page == "Performance Tracker":
     show_performance_tracker_safe()
+elif page == "Portfolio Selection":
+    show_portfolio_selection_ui()
 else:
     show_data_ui()
 
