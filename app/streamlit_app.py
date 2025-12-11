@@ -1423,12 +1423,12 @@ def _show_cleanup_unused_tickers_ui():
     st.info("""
     This tool identifies **truly orphaned** tickers that can be safely deleted:
     - Never been in any portfolio (current or historical)
-    - From sources that have been deleted
+    - **Not** in any current month source (e.g., Topweights_2025-12)
 
     **Preserved data:**
     - Tickers currently in portfolios
     - Tickers historically in portfolios (for backtesting)
-    - Tickers in active sources (for screening)
+    - Tickers in current month sources (for screening)
     """)
 
     # Step 1: Gather all data
@@ -1460,38 +1460,69 @@ def _show_cleanup_unused_tickers_ui():
     used_in_portfolios = price_tickers & portfolio_tickers
     never_in_portfolios = price_tickers - portfolio_tickers
 
+    # Determine "current" sources - sources containing current year-month
+    from datetime import datetime
+    current_period = datetime.now().strftime("%Y-%m")  # e.g., "2025-12"
+    current_sources = {s for s in active_sources if current_period in s}
+
+    # Get tickers from current sources
+    tickers_in_current_sources = set()
+    try:
+        with get_session() as session:
+            for source in current_sources:
+                tickers_raw = session.exec(
+                    select(TickerPeriod.ticker).distinct().where(
+                        TickerPeriod.source == source
+                    )
+                ).all()
+                tickers_in_current_sources.update(str(t) for t in tickers_raw if t)
+    except Exception:
+        pass
+
+    # Truly orphaned = never in portfolios AND not in current sources
+    truly_orphaned = never_in_portfolios - tickers_in_current_sources
+    in_current_source_only = never_in_portfolios & tickers_in_current_sources
+
     # Display summary
     st.markdown("### Summary")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Tickers in Price DB", len(price_tickers))
     col2.metric("Ever in Portfolios", len(used_in_portfolios),
                 help="These are SAFE - used or were used in portfolios")
-    col3.metric("Never in Portfolios", len(never_in_portfolios),
-                help="These MAY be deletable if from inactive sources")
+    col3.metric("In Current Sources", len(in_current_source_only),
+                help=f"Never in portfolios but in {current_period} sources - KEPT for screening")
+    col4.metric("Truly Orphaned", len(truly_orphaned),
+                help="Never in portfolios AND not in current sources - SAFE to delete", delta=f"-{len(truly_orphaned)}" if truly_orphaned else None, delta_color="normal")
 
-    if not never_in_portfolios:
-        st.success("✅ All tickers in the price database have been in portfolios. Nothing to clean up!")
+    # Show current sources info
+    if current_sources:
+        st.info(f"📅 Current sources ({current_period}): {', '.join(sorted(current_sources))}")
+
+    if not truly_orphaned:
+        st.success("✅ No truly orphaned tickers found. All tickers are either in portfolios or current sources.")
+        if in_current_source_only:
+            st.info(f"ℹ️ {len(in_current_source_only)} tickers are in current sources but not in portfolios - these are preserved for screening.")
         return
 
-    # Show tickers never in portfolios, grouped by source
+    # Show tickers that are truly orphaned
     st.markdown("---")
-    st.markdown("### Tickers Never in Any Portfolio")
+    st.markdown("### Truly Orphaned Tickers")
     st.warning(f"""
-    The following **{len(never_in_portfolios)}** tickers have price data but have **never** been in any portfolio.
+    The following **{len(truly_orphaned)}** tickers:
+    - Have **never** been in any portfolio (current or historical)
+    - Are **not** in any current source ({current_period})
 
-    They are grouped by source below. You may want to:
-    - **Keep** tickers from active screening sources (e.g., Topweights)
-    - **Delete** tickers from old/deleted sources you no longer use
+    These are from **old/deleted sources** and are safe to delete.
     """)
 
     # Get ticker info with sources
     try:
         with get_session() as session:
-            # Get all ticker_period entries for tickers never in portfolios
+            # Get all ticker_period entries for truly orphaned tickers
             ticker_source_data = []
             source_summary = {}
 
-            for ticker in sorted(never_in_portfolios):
+            for ticker in sorted(truly_orphaned):
                 # Get sources for this ticker
                 sources = session.exec(
                     select(TickerPeriod.source).distinct().where(
@@ -1522,8 +1553,8 @@ def _show_cleanup_unused_tickers_ui():
                     source_summary[src]["records"] += count
 
             # Show source summary first
-            st.markdown("#### Summary by Source")
-            st.caption("These sources contain tickers that have NEVER been in any portfolio:")
+            st.markdown("#### Summary by Source (Old Sources Only)")
+            st.caption("These are OLD sources (not current month) with orphaned tickers:")
             source_df = pd.DataFrame([
                 {"Source": src, "Tickers (never in portfolio)": len(data["tickers"]), "Records": data["records"]}
                 for src, data in sorted(source_summary.items())
@@ -1539,17 +1570,17 @@ def _show_cleanup_unused_tickers_ui():
 
     except Exception as e:
         st.warning(f"Could not load source info: {e}")
-        st.write(sorted(never_in_portfolios))
+        st.write(sorted(truly_orphaned))
         source_summary = {}
 
     # Deletion options
     st.markdown("---")
     st.markdown("### Delete Options")
-    st.caption("Only delete sources you no longer need for screening. Keep active sources like Topweights!")
+    st.caption("These tickers are safe to delete - they are from old sources and were never in any portfolio.")
 
     delete_option = st.radio(
         "What do you want to delete?",
-        ["Delete by SOURCE (recommended)", "Delete specific tickers", "Delete ALL tickers never in portfolios"],
+        ["Delete by SOURCE (recommended)", "Delete specific tickers", "Delete ALL orphaned tickers"],
         key="cleanup_delete_option"
     )
 
@@ -1573,15 +1604,14 @@ def _show_cleanup_unused_tickers_ui():
     elif delete_option == "Delete specific tickers":
         selected_to_delete = st.multiselect(
             "Select tickers to delete:",
-            options=sorted(never_in_portfolios),
+            options=sorted(truly_orphaned),
             key="cleanup_select_tickers"
         )
         tickers_to_delete = set(selected_to_delete)
 
-    else:  # Delete ALL
-        st.error(f"⚠️ This will delete ALL {len(never_in_portfolios)} tickers that have never been in portfolios!")
-        st.warning("This includes tickers from ACTIVE sources like Topweights - consider deleting by source instead!")
-        tickers_to_delete = never_in_portfolios
+    else:  # Delete ALL orphaned
+        st.info(f"This will delete ALL {len(truly_orphaned)} truly orphaned tickers (from old sources, never in portfolios).")
+        tickers_to_delete = truly_orphaned
 
     if not tickers_to_delete:
         st.info("Select tickers to delete.")

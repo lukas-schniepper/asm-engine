@@ -1637,18 +1637,8 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         """Remove _EqualWeight suffix for cleaner dropdown display."""
         return name.replace("_EqualWeight", "")
 
-    # Default selection: SA portfolios, SPY, plus additional portfolios
-    default_portfolio_keywords = [
-        "SA Large Caps", "SA Mid Caps", "SPY",
-        "50er", "30er", "TR10 Large Caps", "TR10", "TW30", "TR10_EqualWeight"
-    ]
-    default_selection = []
-    for keyword in default_portfolio_keywords:
-        for pname in portfolios_with_data:
-            if keyword.lower().replace(" ", "") in pname.lower().replace("_", "").replace(" ", ""):
-                if pname not in default_selection:
-                    default_selection.append(pname)
-                break
+    # Default selection: ALL portfolios with NAV data
+    default_selection = portfolios_with_data.copy()
 
     # Use session state to persist selection across visits
     session_key = "multi_portfolio_selected_portfolios"
