@@ -1404,8 +1404,16 @@ def _show_delete_portfolios_sources_ui():
 
 def _show_cleanup_unused_tickers_ui():
     """
-    UI for cleaning up price data for tickers that are not used in any portfolio.
-    This helps keep the database size manageable.
+    UI for cleaning up price data for tickers that are truly orphaned.
+
+    A ticker is SAFE to delete only if:
+    1. It has NEVER been in any portfolio holdings (current or historical)
+    2. It's not part of any active source
+
+    This preserves:
+    - Tickers currently in portfolios
+    - Tickers that were historically in portfolios
+    - Tickers in active screening sources (Topweights, etc.)
     """
     from AlphaMachine_core.tracking.models import PortfolioHolding
     from AlphaMachine_core.models import TickerPeriod
@@ -1413,14 +1421,20 @@ def _show_cleanup_unused_tickers_ui():
 
     st.subheader("Cleanup Unused Price Data")
     st.info("""
-    This tool identifies tickers in the price database (ticker_period) that are **not used**
-    in any portfolio holdings. Deleting these can help reduce database size.
+    This tool identifies **truly orphaned** tickers that can be safely deleted:
+    - Never been in any portfolio (current or historical)
+    - From sources that have been deleted
+
+    **Preserved data:**
+    - Tickers currently in portfolios
+    - Tickers historically in portfolios (for backtesting)
+    - Tickers in active sources (for screening)
     """)
 
-    # Step 1: Find all tickers used in portfolios
+    # Step 1: Gather all data
     try:
         with get_session() as session:
-            # Get all unique tickers from portfolio holdings
+            # Get ALL tickers ever in portfolio holdings (current + historical)
             portfolio_tickers_raw = session.exec(
                 select(PortfolioHolding.ticker).distinct()
             ).all()
@@ -1432,47 +1446,52 @@ def _show_cleanup_unused_tickers_ui():
             ).all()
             price_tickers = set(str(t) for t in price_tickers_raw if t)
 
+            # Get all active sources
+            active_sources_raw = session.exec(
+                select(TickerPeriod.source).distinct()
+            ).all()
+            active_sources = set(str(s) for s in active_sources_raw if s)
+
     except Exception as e:
         st.error(f"Error loading tickers: {e}")
         return
 
-    # Calculate unused tickers
-    unused_tickers = price_tickers - portfolio_tickers
-    used_tickers = price_tickers & portfolio_tickers
+    # Calculate categories
+    used_in_portfolios = price_tickers & portfolio_tickers
+    never_in_portfolios = price_tickers - portfolio_tickers
 
     # Display summary
+    st.markdown("### Summary")
     col1, col2, col3 = st.columns(3)
     col1.metric("Tickers in Price DB", len(price_tickers))
-    col2.metric("Used in Portfolios", len(used_tickers))
-    col3.metric("Unused (Deletable)", len(unused_tickers),
-                delta=f"-{len(unused_tickers)}" if unused_tickers else None,
-                delta_color="inverse")
+    col2.metric("Ever in Portfolios", len(used_in_portfolios),
+                help="These are SAFE - used or were used in portfolios")
+    col3.metric("Never in Portfolios", len(never_in_portfolios),
+                help="These MAY be deletable if from inactive sources")
 
-    if not unused_tickers:
-        st.success("✅ All tickers in the price database are used in portfolios. Nothing to clean up!")
+    if not never_in_portfolios:
+        st.success("✅ All tickers in the price database have been in portfolios. Nothing to clean up!")
         return
 
-    # Show unused tickers grouped by source
+    # Show tickers never in portfolios, grouped by source
     st.markdown("---")
-    st.markdown("### Unused Tickers by Source")
-    st.info("""
-    **Note:** These tickers are in your price database but NOT in any portfolio holdings.
-    They may still be useful for:
-    - Screening/backtesting (e.g., Topweights lists)
-    - Historical analysis
-    - Future portfolio candidates
+    st.markdown("### Tickers Never in Any Portfolio")
+    st.warning(f"""
+    The following **{len(never_in_portfolios)}** tickers have price data but have **never** been in any portfolio.
 
-    Review the sources below before deleting!
+    They are grouped by source below. You may want to:
+    - **Keep** tickers from active screening sources (e.g., Topweights)
+    - **Delete** tickers from old/deleted sources you no longer use
     """)
 
     # Get ticker info with sources
     try:
         with get_session() as session:
-            # Get all ticker_period entries for unused tickers
+            # Get all ticker_period entries for tickers never in portfolios
             ticker_source_data = []
             source_summary = {}
 
-            for ticker in sorted(unused_tickers):
+            for ticker in sorted(never_in_portfolios):
                 # Get sources for this ticker
                 sources = session.exec(
                     select(TickerPeriod.source).distinct().where(
@@ -1504,8 +1523,9 @@ def _show_cleanup_unused_tickers_ui():
 
             # Show source summary first
             st.markdown("#### Summary by Source")
+            st.caption("These sources contain tickers that have NEVER been in any portfolio:")
             source_df = pd.DataFrame([
-                {"Source": src, "Unused Tickers": len(data["tickers"]), "Records": data["records"]}
+                {"Source": src, "Tickers (never in portfolio)": len(data["tickers"]), "Records": data["records"]}
                 for src, data in sorted(source_summary.items())
             ])
             st.dataframe(source_df, use_container_width=True)
@@ -1519,16 +1539,17 @@ def _show_cleanup_unused_tickers_ui():
 
     except Exception as e:
         st.warning(f"Could not load source info: {e}")
-        st.write(sorted(unused_tickers))
+        st.write(sorted(never_in_portfolios))
         source_summary = {}
 
     # Deletion options
     st.markdown("---")
     st.markdown("### Delete Options")
+    st.caption("Only delete sources you no longer need for screening. Keep active sources like Topweights!")
 
     delete_option = st.radio(
         "What do you want to delete?",
-        ["Delete by SOURCE (recommended)", "Delete specific tickers", "Delete ALL unused tickers"],
+        ["Delete by SOURCE (recommended)", "Delete specific tickers", "Delete ALL tickers never in portfolios"],
         key="cleanup_delete_option"
     )
 
@@ -1537,10 +1558,10 @@ def _show_cleanup_unused_tickers_ui():
     if delete_option == "Delete by SOURCE (recommended)":
         if source_summary:
             sources_to_delete = st.multiselect(
-                "Select SOURCES to delete (all unused tickers from these sources):",
+                "Select SOURCES to delete (tickers never in portfolios from these sources):",
                 options=sorted(source_summary.keys()),
                 key="cleanup_select_sources",
-                help="This deletes all unused tickers that belong to the selected sources"
+                help="Only deletes tickers from selected sources that have NEVER been in any portfolio"
             )
             for src in sources_to_delete:
                 tickers_to_delete.update(source_summary[src]["tickers"])
@@ -1552,14 +1573,15 @@ def _show_cleanup_unused_tickers_ui():
     elif delete_option == "Delete specific tickers":
         selected_to_delete = st.multiselect(
             "Select tickers to delete:",
-            options=sorted(unused_tickers),
+            options=sorted(never_in_portfolios),
             key="cleanup_select_tickers"
         )
         tickers_to_delete = set(selected_to_delete)
 
     else:  # Delete ALL
-        st.error("⚠️ This will delete ALL 600+ unused tickers! Are you sure you don't need them for screening/backtesting?")
-        tickers_to_delete = unused_tickers
+        st.error(f"⚠️ This will delete ALL {len(never_in_portfolios)} tickers that have never been in portfolios!")
+        st.warning("This includes tickers from ACTIVE sources like Topweights - consider deleting by source instead!")
+        tickers_to_delete = never_in_portfolios
 
     if not tickers_to_delete:
         st.info("Select tickers to delete.")
