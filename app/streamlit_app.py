@@ -1423,12 +1423,12 @@ def _show_cleanup_unused_tickers_ui():
     st.info("""
     This tool identifies **truly orphaned** tickers that can be safely deleted:
     - Never been in any portfolio (current or historical)
-    - **Not** in any current month source (e.g., Topweights_2025-12)
+    - **Not** in the selected period (default: latest month)
 
     **Preserved data:**
     - Tickers currently in portfolios
     - Tickers historically in portfolios (for backtesting)
-    - Tickers in current month sources (for screening)
+    - Tickers in the selected period (for screening)
     """)
 
     # Step 1: Gather all data
@@ -1460,28 +1460,51 @@ def _show_cleanup_unused_tickers_ui():
     used_in_portfolios = price_tickers & portfolio_tickers
     never_in_portfolios = price_tickers - portfolio_tickers
 
-    # Determine "current" sources - sources containing current year-month
-    from datetime import datetime
-    current_period = datetime.now().strftime("%Y-%m")  # e.g., "2025-12"
-    current_sources = {s for s in active_sources if current_period in s}
-
-    # Get tickers from current sources
-    tickers_in_current_sources = set()
+    # Get all unique periods from ticker_period.start_date
+    from sqlalchemy import func
+    all_periods = []
     try:
         with get_session() as session:
-            for source in current_sources:
-                tickers_raw = session.exec(
-                    select(TickerPeriod.ticker).distinct().where(
-                        TickerPeriod.source == source
-                    )
-                ).all()
-                tickers_in_current_sources.update(str(t) for t in tickers_raw if t)
+            periods_raw = session.exec(
+                select(func.to_char(TickerPeriod.start_date, 'YYYY-MM').label('period'))
+                .distinct()
+                .order_by(func.to_char(TickerPeriod.start_date, 'YYYY-MM').desc())
+            ).all()
+            all_periods = [str(p) for p in periods_raw if p]
     except Exception:
         pass
 
-    # Truly orphaned = never in portfolios AND not in current sources
-    truly_orphaned = never_in_portfolios - tickers_in_current_sources
-    in_current_source_only = never_in_portfolios & tickers_in_current_sources
+    # Period selection dropdown (default to latest)
+    st.markdown("### Select Current Period")
+    if all_periods:
+        selected_period = st.selectbox(
+            "Protect tickers from this period (keep for screening):",
+            options=all_periods,
+            index=0,  # Default to latest
+            key="cleanup_period_selector",
+            help="Tickers with start_date in this period will NOT be deleted"
+        )
+    else:
+        selected_period = None
+        st.warning("No periods found in database")
+
+    # Get tickers from selected period
+    tickers_in_current_period = set()
+    if selected_period:
+        try:
+            with get_session() as session:
+                tickers_raw = session.exec(
+                    select(TickerPeriod.ticker).distinct().where(
+                        func.to_char(TickerPeriod.start_date, 'YYYY-MM') == selected_period
+                    )
+                ).all()
+                tickers_in_current_period.update(str(t) for t in tickers_raw if t)
+        except Exception:
+            pass
+
+    # Truly orphaned = never in portfolios AND not in current period
+    truly_orphaned = never_in_portfolios - tickers_in_current_period
+    in_current_period_only = never_in_portfolios & tickers_in_current_period
 
     # Display summary
     st.markdown("### Summary")
@@ -1489,19 +1512,15 @@ def _show_cleanup_unused_tickers_ui():
     col1.metric("Tickers in Price DB", len(price_tickers))
     col2.metric("Ever in Portfolios", len(used_in_portfolios),
                 help="These are SAFE - used or were used in portfolios")
-    col3.metric("In Current Sources", len(in_current_source_only),
-                help=f"Never in portfolios but in {current_period} sources - KEPT for screening")
+    col3.metric(f"In {selected_period or 'N/A'}", len(in_current_period_only),
+                help=f"Never in portfolios but in {selected_period} period - KEPT for screening")
     col4.metric("Truly Orphaned", len(truly_orphaned),
-                help="Never in portfolios AND not in current sources - SAFE to delete", delta=f"-{len(truly_orphaned)}" if truly_orphaned else None, delta_color="normal")
-
-    # Show current sources info
-    if current_sources:
-        st.info(f"📅 Current sources ({current_period}): {', '.join(sorted(current_sources))}")
+                help="Never in portfolios AND not in current period - SAFE to delete", delta=f"-{len(truly_orphaned)}" if truly_orphaned else None, delta_color="normal")
 
     if not truly_orphaned:
-        st.success("✅ No truly orphaned tickers found. All tickers are either in portfolios or current sources.")
-        if in_current_source_only:
-            st.info(f"ℹ️ {len(in_current_source_only)} tickers are in current sources but not in portfolios - these are preserved for screening.")
+        st.success("✅ No truly orphaned tickers found. All tickers are either in portfolios or the selected period.")
+        if in_current_period_only:
+            st.info(f"ℹ️ {len(in_current_period_only)} tickers are in {selected_period} but not in portfolios - these are preserved for screening.")
         return
 
     # Show tickers that are truly orphaned
@@ -1510,9 +1529,9 @@ def _show_cleanup_unused_tickers_ui():
     st.warning(f"""
     The following **{len(truly_orphaned)}** tickers:
     - Have **never** been in any portfolio (current or historical)
-    - Are **not** in any current source ({current_period})
+    - Are **not** in the selected period ({selected_period})
 
-    These are from **old/deleted sources** and are safe to delete.
+    These are from **older periods** and are safe to delete.
     """)
 
     # Get ticker info with sources
