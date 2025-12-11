@@ -86,6 +86,22 @@ jobs:
           echo "Running: $CMD"
           eval $CMD
 
+      - name: Run Data Quality Check
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: |
+          echo "Running data quality check..."
+          python scripts/data_quality_monitor.py --days 1 --email "$ALERT_EMAIL" || true
+          # Note: We use || true to not fail the workflow on warnings
+          # The script will send email alerts for issues
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

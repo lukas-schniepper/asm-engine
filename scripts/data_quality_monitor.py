@@ -239,10 +239,317 @@ def check_audit_log_issues(days_back: int = 7) -> List[Dict]:
     return issues
 
 
+def reconcile_mtd_from_prices(
+    portfolios: List,
+    tracker,
+    tolerance_pct: float = 0.5,
+) -> List[Dict]:
+    """
+    Reconcile MTD (month-to-date) NAV against actual stock prices.
+
+    Recalculates NAV from holdings and prices, compares to stored NAV.
+    Flags any discrepancy > tolerance_pct.
+
+    This catches:
+    - NAV calculation bugs
+    - Price data issues
+    - Holdings weight mismatches
+    """
+    import numpy as np
+    import pandas as pd
+    from AlphaMachine_core.tracking import Variants
+    from AlphaMachine_core.data_manager import StockDataManager
+
+    issues = []
+    today = date.today()
+
+    # Get first day of current month
+    mtd_start = today.replace(day=1)
+
+    # Collect all tickers from all portfolios
+    all_tickers = set()
+    portfolio_holdings = {}
+
+    for portfolio in portfolios:
+        try:
+            holdings = tracker.get_holdings(portfolio.id, today)
+            if holdings:
+                portfolio_holdings[portfolio.id] = holdings
+                for h in holdings:
+                    all_tickers.add(h.ticker)
+        except Exception:
+            pass
+
+    if not all_tickers:
+        return issues
+
+    # Fetch price data for all tickers at once (efficient)
+    try:
+        dm = StockDataManager()
+        # Fetch prices from a week before MTD start to ensure we have prev prices
+        price_start = mtd_start - timedelta(days=7)
+        price_dicts = dm.get_price_data(
+            list(all_tickers),
+            price_start.strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d"),
+        )
+
+        if not price_dicts:
+            return issues
+
+        price_df = pd.DataFrame(price_dicts)
+        if price_df.empty:
+            return issues
+
+        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+    except Exception as e:
+        logger.warning(f"Could not load price data for reconciliation: {e}")
+        return issues
+
+    for portfolio in portfolios:
+        try:
+            # Get stored NAV for MTD
+            stored_nav_df = tracker.get_nav_series(
+                portfolio.id, Variants.RAW, mtd_start, today
+            )
+
+            if stored_nav_df.empty:
+                continue
+
+            holdings = portfolio_holdings.get(portfolio.id)
+            if not holdings:
+                continue
+
+            # Get weights (default to equal weight), convert Decimal to float
+            weights = {}
+            for h in holdings:
+                w = h.weight if h.weight else 1.0 / len(holdings)
+                weights[h.ticker] = float(w)
+
+            # Normalize weights
+            total_weight = sum(weights.values())
+            if total_weight > 0:
+                weights = {t: w / total_weight for t, w in weights.items()}
+
+            # Calculate expected returns from prices for each day in MTD
+            for nav_date in stored_nav_df.index:
+                nav_date_dt = nav_date.date() if hasattr(nav_date, 'date') else nav_date
+
+                stored_return = stored_nav_df.loc[nav_date, 'daily_return'] * 100
+
+                # Skip first day (no return to compare)
+                if np.isnan(stored_return):
+                    continue
+
+                # Skip first day of month (edge case with previous month boundary)
+                if nav_date_dt.day == 1:
+                    continue
+
+                # Get prices for this date and previous trading day
+                curr_prices = price_df[price_df["trade_date"] == nav_date_dt]
+                if curr_prices.empty:
+                    continue
+
+                # Find previous trading day
+                prev_dates = price_df[price_df["trade_date"] < nav_date_dt]["trade_date"].unique()
+                if len(prev_dates) == 0:
+                    continue
+                prev_date = max(prev_dates)
+                prev_prices = price_df[price_df["trade_date"] == prev_date]
+
+                if prev_prices.empty:
+                    continue
+
+                # Calculate expected return from prices
+                expected_return = 0.0
+                tickers_used = 0
+
+                for ticker, weight in weights.items():
+                    curr_row = curr_prices[curr_prices["ticker"] == ticker]
+                    prev_row = prev_prices[prev_prices["ticker"] == ticker]
+
+                    if curr_row.empty or prev_row.empty:
+                        continue
+
+                    # Use adjusted_close if available
+                    if "adjusted_close" in curr_row.columns and curr_row["adjusted_close"].notna().any():
+                        curr_price = curr_row["adjusted_close"].fillna(curr_row["close"]).iloc[0]
+                        prev_price = prev_row["adjusted_close"].fillna(prev_row["close"]).iloc[0]
+                    else:
+                        curr_price = curr_row["close"].iloc[0]
+                        prev_price = prev_row["close"].iloc[0]
+
+                    if prev_price > 0:
+                        ticker_return = ((curr_price / prev_price) - 1) * 100
+                        expected_return += weight * ticker_return
+                        tickers_used += 1
+
+                # Only compare if we got prices for at least some tickers
+                if tickers_used < len(weights) * 0.5:
+                    continue
+
+                # Compare stored vs expected
+                diff = abs(stored_return - expected_return)
+
+                if diff > tolerance_pct:
+                    severity = "error" if diff > 2.0 else "warning"
+                    issues.append({
+                        "portfolio": portfolio.name,
+                        "date": str(nav_date_dt),
+                        "type": "MTD_RECONCILIATION_MISMATCH",
+                        "severity": severity,
+                        "message": f"Stored return {stored_return:+.2f}% vs expected {expected_return:+.2f}% (diff: {diff:.2f}%)",
+                        "stored_return": float(stored_return),
+                        "expected_return": float(expected_return),
+                        "difference": float(diff),
+                    })
+
+        except Exception as e:
+            logger.warning(f"Error reconciling {portfolio.name}: {e}")
+
+    return issues
+
+
+def check_missing_ticker_data(
+    portfolios: List,
+    tracker,
+    days_back: int = 7,
+) -> List[Dict]:
+    """
+    Check for missing price data for portfolio holdings.
+
+    Detects:
+    - Tickers with no price data at all
+    - Tickers missing recent trading days
+    - Stale price data (last update > days_back ago)
+    """
+    import pandas as pd
+    from AlphaMachine_core.data_manager import StockDataManager
+
+    issues = []
+    today = date.today()
+    cutoff_date = today - timedelta(days=days_back)
+
+    # Collect all unique tickers across portfolios
+    all_tickers = set()
+    ticker_portfolios = {}  # Map ticker -> list of portfolios using it
+
+    for portfolio in portfolios:
+        holdings = tracker.get_holdings(portfolio.id, today)
+        if not holdings:
+            continue
+
+        for holding in holdings:
+            ticker = holding.ticker
+            all_tickers.add(ticker)
+            if ticker not in ticker_portfolios:
+                ticker_portfolios[ticker] = []
+            ticker_portfolios[ticker].append(portfolio.name)
+
+    if not all_tickers:
+        return issues
+
+    # Fetch price data for all tickers at once
+    try:
+        dm = StockDataManager()
+        price_dicts = dm.get_price_data(
+            list(all_tickers),
+            cutoff_date.strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d"),
+        )
+
+        if not price_dicts:
+            # No price data at all - report for all tickers
+            for ticker, portfolios_list in ticker_portfolios.items():
+                for portfolio_name in portfolios_list:
+                    issues.append({
+                        "portfolio": portfolio_name,
+                        "type": "MISSING_TICKER_DATA",
+                        "severity": "error",
+                        "message": f"No price data available for {ticker}",
+                        "ticker": ticker,
+                    })
+            return issues
+
+        price_df = pd.DataFrame(price_dicts)
+        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+    except Exception as e:
+        logger.warning(f"Could not load price data for ticker check: {e}")
+        return issues
+
+    # Check each ticker
+    checked_tickers = {}
+
+    for ticker in all_tickers:
+        ticker_prices = price_df[price_df["ticker"] == ticker]
+
+        if ticker_prices.empty:
+            checked_tickers[ticker] = {
+                "has_issue": True,
+                "type": "MISSING_TICKER_DATA",
+                "severity": "error",
+                "message": f"No price data available for {ticker}",
+            }
+            continue
+
+        # Check last available date
+        last_date = ticker_prices["trade_date"].max()
+
+        if last_date < cutoff_date:
+            days_stale = (today - last_date).days
+            checked_tickers[ticker] = {
+                "has_issue": True,
+                "type": "STALE_TICKER_DATA",
+                "severity": "warning",
+                "message": f"{ticker} price data is {days_stale} days old (last: {last_date})",
+                "last_date": str(last_date),
+            }
+            continue
+
+        # Count trading days
+        trading_days = len(ticker_prices)
+
+        # Expect at least 60% of days to have data (accounting for weekends/holidays)
+        expected_min = int(days_back * 0.6)
+        if trading_days < expected_min:
+            checked_tickers[ticker] = {
+                "has_issue": True,
+                "type": "SPARSE_TICKER_DATA",
+                "severity": "warning",
+                "message": f"{ticker} has only {trading_days} data points in last {days_back} days",
+                "trading_days": trading_days,
+            }
+            continue
+
+        # No issues
+        checked_tickers[ticker] = {"has_issue": False}
+
+    # Report issues for each portfolio-ticker combination
+    for ticker, status in checked_tickers.items():
+        if status.get("has_issue"):
+            for portfolio_name in ticker_portfolios.get(ticker, []):
+                issue = {
+                    "portfolio": portfolio_name,
+                    "type": status["type"],
+                    "severity": status["severity"],
+                    "message": status["message"],
+                    "ticker": ticker,
+                }
+                if "last_date" in status:
+                    issue["last_date"] = status["last_date"]
+                if "trading_days" in status:
+                    issue["trading_days"] = status["trading_days"]
+                issues.append(issue)
+
+    return issues
+
+
 def generate_report(issues: List[Dict]) -> str:
     """Generate human-readable report."""
     if not issues:
-        return "✅ All data quality checks passed. No issues detected."
+        return "[OK] All data quality checks passed. No issues detected."
 
     lines = [
         "=" * 60,
@@ -258,20 +565,20 @@ def generate_report(issues: List[Dict]) -> str:
     warnings = [i for i in issues if i.get("severity") == "warning"]
 
     if critical:
-        lines.append("🚨 CRITICAL ISSUES:")
+        lines.append("[CRITICAL] CRITICAL ISSUES:")
         for issue in critical:
             lines.append(f"  - [{issue['portfolio']}] {issue['message']}")
         lines.append("")
 
     if errors:
-        lines.append("❌ ERRORS:")
+        lines.append("[ERROR] ERRORS:")
         for issue in errors:
             date_str = f" ({issue['date']})" if 'date' in issue else ""
             lines.append(f"  - [{issue['portfolio']}]{date_str} {issue['message']}")
         lines.append("")
 
     if warnings:
-        lines.append("⚠️  WARNINGS:")
+        lines.append("[WARNING] WARNINGS:")
         for issue in warnings:
             date_str = f" ({issue['date']})" if 'date' in issue else ""
             lines.append(f"  - [{issue['portfolio']}]{date_str} {issue['message']}")
@@ -502,6 +809,13 @@ def run_monitor(
 
     logger.info("Checking audit log...")
     all_issues.extend(check_audit_log_issues(days_back))
+
+    logger.info("Reconciling MTD NAV against prices...")
+    # Tolerance of 1% to account for weight drift in buy-and-hold portfolios
+    all_issues.extend(reconcile_mtd_from_prices(portfolios, tracker, tolerance_pct=1.0))
+
+    logger.info("Checking for missing ticker data...")
+    all_issues.extend(check_missing_ticker_data(portfolios, tracker, days_back))
 
     # Generate report
     report = generate_report(all_issues)

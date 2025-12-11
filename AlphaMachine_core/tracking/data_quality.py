@@ -60,8 +60,8 @@ class DataQualityValidator:
     """
 
     # Thresholds (configurable)
-    MAX_DAILY_RETURN_PCT = 15.0  # Max single-day return (%)
-    MAX_NAV_CHANGE_PCT = 20.0    # Max NAV change from previous day (%)
+    MAX_DAILY_RETURN_PCT = 5.0   # Max single-day return (%) - alert threshold
+    MAX_NAV_CHANGE_PCT = 20.0    # Max NAV change for circuit breaker (%)
     MIN_NAV_VALUE = 10.0         # NAV should never go below this
     MAX_NAV_DROP_FROM_PEAK = 50.0  # Max drawdown before alert (%)
     CORRELATION_THRESHOLD = 0.3   # Min correlation with benchmark for sanity
@@ -115,11 +115,19 @@ class DataQualityValidator:
             is_valid = False
 
         # Check 3: Daily return should be within bounds
+        # Three levels: >5% = WARNING, >10% = ERROR, >20% = CRITICAL (blocked)
         if previous_nav > 0:
             daily_return_pct = ((new_nav / previous_nav) - 1) * 100
 
             if abs(daily_return_pct) > self.MAX_DAILY_RETURN_PCT:
-                severity = AlertSeverity.CRITICAL if abs(daily_return_pct) > 30 else AlertSeverity.ERROR
+                # Determine severity based on magnitude
+                if abs(daily_return_pct) > self.MAX_NAV_CHANGE_PCT:
+                    severity = AlertSeverity.CRITICAL
+                elif abs(daily_return_pct) > 10:
+                    severity = AlertSeverity.ERROR
+                else:
+                    severity = AlertSeverity.WARNING
+
                 alerts.append(DataQualityAlert(
                     timestamp=datetime.now(),
                     severity=severity,
@@ -134,8 +142,8 @@ class DataQualityValidator:
                         "threshold": self.MAX_DAILY_RETURN_PCT,
                     },
                 ))
-                # Block update if return is extreme (>30%)
-                if abs(daily_return_pct) > 30:
+                # Block update if return exceeds circuit breaker threshold (>20%)
+                if abs(daily_return_pct) > self.MAX_NAV_CHANGE_PCT:
                     is_valid = False
 
         # Check 4: Detect potential NAV reset (the QQQ bug)
@@ -397,7 +405,7 @@ class NAVAuditLog:
 
     def get_suspicious_changes(
         self,
-        threshold_pct: float = 10.0,
+        threshold_pct: float = 5.0,
         days_back: int = 7,
     ) -> pd.DataFrame:
         """Find recent NAV changes exceeding threshold."""
@@ -593,7 +601,7 @@ def run_data_quality_check(
                     })
 
     # Check audit log for suspicious changes
-    suspicious = audit_log.get_suspicious_changes(threshold_pct=10.0, days_back=days_back)
+    suspicious = audit_log.get_suspicious_changes(threshold_pct=5.0, days_back=days_back)
     if not suspicious.empty:
         results["suspicious_changes"] = suspicious.to_dict("records")
 
