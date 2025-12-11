@@ -2350,6 +2350,7 @@ def show_portfolio_selection_ui():
             simulate_combined_portfolio,
             calculate_candidate_metrics,
             optimize_portfolio_weights,
+            walk_forward_validation,
             OPTIMIZATION_PRESETS,
             DEFAULT_WEIGHTS,
             WEIGHT_METHODS,
@@ -2434,29 +2435,56 @@ def show_portfolio_selection_ui():
         help="Number of portfolios to recommend",
     )
 
-    # Weight allocation method
-    weight_method_options = list(WEIGHT_METHODS.keys())
-    weight_method_labels = list(WEIGHT_METHODS.values())
+    # Weight allocation method (simplified to 2 options)
     selected_weight_method = st.sidebar.radio(
         "Weight Allocation",
-        options=weight_method_options,
-        format_func=lambda x: WEIGHT_METHODS[x],
+        options=["equal", "optimized"],
+        format_func=lambda x: WEIGHT_METHODS.get(x, x),
         index=0,
         help="How to allocate weights to selected portfolios:\n"
-             "- **Equal Weight**: All portfolios get same weight\n"
-             "- **Risk Parity**: Lower volatility = higher weight\n"
-             "- **Min Variance**: Minimize portfolio variance\n"
-             "- **Max Sharpe**: Maximize Sharpe ratio",
+             "- **Equal Weight**: All portfolios get same weight (1/N)\n"
+             "- **Optimized Weight**: Find weights that maximize your metric preferences",
     )
 
-    # Preset selection
+    # Max position constraint (only for optimized)
+    max_position = 1.0
+    if selected_weight_method == "optimized":
+        max_position_pct = st.sidebar.slider(
+            "Max Position %",
+            min_value=30,
+            max_value=100,
+            value=100,
+            step=5,
+            help="Maximum weight any single portfolio can have.\n"
+                 "100% = no limit, 50% = no portfolio > 50%",
+            key="ps_max_position",
+        )
+        max_position = max_position_pct / 100.0
+
+    # Preset selection with tooltips showing slider values
     preset_options = ["Custom"] + list(OPTIMIZATION_PRESETS.keys())
+
+    # Build tooltip showing what each preset does
+    preset_tooltips = {
+        "Custom": "Configure metric weights manually using the sliders below",
+        "Risk-Adjusted Focus": "Sharpe: 3, Sortino: 2, Calmar: 2, UPI: 2, CAGR: 1",
+        "Absolute Returns": "Sharpe: 1, Sortino: 1, Calmar: 1, UPI: 1, CAGR: 3",
+        "Capital Preservation": "Sharpe: 1, Sortino: 2, Calmar: 3, UPI: 3, CAGR: 0",
+        "Balanced": "Sharpe: 2, Sortino: 2, Calmar: 2, UPI: 2, CAGR: 2",
+    }
+
     selected_preset = st.sidebar.radio(
         "Optimization Preset",
         options=preset_options,
         index=0,
-        help="Pre-configured weight settings or custom",
+        help="Pre-configured metric weights:\n\n" + "\n".join(
+            f"**{k}**: {v}" for k, v in preset_tooltips.items()
+        ),
     )
+
+    # Show current preset configuration
+    if selected_preset != "Custom":
+        st.sidebar.caption(f"📋 {preset_tooltips.get(selected_preset, '')}")
 
     # Weight sliders
     st.sidebar.markdown("---")
@@ -2495,6 +2523,51 @@ def show_portfolio_selection_ui():
             )
         else:
             st.sidebar.markdown(f"**{label}**: {default_val}")
+
+    # Walk-Forward Validation controls
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Walk-Forward Validation")
+
+    run_walk_forward = st.sidebar.checkbox(
+        "Run Walk-Forward Validation",
+        value=False,
+        help="Test strategy robustness with out-of-sample validation.\n"
+             "This validates that the selection strategy works on unseen data.",
+        key="ps_run_wf",
+    )
+
+    wf_anchored = True
+    wf_min_train_months = 6
+    wf_test_months = 2
+
+    if run_walk_forward:
+        wf_type = st.sidebar.radio(
+            "Walk-Forward Type",
+            options=["Anchored (Expanding)", "Rolling"],
+            index=0,
+            help="**Anchored**: Training window grows over time (uses all history)\n"
+                 "**Rolling**: Fixed-size training window that slides forward",
+            key="ps_wf_type",
+        )
+        wf_anchored = wf_type == "Anchored (Expanding)"
+
+        wf_min_train_months = st.sidebar.slider(
+            "Min Training (months)",
+            min_value=3,
+            max_value=12,
+            value=6,
+            help="Minimum training period before first test",
+            key="ps_wf_train",
+        )
+
+        wf_test_months = st.sidebar.slider(
+            "Test Period (months)",
+            min_value=1,
+            max_value=6,
+            value=2,
+            help="Out-of-sample test period length",
+            key="ps_wf_test",
+        )
 
     # ==========================================================================
     # COLLECT CANDIDATE DATA
@@ -2733,6 +2806,8 @@ def show_portfolio_selection_ui():
             candidates,
             selected_combo,
             method=selected_weight_method,
+            metric_weights=weights,
+            max_position=max_position,
         )
 
         if "error" in weight_result:
@@ -2852,6 +2927,104 @@ def show_portfolio_selection_ui():
                 )
             else:
                 st.caption("Insufficient data for rolling analysis.")
+
+    # ==========================================================================
+    # SECTION 7: WALK-FORWARD VALIDATION
+    # ==========================================================================
+    if run_walk_forward and len(candidates) >= n_select:
+        st.markdown("---")
+        st.markdown("### 🔄 Walk-Forward Validation")
+
+        with st.spinner("Running walk-forward validation... This may take a moment."):
+            wf_result = walk_forward_validation(
+                portfolio_returns=candidates,
+                n_select=n_select,
+                metric_weights=weights,
+                weight_method=selected_weight_method,
+                max_position=max_position,
+                test_months=wf_test_months,
+                min_train_months=wf_min_train_months,
+                anchored=wf_anchored,
+            )
+
+        if "error" in wf_result:
+            st.warning(f"Walk-forward validation: {wf_result['error']}")
+        else:
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+
+            oos_metrics = wf_result.get("aggregated_oos_metrics", {})
+            is_metrics = wf_result.get("aggregated_is_metrics", {})
+            robustness = wf_result.get("robustness_score", 0)
+
+            col1.metric(
+                "OOS Sharpe",
+                f"{oos_metrics.get('sharpe', 0):.2f}",
+                help="Average out-of-sample Sharpe across all windows",
+            )
+            col2.metric(
+                "OOS CAGR",
+                f"{oos_metrics.get('cagr', 0)*100:.1f}%",
+                help="Average out-of-sample CAGR",
+            )
+            col3.metric(
+                "Windows",
+                wf_result.get("total_windows", 0),
+                help="Number of walk-forward windows completed",
+            )
+
+            # Robustness score with color coding
+            robustness_pct = robustness * 100
+            if robustness_pct >= 70:
+                col4.metric("Robustness", f"{robustness_pct:.0f}%", help="OOS Sharpe / In-sample Sharpe. Above 70% is good.")
+            elif robustness_pct >= 50:
+                col4.metric("Robustness", f"{robustness_pct:.0f}%", delta="-moderate", help="OOS Sharpe / In-sample Sharpe")
+            else:
+                col4.metric("Robustness", f"{robustness_pct:.0f}%", delta="-weak", help="OOS Sharpe / In-sample Sharpe")
+
+            # Selection consistency
+            consistency = wf_result.get("selection_consistency", {})
+            if consistency:
+                st.markdown("**Portfolio Selection Consistency:**")
+                consistency_data = [
+                    {"Portfolio": name, "Selected %": f"{pct:.0f}%"}
+                    for name, pct in consistency.items()
+                ]
+                st.dataframe(
+                    pd.DataFrame(consistency_data),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            # OOS equity curve
+            oos_equity = wf_result.get("oos_equity_curve")
+            if oos_equity is not None and len(oos_equity) > 0:
+                st.markdown("**Out-of-Sample Equity Curve:**")
+                st.line_chart(oos_equity)
+
+            # Window details
+            windows = wf_result.get("windows", [])
+            if windows:
+                with st.expander("View Window Details"):
+                    window_data = []
+                    for w in windows:
+                        window_data.append({
+                            "#": w["window"],
+                            "Train": f"{w['train_start']} to {w['train_end']}",
+                            "Test": f"{w['test_start']} to {w['test_end']}",
+                            "Selected": ", ".join(w["selected"][:2]) + ("..." if len(w["selected"]) > 2 else ""),
+                            "IS Sharpe": f"{w['in_sample_sharpe']:.2f}",
+                            "OOS Sharpe": f"{w['oos_sharpe']:.2f}",
+                        })
+                    st.dataframe(pd.DataFrame(window_data), use_container_width=True, hide_index=True)
+
+            # Robustness warning
+            if robustness_pct < 70:
+                st.warning(
+                    f"⚠️ Robustness score ({robustness_pct:.0f}%) is below 70%. "
+                    "The strategy may be overfitting to historical data. "
+                    "Consider using different metric weights or more conservative settings."
+                )
 
 
 # -----------------------------------------------------------------------------

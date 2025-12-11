@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
 from ..tracking.metrics import (
     calculate_sharpe_ratio,
@@ -555,24 +556,75 @@ def get_low_correlation_pairs(
 
 WEIGHT_METHODS = {
     "equal": "Equal Weight",
-    "risk_parity": "Risk Parity",
-    "min_variance": "Minimum Variance",
-    "max_sharpe": "Max Sharpe",
+    "optimized": "Optimized Weight",
 }
+
+
+def _calculate_weighted_score(
+    weights: np.ndarray,
+    returns_df: pd.DataFrame,
+    metric_weights: Dict[str, float],
+) -> float:
+    """
+    Calculate weighted score for a given portfolio weight allocation.
+
+    This is the objective function for scipy optimization.
+    Returns NEGATIVE score because scipy minimizes.
+
+    Args:
+        weights: Array of portfolio weights
+        returns_df: DataFrame with aligned returns for each portfolio
+        metric_weights: Metric weights from user (0-3 scale)
+
+    Returns:
+        Negative weighted score (for minimization)
+    """
+    # Calculate combined returns with these weights
+    combined_returns = (returns_df * weights).sum(axis=1)
+
+    # Build NAV
+    combined_nav = (1 + combined_returns).cumprod() * 100
+
+    # Calculate metrics on combined portfolio
+    metrics = {
+        "sharpe": calculate_sharpe_ratio(combined_returns),
+        "sortino": calculate_sortino_ratio(combined_returns),
+        "calmar": calculate_calmar_ratio(combined_nav),
+        "upi": calculate_upi(combined_nav),
+        "cagr": calculate_cagr(combined_nav),
+    }
+
+    # Calculate weighted score (same formula as portfolio selection)
+    metric_keys = ["sharpe", "sortino", "calmar", "upi", "cagr"]
+    total_weight = sum(metric_weights.get(k, 0) for k in metric_keys)
+    if total_weight == 0:
+        total_weight = 1
+
+    # Simple weighted sum (not normalized - optimization will find best)
+    score = sum(
+        metric_weights.get(m, 0) * metrics.get(m, 0)
+        for m in metric_keys
+    ) / total_weight
+
+    return -score  # Negative for minimization
 
 
 def optimize_portfolio_weights(
     portfolio_returns: Dict[str, pd.Series],
     selected: List[str],
     method: str = "equal",
+    metric_weights: Optional[Dict[str, float]] = None,
+    max_position: float = 1.0,
 ) -> Dict:
     """
-    Optimize portfolio weights using various methods.
+    Optimize portfolio weights using equal or optimized method.
 
     Args:
         portfolio_returns: Daily returns by portfolio name
         selected: List of selected portfolio names
-        method: Optimization method - "equal", "risk_parity", "min_variance", "max_sharpe"
+        method: "equal" or "optimized"
+        metric_weights: Metric weights for optimization (same as portfolio selection sliders)
+        max_position: Maximum weight any single portfolio can have (0.3-1.0)
 
     Returns:
         Dictionary with:
@@ -580,8 +632,11 @@ def optimize_portfolio_weights(
         - method: Method used
         - metrics: Additional info about the optimization
     """
+    if metric_weights is None:
+        metric_weights = DEFAULT_WEIGHTS.copy()
+
     if not selected or len(selected) < 2:
-        # Single portfolio or empty - return equal weight
+        # Single portfolio or empty - return 100% weight
         if selected:
             return {
                 "weights": {selected[0]: 1.0},
@@ -609,99 +664,58 @@ def optimize_portfolio_weights(
             "metrics": {"description": "All portfolios weighted equally"},
         }
 
-    elif method == "risk_parity":
-        # Risk Parity: Weight inversely proportional to volatility
-        # Each portfolio contributes equal risk to total portfolio
-        vols = returns_df.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
-        inv_vols = 1.0 / vols
-        raw_weights = inv_vols / inv_vols.sum()
-        weights = {name: float(raw_weights[name]) for name in selected}
+    elif method == "optimized":
+        # Use scipy.optimize to find weights that maximize weighted score
+        initial_weights = np.ones(n) / n  # Start with equal weights
+
+        # Constraints: weights sum to 1
+        constraints = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
+
+        # Bounds: 0 <= weight <= max_position
+        bounds = [(0, max_position) for _ in range(n)]
+
+        # Objective function
+        def objective(w):
+            return _calculate_weighted_score(w, returns_df, metric_weights)
+
+        # Run optimization
+        result = minimize(
+            objective,
+            initial_weights,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 100, "ftol": 1e-6},
+        )
+
+        if result.success:
+            optimized_weights = result.x
+            # Ensure weights sum to 1 (numerical precision)
+            optimized_weights = optimized_weights / optimized_weights.sum()
+        else:
+            # Fallback to equal weights
+            optimized_weights = initial_weights
+
+        weights = {name: float(optimized_weights[i]) for i, name in enumerate(selected)}
+
+        # Calculate final combined metrics with optimized weights
+        combined_returns = (returns_df * optimized_weights).sum(axis=1)
+        combined_nav = (1 + combined_returns).cumprod() * 100
+        final_metrics = calculate_candidate_metrics(combined_nav, combined_returns)
+
         return {
             "weights": weights,
-            "method": "Risk Parity",
+            "method": "Optimized Weight",
             "metrics": {
-                "description": "Weighted by inverse volatility",
-                "volatilities": {name: float(vols[name]) for name in selected},
+                "description": f"Optimized using metric weights (max position: {max_position*100:.0f}%)",
+                "combined_sharpe": final_metrics["sharpe"],
+                "combined_sortino": final_metrics["sortino"],
+                "combined_calmar": final_metrics["calmar"],
+                "combined_upi": final_metrics["upi"],
+                "combined_cagr": final_metrics["cagr"],
+                "optimization_success": result.success,
             },
         }
-
-    elif method == "min_variance":
-        # Minimum Variance Portfolio
-        # w* = (Σ^-1 * 1) / (1' * Σ^-1 * 1)
-        cov_matrix = returns_df.cov() * TRADING_DAYS_PER_YEAR
-        try:
-            cov_inv = np.linalg.inv(cov_matrix.values)
-            ones = np.ones(n)
-            raw_weights = cov_inv @ ones
-            raw_weights = raw_weights / raw_weights.sum()
-            # Ensure non-negative weights (long only)
-            raw_weights = np.maximum(raw_weights, 0)
-            if raw_weights.sum() > 0:
-                raw_weights = raw_weights / raw_weights.sum()
-            else:
-                raw_weights = np.ones(n) / n
-            weights = {name: float(raw_weights[i]) for i, name in enumerate(selected)}
-            return {
-                "weights": weights,
-                "method": "Minimum Variance",
-                "metrics": {
-                    "description": "Minimizes total portfolio variance",
-                    "portfolio_vol": float(np.sqrt(raw_weights @ cov_matrix.values @ raw_weights)),
-                },
-            }
-        except np.linalg.LinAlgError:
-            # Singular matrix - fall back to equal weight
-            weights = {name: 1.0 / n for name in selected}
-            return {
-                "weights": weights,
-                "method": "Minimum Variance (fallback to equal)",
-                "metrics": {"description": "Covariance matrix singular, using equal weight"},
-            }
-
-    elif method == "max_sharpe":
-        # Maximum Sharpe Ratio Portfolio
-        # w* = (Σ^-1 * μ) / (1' * Σ^-1 * μ)
-        cov_matrix = returns_df.cov() * TRADING_DAYS_PER_YEAR
-        mean_returns = returns_df.mean() * TRADING_DAYS_PER_YEAR
-        try:
-            cov_inv = np.linalg.inv(cov_matrix.values)
-            raw_weights = cov_inv @ mean_returns.values
-            # Normalize to sum to 1
-            if raw_weights.sum() != 0:
-                raw_weights = raw_weights / raw_weights.sum()
-            else:
-                raw_weights = np.ones(n) / n
-            # Ensure non-negative weights (long only)
-            raw_weights = np.maximum(raw_weights, 0)
-            if raw_weights.sum() > 0:
-                raw_weights = raw_weights / raw_weights.sum()
-            else:
-                raw_weights = np.ones(n) / n
-            weights = {name: float(raw_weights[i]) for i, name in enumerate(selected)}
-
-            # Calculate resulting Sharpe
-            port_return = raw_weights @ mean_returns.values
-            port_vol = float(np.sqrt(raw_weights @ cov_matrix.values @ raw_weights))
-            port_sharpe = port_return / port_vol if port_vol > 0 else 0
-
-            return {
-                "weights": weights,
-                "method": "Max Sharpe",
-                "metrics": {
-                    "description": "Maximizes portfolio Sharpe ratio",
-                    "expected_return": float(port_return),
-                    "expected_vol": port_vol,
-                    "expected_sharpe": float(port_sharpe),
-                },
-            }
-        except np.linalg.LinAlgError:
-            # Singular matrix - fall back to equal weight
-            weights = {name: 1.0 / n for name in selected}
-            return {
-                "weights": weights,
-                "method": "Max Sharpe (fallback to equal)",
-                "metrics": {"description": "Covariance matrix singular, using equal weight"},
-            }
 
     else:
         # Unknown method - default to equal
@@ -711,3 +725,237 @@ def optimize_portfolio_weights(
             "method": "Equal Weight",
             "metrics": {"description": f"Unknown method '{method}', defaulting to equal"},
         }
+
+
+# =============================================================================
+# WALK-FORWARD VALIDATION
+# =============================================================================
+
+TRADING_DAYS_PER_MONTH = 21  # Approximate trading days per month
+
+
+def walk_forward_validation(
+    portfolio_returns: Dict[str, pd.Series],
+    n_select: int,
+    metric_weights: Dict[str, float],
+    weight_method: str = "equal",
+    max_position: float = 1.0,
+    test_months: int = 2,
+    min_train_months: int = 6,
+    anchored: bool = True,
+) -> Dict:
+    """
+    Perform walk-forward validation of portfolio selection strategy.
+
+    Walk-forward tests the strategy's out-of-sample performance by:
+    1. Training (optimizing) on historical data
+    2. Testing on forward (unseen) data
+    3. Rolling forward and repeating
+
+    Args:
+        portfolio_returns: Daily returns by portfolio name
+        n_select: Number of portfolios to select
+        metric_weights: Metric weights for scoring (same as UI sliders)
+        weight_method: "equal" or "optimized"
+        max_position: Maximum weight per portfolio (0.3-1.0)
+        test_months: Test period in months (default 2)
+        min_train_months: Minimum training period in months (default 6)
+        anchored: If True, use expanding window (anchored); if False, use rolling window
+
+    Returns:
+        Dictionary with:
+        - windows: List of window results
+        - aggregated_oos_metrics: Average out-of-sample metrics
+        - selection_consistency: Which portfolios selected most often
+        - oos_equity_curve: Stitched out-of-sample NAV
+        - robustness_score: OOS Sharpe / In-sample Sharpe ratio
+    """
+    # Convert months to trading days
+    test_days = test_months * TRADING_DAYS_PER_MONTH
+    min_train_days = min_train_months * TRADING_DAYS_PER_MONTH
+
+    # Align all returns to get common date index
+    all_names = list(portfolio_returns.keys())
+    returns_df = pd.DataFrame(portfolio_returns).dropna()
+
+    if len(returns_df) < min_train_days + test_days:
+        return {
+            "error": f"Insufficient data for walk-forward. Need at least {min_train_days + test_days} days, "
+                     f"have {len(returns_df)} days.",
+            "windows": [],
+        }
+
+    all_dates = returns_df.index.tolist()
+    total_days = len(all_dates)
+
+    windows = []
+    all_oos_returns = []
+    selection_counts = {}
+
+    # Walk-forward loop
+    window_num = 0
+    if anchored:
+        # Anchored: training always starts from beginning, expands
+        train_start_idx = 0
+        train_end_idx = min_train_days
+    else:
+        # Rolling: fixed window size
+        train_start_idx = 0
+        train_end_idx = min_train_days
+
+    while train_end_idx + test_days <= total_days:
+        window_num += 1
+
+        # Define train and test periods
+        train_dates = all_dates[train_start_idx:train_end_idx]
+        test_dates = all_dates[train_end_idx:train_end_idx + test_days]
+
+        # Get training period returns
+        train_returns = {
+            name: returns_df.loc[train_dates, name]
+            for name in all_names
+        }
+
+        # Get test period returns
+        test_returns = {
+            name: returns_df.loc[test_dates, name]
+            for name in all_names
+        }
+
+        # Step 1: Run portfolio selection on training data
+        optimization_result = find_optimal_portfolio_combination(
+            train_returns,
+            n_select=n_select,
+            weights=metric_weights,
+            min_data_points=30,
+        )
+
+        if "error" in optimization_result or optimization_result.get("recommended") is None:
+            # Skip this window if optimization failed
+            if anchored:
+                train_end_idx += test_days
+            else:
+                train_start_idx += test_days
+                train_end_idx += test_days
+            continue
+
+        selected = list(optimization_result["recommended"]["combination"])
+        in_sample_metrics = optimization_result["recommended"]["combined_metrics"]
+
+        # Track selection frequency
+        for name in selected:
+            selection_counts[name] = selection_counts.get(name, 0) + 1
+
+        # Step 2: Optimize weights on training data
+        weight_result = optimize_portfolio_weights(
+            train_returns,
+            selected,
+            method=weight_method,
+            metric_weights=metric_weights,
+            max_position=max_position,
+        )
+
+        if "error" in weight_result:
+            weights_list = [1.0 / len(selected)] * len(selected)
+        else:
+            weights_list = [weight_result["weights"].get(name, 0) for name in selected]
+
+        # Step 3: Apply to test period (out-of-sample)
+        oos_result = simulate_combined_portfolio(
+            test_returns,
+            selected,
+            weights=weights_list,
+        )
+
+        if "error" in oos_result:
+            if anchored:
+                train_end_idx += test_days
+            else:
+                train_start_idx += test_days
+                train_end_idx += test_days
+            continue
+
+        oos_metrics = oos_result["metrics"]
+
+        # Collect OOS returns for stitching
+        all_oos_returns.append(oos_result["returns"])
+
+        # Record window result
+        windows.append({
+            "window": window_num,
+            "train_start": train_dates[0].strftime("%Y-%m-%d") if hasattr(train_dates[0], "strftime") else str(train_dates[0]),
+            "train_end": train_dates[-1].strftime("%Y-%m-%d") if hasattr(train_dates[-1], "strftime") else str(train_dates[-1]),
+            "test_start": test_dates[0].strftime("%Y-%m-%d") if hasattr(test_dates[0], "strftime") else str(test_dates[0]),
+            "test_end": test_dates[-1].strftime("%Y-%m-%d") if hasattr(test_dates[-1], "strftime") else str(test_dates[-1]),
+            "train_days": len(train_dates),
+            "test_days": len(test_dates),
+            "selected": selected,
+            "weights": dict(zip(selected, weights_list)),
+            "in_sample_sharpe": in_sample_metrics.get("sharpe", 0),
+            "in_sample_sortino": in_sample_metrics.get("sortino", 0),
+            "in_sample_cagr": in_sample_metrics.get("cagr", 0),
+            "oos_sharpe": oos_metrics.get("sharpe", 0),
+            "oos_sortino": oos_metrics.get("sortino", 0),
+            "oos_cagr": oos_metrics.get("cagr", 0),
+        })
+
+        # Move to next window
+        if anchored:
+            # Anchored: expand training window
+            train_end_idx += test_days
+        else:
+            # Rolling: slide the window
+            train_start_idx += test_days
+            train_end_idx += test_days
+
+    if not windows:
+        return {
+            "error": "No valid walk-forward windows could be completed.",
+            "windows": [],
+        }
+
+    # Aggregate results
+    avg_is_sharpe = np.mean([w["in_sample_sharpe"] for w in windows])
+    avg_oos_sharpe = np.mean([w["oos_sharpe"] for w in windows])
+    avg_oos_sortino = np.mean([w["oos_sortino"] for w in windows])
+    avg_oos_cagr = np.mean([w["oos_cagr"] for w in windows])
+
+    # Robustness score: OOS Sharpe / In-sample Sharpe
+    robustness_score = avg_oos_sharpe / avg_is_sharpe if avg_is_sharpe > 0 else 0
+
+    # Selection consistency: % of windows each portfolio was selected
+    total_windows = len(windows)
+    selection_consistency = {
+        name: count / total_windows * 100
+        for name, count in sorted(selection_counts.items(), key=lambda x: -x[1])
+    }
+
+    # Stitch OOS returns into equity curve
+    if all_oos_returns:
+        oos_returns_series = pd.concat(all_oos_returns)
+        oos_equity_curve = (1 + oos_returns_series).cumprod() * 100
+    else:
+        oos_equity_curve = pd.Series()
+
+    return {
+        "windows": windows,
+        "total_windows": total_windows,
+        "aggregated_oos_metrics": {
+            "sharpe": avg_oos_sharpe,
+            "sortino": avg_oos_sortino,
+            "cagr": avg_oos_cagr,
+        },
+        "aggregated_is_metrics": {
+            "sharpe": avg_is_sharpe,
+        },
+        "selection_consistency": selection_consistency,
+        "oos_equity_curve": oos_equity_curve,
+        "robustness_score": robustness_score,
+        "config": {
+            "anchored": anchored,
+            "test_months": test_months,
+            "min_train_months": min_train_months,
+            "weight_method": weight_method,
+            "max_position": max_position,
+        },
+    }
