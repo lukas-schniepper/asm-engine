@@ -1328,7 +1328,7 @@ def _show_delete_portfolios_sources_ui():
         # Load all sources
         try:
             with get_session() as session:
-                from AlphaMachine_core.db.models import TickerPeriod
+                from AlphaMachine_core.models import TickerPeriod
                 sources_raw = session.exec(select(TickerPeriod.source).distinct()).all()
                 sources = sorted([str(s) for s in sources_raw if s])
         except Exception as e:
@@ -1364,7 +1364,7 @@ def _show_delete_portfolios_sources_ui():
             try:
                 from sqlalchemy import func
                 with get_session() as session:
-                    from AlphaMachine_core.db.models import TickerPeriod
+                    from AlphaMachine_core.models import TickerPeriod
                     count = session.exec(
                         select(func.count()).select_from(TickerPeriod).where(
                             TickerPeriod.source == selected_source
@@ -1385,7 +1385,7 @@ def _show_delete_portfolios_sources_ui():
                 if confirm_text == selected_source:
                     try:
                         with get_session() as session:
-                            from AlphaMachine_core.db.models import TickerPeriod
+                            from AlphaMachine_core.models import TickerPeriod
                             session.exec(delete(TickerPeriod).where(
                                 TickerPeriod.source == selected_source
                             ))
