@@ -384,7 +384,8 @@ class NAVAuditLog:
 
         try:
             with Session(engine) as session:
-                result = session.exec(query, params)
+                # Use execute() instead of exec() for raw SQL with params
+                result = session.execute(query, params)
                 rows = result.fetchall()
                 if rows:
                     columns = result.keys()
@@ -413,7 +414,8 @@ class NAVAuditLog:
 
         try:
             with Session(engine) as session:
-                result = session.exec(query, {"since": since, "threshold": threshold_pct})
+                # Use execute() instead of exec() for raw SQL with params
+                result = session.execute(query, {"since": since, "threshold": threshold_pct})
                 rows = result.fetchall()
                 if rows:
                     columns = result.keys()
