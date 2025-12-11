@@ -1673,13 +1673,13 @@ def _show_cleanup_unused_tickers_ui():
                         params = {f't{i}': ticker for i, ticker in enumerate(batch)}
 
                         # First count records to be deleted (for reporting)
-                        count_stmt = text(f"SELECT COUNT(*) FROM ticker_period WHERE ticker IN ({placeholders})").bindparams(**params)
-                        count_result = session.exec(count_stmt).one()
-                        batch_records = count_result[0] if isinstance(count_result, tuple) else count_result
+                        count_stmt = text(f"SELECT COUNT(*) FROM ticker_period WHERE ticker IN ({placeholders})")
+                        count_result = session.execute(count_stmt, params).scalar()
+                        batch_records = count_result or 0
 
                         # Delete the batch
-                        delete_stmt = text(f"DELETE FROM ticker_period WHERE ticker IN ({placeholders})").bindparams(**params)
-                        session.exec(delete_stmt)
+                        delete_stmt = text(f"DELETE FROM ticker_period WHERE ticker IN ({placeholders})")
+                        session.execute(delete_stmt, params)
                         session.commit()
 
                         records_deleted += batch_records
