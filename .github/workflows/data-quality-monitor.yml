@@ -2,9 +2,9 @@ name: Data Quality Monitor
 
 on:
   schedule:
-    # Run daily at 7 AM ET (12:00 UTC in winter, 11:00 UTC in summer)
-    # Using 12:00 UTC to be safe
-    - cron: '0 12 * * *'
+    # Run daily at 4 AM Swiss time (3 AM UTC in winter, 2 AM UTC in summer)
+    # Using 3 AM UTC = 4 AM CET (winter) / 5 AM CEST (summer)
+    - cron: '0 3 * * *'
 
   # Allow manual trigger
   workflow_dispatch:
