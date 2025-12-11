@@ -1649,22 +1649,51 @@ def _show_cleanup_unused_tickers_ui():
         expected_confirm = f"DELETE {len(tickers_to_delete)}"
         if confirm_text == expected_confirm:
             try:
-                deleted_count = 0
+                from sqlalchemy import text
+
+                tickers_list = sorted(tickers_to_delete)
+                total_tickers = len(tickers_list)
+                batch_size = 50  # Delete 50 tickers per batch for efficiency
+
                 progress_bar = st.progress(0.0)
                 status_text = st.empty()
+                records_deleted = 0
+                tickers_deleted = 0
 
                 with get_session() as session:
-                    for idx, ticker in enumerate(sorted(tickers_to_delete)):
-                        status_text.info(f"Deleting {ticker}...")
-                        session.exec(delete(TickerPeriod).where(
-                            TickerPeriod.ticker == ticker
-                        ))
-                        deleted_count += 1
-                        progress_bar.progress((idx + 1) / len(tickers_to_delete))
+                    # Process in batches for efficiency
+                    for batch_start in range(0, total_tickers, batch_size):
+                        batch_end = min(batch_start + batch_size, total_tickers)
+                        batch = tickers_list[batch_start:batch_end]
 
-                    session.commit()
+                        status_text.info(f"Deleting batch {batch_start//batch_size + 1}/{(total_tickers + batch_size - 1)//batch_size} ({batch_start+1}-{batch_end} of {total_tickers} tickers)...")
 
-                st.success(f"✅ Successfully deleted price data for {deleted_count} tickers!")
+                        # Use raw SQL with IN clause for much faster deletion
+                        placeholders = ', '.join([f':t{i}' for i in range(len(batch))])
+                        params = {f't{i}': ticker for i, ticker in enumerate(batch)}
+
+                        # First count records to be deleted (for reporting)
+                        count_result = session.exec(
+                            text(f"SELECT COUNT(*) FROM ticker_period WHERE ticker IN ({placeholders})"),
+                            params
+                        ).one()
+                        batch_records = count_result[0] if isinstance(count_result, tuple) else count_result
+
+                        # Delete the batch
+                        session.exec(
+                            text(f"DELETE FROM ticker_period WHERE ticker IN ({placeholders})"),
+                            params
+                        )
+                        session.commit()
+
+                        records_deleted += batch_records
+                        tickers_deleted += len(batch)
+                        progress_bar.progress(batch_end / total_tickers)
+
+                    deleted_count = tickers_deleted
+
+                status_text.empty()
+                st.success(f"✅ Successfully deleted **{records_deleted:,}** records for **{deleted_count}** tickers!")
                 # Clear cache
                 if 'all_periods_for_filters_cached_data_ui' in st.session_state:
                     del st.session_state['all_periods_for_filters_cached_data_ui']
