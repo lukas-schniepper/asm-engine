@@ -1178,6 +1178,230 @@ def _show_portfolio_holdings_ui():
         )
 
 
+def _show_delete_portfolios_sources_ui():
+    """
+    UI for deleting portfolios or sources.
+
+    - Delete Portfolio: Removes portfolio and ALL related data (holdings, NAV, metrics)
+    - Delete Source: Removes all ticker_period entries for that source
+    """
+    from AlphaMachine_core.tracking.models import (
+        PortfolioDefinition, PortfolioHolding, PortfolioDailyNAV, PortfolioMetric
+    )
+    from sqlalchemy import delete
+
+    st.subheader("Delete Portfolios / Sources")
+
+    st.warning("This action is **permanent** and cannot be undone!")
+
+    delete_type = st.radio(
+        "What do you want to delete?",
+        ["Portfolio", "Source"],
+        key="delete_type_radio"
+    )
+
+    if delete_type == "Portfolio":
+        st.markdown("---")
+        st.markdown("### Delete Portfolio")
+        st.markdown("""
+        Deleting a portfolio will remove:
+        - Portfolio definition
+        - All holdings (all periods)
+        - All daily NAV data (all variants)
+        - All periodic metrics
+        - Audit log entries
+        """)
+
+        # Load all portfolios
+        try:
+            with get_session() as session:
+                portfolios_raw = session.exec(select(PortfolioDefinition)).all()
+                portfolios = [
+                    {"id": p.id, "name": p.name, "source": p.source, "is_active": p.is_active}
+                    for p in portfolios_raw
+                ]
+        except Exception as e:
+            st.error(f"Error loading portfolios: {e}")
+            return
+
+        if not portfolios:
+            st.info("No portfolios found.")
+            return
+
+        # Show portfolio list
+        portfolios_df = pd.DataFrame(portfolios)
+        st.dataframe(portfolios_df, use_container_width=True, height=min(300, len(portfolios_df)*38 + 58))
+
+        # Portfolio selector
+        portfolio_options = {p["name"]: p for p in portfolios}
+        selected_portfolio_name = st.selectbox(
+            "Select Portfolio to Delete",
+            options=["-- Select --"] + list(portfolio_options.keys()),
+            key="delete_portfolio_select"
+        )
+
+        if selected_portfolio_name != "-- Select --":
+            selected_portfolio = portfolio_options[selected_portfolio_name]
+            portfolio_id = selected_portfolio["id"]
+
+            # Count related records
+            try:
+                from sqlalchemy import func
+                with get_session() as session:
+                    holdings_count = session.exec(
+                        select(func.count()).select_from(PortfolioHolding).where(
+                            PortfolioHolding.portfolio_id == portfolio_id
+                        )
+                    ).one()
+                    nav_count = session.exec(
+                        select(func.count()).select_from(PortfolioDailyNAV).where(
+                            PortfolioDailyNAV.portfolio_id == portfolio_id
+                        )
+                    ).one()
+                    metrics_count = session.exec(
+                        select(func.count()).select_from(PortfolioMetric).where(
+                            PortfolioMetric.portfolio_id == portfolio_id
+                        )
+                    ).one()
+
+                st.markdown(f"""
+                **Records to be deleted:**
+                - Holdings: {holdings_count}
+                - NAV records: {nav_count}
+                - Metrics: {metrics_count}
+                """)
+            except Exception as e:
+                st.warning(f"Could not count records: {e}")
+
+            # Confirmation
+            confirm_text = st.text_input(
+                f"Type **{selected_portfolio_name}** to confirm deletion:",
+                key="confirm_portfolio_delete"
+            )
+
+            if st.button("Delete Portfolio", type="primary", key="btn_delete_portfolio"):
+                if confirm_text == selected_portfolio_name:
+                    try:
+                        with get_session() as session:
+                            # Delete in order (child tables first)
+                            session.exec(delete(PortfolioHolding).where(
+                                PortfolioHolding.portfolio_id == portfolio_id
+                            ))
+                            session.exec(delete(PortfolioDailyNAV).where(
+                                PortfolioDailyNAV.portfolio_id == portfolio_id
+                            ))
+                            session.exec(delete(PortfolioMetric).where(
+                                PortfolioMetric.portfolio_id == portfolio_id
+                            ))
+                            # Delete audit log if exists
+                            try:
+                                from sqlalchemy import text
+                                session.exec(text(
+                                    "DELETE FROM nav_audit_log WHERE portfolio_id = :pid"
+                                ), {"pid": portfolio_id})
+                            except:
+                                pass  # Table might not exist
+                            # Delete portfolio definition
+                            portfolio_to_delete = session.get(PortfolioDefinition, portfolio_id)
+                            if portfolio_to_delete:
+                                session.delete(portfolio_to_delete)
+                            session.commit()
+
+                        st.success(f"Portfolio '{selected_portfolio_name}' and all related data deleted successfully!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting portfolio: {e}")
+                else:
+                    st.error("Confirmation text does not match. Please type the exact portfolio name.")
+
+    else:  # Delete Source
+        st.markdown("---")
+        st.markdown("### Delete Source")
+        st.markdown("""
+        Deleting a source will remove all **ticker_period** entries for that source.
+
+        This does NOT delete:
+        - Portfolios using this source
+        - Stock price data
+        """)
+
+        # Load all sources
+        try:
+            with get_session() as session:
+                from AlphaMachine_core.db.models import TickerPeriod
+                sources_raw = session.exec(select(TickerPeriod.source).distinct()).all()
+                sources = sorted([str(s) for s in sources_raw if s])
+        except Exception as e:
+            st.error(f"Error loading sources: {e}")
+            return
+
+        if not sources:
+            st.info("No sources found.")
+            return
+
+        # Show source counts
+        try:
+            with get_session() as session:
+                from sqlalchemy import func
+                source_counts = session.exec(
+                    select(TickerPeriod.source, func.count(TickerPeriod.id))
+                    .group_by(TickerPeriod.source)
+                ).all()
+                source_df = pd.DataFrame(source_counts, columns=["Source", "Ticker Count"])
+                st.dataframe(source_df, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Could not load source counts: {e}")
+
+        # Source selector
+        selected_source = st.selectbox(
+            "Select Source to Delete",
+            options=["-- Select --"] + sources,
+            key="delete_source_select"
+        )
+
+        if selected_source != "-- Select --":
+            # Count records to delete
+            try:
+                from sqlalchemy import func
+                with get_session() as session:
+                    from AlphaMachine_core.db.models import TickerPeriod
+                    count = session.exec(
+                        select(func.count()).select_from(TickerPeriod).where(
+                            TickerPeriod.source == selected_source
+                        )
+                    ).one()
+
+                st.markdown(f"**{count} ticker_period records will be deleted.**")
+            except Exception as e:
+                st.warning(f"Could not count records: {e}")
+
+            # Confirmation
+            confirm_text = st.text_input(
+                f"Type **{selected_source}** to confirm deletion:",
+                key="confirm_source_delete"
+            )
+
+            if st.button("Delete Source", type="primary", key="btn_delete_source"):
+                if confirm_text == selected_source:
+                    try:
+                        with get_session() as session:
+                            from AlphaMachine_core.db.models import TickerPeriod
+                            session.exec(delete(TickerPeriod).where(
+                                TickerPeriod.source == selected_source
+                            ))
+                            session.commit()
+
+                        st.success(f"Source '{selected_source}' and all ticker_period entries deleted successfully!")
+                        # Clear cache
+                        if 'all_periods_for_filters_cached_data_ui' in st.session_state:
+                            del st.session_state['all_periods_for_filters_cached_data_ui']
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting source: {e}")
+                else:
+                    st.error("Confirmation text does not match. Please type the exact source name.")
+
+
 def _show_ticker_analysis_ui():
     """
     Ticker Analysis UI with two tabs:
@@ -1668,7 +1892,7 @@ def show_data_ui():
             st.error(f"Fehler Initialisierung StockDataManager: {e}"); st.exception(e); st.stop()
     dm = st.session_state.sdm_instance
 
-    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis"], index=0, key="data_ui_mode_radio_main_v4")
+    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis", "Delete Portfolios/Sources"], index=0, key="data_ui_mode_radio_main_v4")
 
     if mode == "Add/Update":
         st.subheader("Ticker einfuegen & Daten updaten")
@@ -1777,6 +2001,11 @@ def show_data_ui():
     # --- Ticker Analysis Mode ---
     elif mode == "Ticker Analysis":
         _show_ticker_analysis_ui()
+        return
+
+    # --- Delete Portfolios/Sources Mode ---
+    elif mode == "Delete Portfolios/Sources":
+        _show_delete_portfolios_sources_ui()
         return
 
     # --- View/Delete Mode ---
