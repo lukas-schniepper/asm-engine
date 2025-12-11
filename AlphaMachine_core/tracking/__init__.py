@@ -53,6 +53,16 @@ from .benchmark import (
     calculate_portfolio_monthly_returns_buyhold,
     calculate_benchmark_monthly_returns_buyhold,
 )
+from .data_quality import (
+    DataQualityValidator,
+    DataQualityAlert,
+    AlertSeverity,
+    NAVAuditLog,
+    BenchmarkReconciler,
+    get_validator,
+    get_audit_log,
+    run_data_quality_check,
+)
 
 __all__ = [
     # Models
@@ -103,4 +113,13 @@ __all__ = [
     "calculate_stock_attribution",
     "calculate_portfolio_monthly_returns_buyhold",
     "calculate_benchmark_monthly_returns_buyhold",
+    # Data Quality
+    "DataQualityValidator",
+    "DataQualityAlert",
+    "AlertSeverity",
+    "NAVAuditLog",
+    "BenchmarkReconciler",
+    "get_validator",
+    "get_audit_log",
+    "run_data_quality_check",
 ]

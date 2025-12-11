@@ -253,18 +253,75 @@ def update_portfolio_nav(
         # Calculate raw NAV using current and previous prices
         raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)
 
-        # SAFEGUARD: Validate NAV change is realistic
-        # Alert if daily change exceeds 20% (extremely rare for diversified portfolios)
-        if previous_raw_nav > 0:
-            daily_change_pct = abs((raw_nav / previous_raw_nav) - 1) * 100
-            if daily_change_pct > 20:
-                logger.error(
-                    f"UNREALISTIC NAV CHANGE for {portfolio.name} on {trade_date}: "
-                    f"Previous NAV={previous_raw_nav:.2f}, New NAV={raw_nav:.2f}, "
-                    f"Change={daily_change_pct:.1f}% - THIS LIKELY INDICATES A DATA ERROR!"
-                )
-                # Still update but flag it - could also return "error" to skip
-                # For now, we log loud warning but continue
+        # =====================================================================
+        # DATA QUALITY VALIDATION (Circuit Breaker)
+        # =====================================================================
+        from AlphaMachine_core.tracking.data_quality import (
+            get_validator, get_audit_log
+        )
+
+        validator = get_validator()
+        audit_log = get_audit_log()
+
+        # Get peak NAV for drawdown check
+        peak_nav = None
+        if not prev_nav_df.empty:
+            peak_nav = prev_nav_df["nav"].max()
+
+        # Validate before committing
+        is_valid, alerts = validator.validate_nav_update(
+            portfolio_name=portfolio.name,
+            trade_date=trade_date,
+            new_nav=raw_nav,
+            previous_nav=previous_raw_nav,
+            initial_nav=initial_nav,
+            peak_nav=peak_nav,
+        )
+
+        # Log all alerts
+        for alert in alerts:
+            if alert.severity.value in ["critical", "error"]:
+                logger.error(str(alert))
+            else:
+                logger.warning(str(alert))
+
+        # CIRCUIT BREAKER: Block update if validation fails
+        if not is_valid:
+            logger.error(
+                f"CIRCUIT BREAKER TRIGGERED for {portfolio.name} on {trade_date}: "
+                f"NAV update blocked due to data quality issues. "
+                f"Previous NAV={previous_raw_nav:.2f}, Attempted NAV={raw_nav:.2f}"
+            )
+            # Log the blocked attempt to audit trail
+            audit_log.log_nav_change(
+                portfolio_id=portfolio.id,
+                portfolio_name=portfolio.name,
+                trade_date=trade_date,
+                variant="raw",
+                previous_nav=previous_raw_nav,
+                new_nav=raw_nav,
+                source="scheduled_update_BLOCKED",
+                reason=f"Circuit breaker: {alerts[0].alert_type if alerts else 'Unknown'}",
+                metadata={"alerts": [a.message for a in alerts]},
+            )
+            return "error"
+
+        # =====================================================================
+        # UPDATE NAV (passed validation)
+        # =====================================================================
+
+        # Log to audit trail BEFORE update
+        audit_log.log_nav_change(
+            portfolio_id=portfolio.id,
+            portfolio_name=portfolio.name,
+            trade_date=trade_date,
+            variant="raw",
+            previous_nav=previous_raw_nav,
+            new_nav=raw_nav,
+            source="scheduled_update",
+            reason=None,
+            metadata={"holdings_count": len(holdings)},
+        )
 
         # Update NAV for all variants
         results = tracker.update_daily_nav(
