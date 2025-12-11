@@ -1402,6 +1402,148 @@ def _show_delete_portfolios_sources_ui():
                     st.error("Confirmation text does not match. Please type the exact source name.")
 
 
+def _show_cleanup_unused_tickers_ui():
+    """
+    UI for cleaning up price data for tickers that are not used in any portfolio.
+    This helps keep the database size manageable.
+    """
+    from AlphaMachine_core.tracking.models import PortfolioHolding
+    from AlphaMachine_core.models import TickerPeriod
+    from sqlalchemy import delete, func
+
+    st.subheader("Cleanup Unused Price Data")
+    st.info("""
+    This tool identifies tickers in the price database (ticker_period) that are **not used**
+    in any portfolio holdings. Deleting these can help reduce database size.
+    """)
+
+    # Step 1: Find all tickers used in portfolios
+    try:
+        with get_session() as session:
+            # Get all unique tickers from portfolio holdings
+            portfolio_tickers_raw = session.exec(
+                select(PortfolioHolding.ticker).distinct()
+            ).all()
+            portfolio_tickers = set(str(t) for t in portfolio_tickers_raw if t)
+
+            # Get all unique tickers from ticker_period (price data)
+            price_tickers_raw = session.exec(
+                select(TickerPeriod.ticker).distinct()
+            ).all()
+            price_tickers = set(str(t) for t in price_tickers_raw if t)
+
+    except Exception as e:
+        st.error(f"Error loading tickers: {e}")
+        return
+
+    # Calculate unused tickers
+    unused_tickers = price_tickers - portfolio_tickers
+    used_tickers = price_tickers & portfolio_tickers
+
+    # Display summary
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Tickers in Price DB", len(price_tickers))
+    col2.metric("Used in Portfolios", len(used_tickers))
+    col3.metric("Unused (Deletable)", len(unused_tickers),
+                delta=f"-{len(unused_tickers)}" if unused_tickers else None,
+                delta_color="inverse")
+
+    if not unused_tickers:
+        st.success("✅ All tickers in the price database are used in portfolios. Nothing to clean up!")
+        return
+
+    # Show unused tickers
+    st.markdown("---")
+    st.markdown("### Unused Tickers")
+    st.warning(f"The following **{len(unused_tickers)}** tickers have price data but are not in any portfolio:")
+
+    # Count records per unused ticker
+    try:
+        with get_session() as session:
+            ticker_counts = []
+            for ticker in sorted(unused_tickers):
+                count = session.exec(
+                    select(func.count()).select_from(TickerPeriod).where(
+                        TickerPeriod.ticker == ticker
+                    )
+                ).one()
+                ticker_counts.append({"Ticker": ticker, "Records": count})
+
+            ticker_df = pd.DataFrame(ticker_counts)
+            total_records = ticker_df["Records"].sum()
+
+            st.dataframe(ticker_df, use_container_width=True, height=300)
+            st.markdown(f"**Total records to delete: {total_records:,}**")
+
+    except Exception as e:
+        st.warning(f"Could not count records: {e}")
+        # Still show tickers without counts
+        st.write(sorted(unused_tickers))
+
+    # Deletion options
+    st.markdown("---")
+    st.markdown("### Delete Options")
+
+    delete_option = st.radio(
+        "What do you want to delete?",
+        ["Delete ALL unused tickers", "Delete specific tickers"],
+        key="cleanup_delete_option"
+    )
+
+    if delete_option == "Delete specific tickers":
+        selected_to_delete = st.multiselect(
+            "Select tickers to delete:",
+            options=sorted(unused_tickers),
+            key="cleanup_select_tickers"
+        )
+        tickers_to_delete = set(selected_to_delete)
+    else:
+        tickers_to_delete = unused_tickers
+
+    if not tickers_to_delete:
+        st.info("Select tickers to delete.")
+        return
+
+    # Confirmation
+    st.markdown("---")
+    st.warning(f"⚠️ You are about to delete price data for **{len(tickers_to_delete)}** tickers. This action is **permanent**!")
+
+    confirm_text = st.text_input(
+        f"Type **DELETE {len(tickers_to_delete)}** to confirm:",
+        key="confirm_cleanup_delete"
+    )
+
+    if st.button("🗑️ Delete Unused Price Data", type="primary", key="btn_cleanup_delete"):
+        expected_confirm = f"DELETE {len(tickers_to_delete)}"
+        if confirm_text == expected_confirm:
+            try:
+                deleted_count = 0
+                progress_bar = st.progress(0.0)
+                status_text = st.empty()
+
+                with get_session() as session:
+                    for idx, ticker in enumerate(sorted(tickers_to_delete)):
+                        status_text.info(f"Deleting {ticker}...")
+                        session.exec(delete(TickerPeriod).where(
+                            TickerPeriod.ticker == ticker
+                        ))
+                        deleted_count += 1
+                        progress_bar.progress((idx + 1) / len(tickers_to_delete))
+
+                    session.commit()
+
+                st.success(f"✅ Successfully deleted price data for {deleted_count} tickers!")
+                # Clear cache
+                if 'all_periods_for_filters_cached_data_ui' in st.session_state:
+                    del st.session_state['all_periods_for_filters_cached_data_ui']
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Error deleting tickers: {e}")
+        else:
+            st.error(f"Confirmation text does not match. Please type exactly: {expected_confirm}")
+
+
 def _show_ticker_analysis_ui():
     """
     Ticker Analysis UI with two tabs:
@@ -1892,7 +2034,7 @@ def show_data_ui():
             st.error(f"Fehler Initialisierung StockDataManager: {e}"); st.exception(e); st.stop()
     dm = st.session_state.sdm_instance
 
-    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis", "Delete Portfolios/Sources"], index=0, key="data_ui_mode_radio_main_v4")
+    mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis", "Delete Portfolios/Sources", "Cleanup Unused Tickers"], index=0, key="data_ui_mode_radio_main_v5")
 
     if mode == "Add/Update":
         st.subheader("Ticker einfuegen & Daten updaten")
@@ -2006,6 +2148,11 @@ def show_data_ui():
     # --- Delete Portfolios/Sources Mode ---
     elif mode == "Delete Portfolios/Sources":
         _show_delete_portfolios_sources_ui()
+        return
+
+    # --- Cleanup Unused Tickers Mode ---
+    elif mode == "Cleanup Unused Tickers":
+        _show_cleanup_unused_tickers_ui()
         return
 
     # --- View/Delete Mode ---
