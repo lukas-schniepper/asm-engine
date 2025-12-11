@@ -23,6 +23,16 @@ Usage:
 
     # Output to JSON for integration with monitoring systems
     python scripts/data_quality_monitor.py --json
+
+    # Send email alerts on failure
+    python scripts/data_quality_monitor.py --email your@gmail.com
+
+Environment Variables for Email:
+    SMTP_SERVER: SMTP server (default: smtp.gmail.com)
+    SMTP_PORT: SMTP port (default: 587)
+    SMTP_USER: Email sender address
+    SMTP_PASSWORD: Email password or app-specific password
+    ALERT_EMAIL: Default recipient email
 """
 
 import os
@@ -276,10 +286,180 @@ def generate_report(issues: List[Dict]) -> str:
     return "\n".join(lines)
 
 
+def send_email_alert(
+    recipient: str,
+    subject: str,
+    body: str,
+    html_body: Optional[str] = None,
+) -> bool:
+    """
+    Send email alert using SMTP.
+
+    Requires environment variables:
+    - SMTP_SERVER (default: smtp.gmail.com)
+    - SMTP_PORT (default: 587)
+    - SMTP_USER (sender email)
+    - SMTP_PASSWORD (app-specific password for Gmail)
+
+    Returns:
+        True if email sent successfully, False otherwise
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    if not smtp_user or not smtp_password:
+        logger.warning(
+            "Email not configured. Set SMTP_USER and SMTP_PASSWORD environment variables."
+        )
+        return False
+
+    try:
+        # Create message
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = recipient
+
+        # Plain text version
+        msg.attach(MIMEText(body, "plain"))
+
+        # HTML version (if provided)
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        # Send
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, recipient, msg.as_string())
+
+        logger.info(f"Alert email sent to {recipient}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        return False
+
+
+def generate_html_report(issues: List[Dict], result: Dict) -> str:
+    """Generate HTML version of the report for email."""
+    critical = [i for i in issues if i.get("severity") == "critical"]
+    errors = [i for i in issues if i.get("severity") == "error"]
+    warnings = [i for i in issues if i.get("severity") == "warning"]
+
+    status_color = "#dc3545" if critical or errors else "#ffc107" if warnings else "#28a745"
+    status_text = "CRITICAL" if critical else "ERRORS" if errors else "WARNINGS" if warnings else "PASS"
+
+    html = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .header {{ background-color: {status_color}; color: white; padding: 15px; border-radius: 5px; }}
+            .section {{ margin: 20px 0; }}
+            .issue {{ padding: 10px; margin: 5px 0; border-left: 4px solid; }}
+            .critical {{ border-color: #dc3545; background-color: #f8d7da; }}
+            .error {{ border-color: #fd7e14; background-color: #fff3cd; }}
+            .warning {{ border-color: #ffc107; background-color: #fffce8; }}
+            .summary {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #4a5568; color: white; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>🔍 ASM Data Quality Report - {status_text}</h2>
+            <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+
+        <div class="summary">
+            <strong>Summary:</strong> {len(critical)} critical, {len(errors)} errors, {len(warnings)} warnings
+            <br>
+            <strong>Portfolios Checked:</strong> {result.get('portfolios_checked', 0)}
+            <br>
+            <strong>Days Analyzed:</strong> {result.get('days_checked', 7)}
+        </div>
+    """
+
+    if critical:
+        html += """
+        <div class="section">
+            <h3>🚨 Critical Issues</h3>
+        """
+        for issue in critical:
+            html += f"""
+            <div class="issue critical">
+                <strong>{issue['portfolio']}</strong>
+                {f" ({issue['date']})" if 'date' in issue else ""}
+                <br>{issue['message']}
+            </div>
+            """
+        html += "</div>"
+
+    if errors:
+        html += """
+        <div class="section">
+            <h3>❌ Errors</h3>
+        """
+        for issue in errors:
+            html += f"""
+            <div class="issue error">
+                <strong>{issue['portfolio']}</strong>
+                {f" ({issue['date']})" if 'date' in issue else ""}
+                <br>{issue['message']}
+            </div>
+            """
+        html += "</div>"
+
+    if warnings:
+        html += """
+        <div class="section">
+            <h3>⚠️ Warnings</h3>
+        """
+        for issue in warnings:
+            html += f"""
+            <div class="issue warning">
+                <strong>{issue['portfolio']}</strong>
+                {f" ({issue['date']})" if 'date' in issue else ""}
+                <br>{issue['message']}
+            </div>
+            """
+        html += "</div>"
+
+    if not issues:
+        html += """
+        <div class="section">
+            <h3>✅ All Checks Passed</h3>
+            <p>No data quality issues detected.</p>
+        </div>
+        """
+
+    html += """
+        <hr>
+        <p style="color: #666; font-size: 12px;">
+            This is an automated alert from ASM Portfolio Tracking System.
+            <br>
+            To investigate, check the Performance Tracker → Scraper View.
+        </p>
+    </body>
+    </html>
+    """
+
+    return html
+
+
 def run_monitor(
     portfolio_name: Optional[str] = None,
     days_back: int = 7,
     output_json: bool = False,
+    email_recipient: Optional[str] = None,
 ) -> Dict:
     """
     Run comprehensive data quality monitoring.
@@ -287,6 +467,7 @@ def run_monitor(
     Args:
         portfolio_name: Specific portfolio to check (or all if None)
         days_back: Number of days to check
+        email_recipient: Email address to send alerts (on failure)
         output_json: If True, return JSON-serializable dict
 
     Returns:
@@ -344,6 +525,34 @@ def run_monitor(
     if output_json:
         print(json.dumps(result, indent=2))
 
+    # Send email alert if issues found and email configured
+    if email_recipient and all_issues:
+        has_critical_or_error = (
+            result["critical_count"] > 0 or result["error_count"] > 0
+        )
+
+        # Determine subject based on severity
+        if result["critical_count"] > 0:
+            subject = f"🚨 [CRITICAL] ASM Data Quality Alert - {result['critical_count']} critical issues"
+        elif result["error_count"] > 0:
+            subject = f"❌ [ERROR] ASM Data Quality Alert - {result['error_count']} errors detected"
+        else:
+            subject = f"⚠️ [WARNING] ASM Data Quality Alert - {result['warning_count']} warnings"
+
+        # Generate email content
+        html_body = generate_html_report(all_issues, result)
+
+        # Send email
+        email_sent = send_email_alert(
+            recipient=email_recipient,
+            subject=subject,
+            body=report,
+            html_body=html_body,
+        )
+
+        result["email_sent"] = email_sent
+        result["email_recipient"] = email_recipient
+
     return result
 
 
@@ -367,14 +576,41 @@ def main():
         action="store_true",
         help="Output results as JSON",
     )
+    parser.add_argument(
+        "--email",
+        type=str,
+        help="Email address to send alerts on failure",
+    )
+    parser.add_argument(
+        "--always-email",
+        action="store_true",
+        help="Send email even if no issues found (daily digest)",
+    )
 
     args = parser.parse_args()
+
+    # Get email from args or environment
+    email_recipient = args.email or os.getenv("ALERT_EMAIL")
 
     result = run_monitor(
         portfolio_name=args.portfolio,
         days_back=args.days,
         output_json=args.json,
+        email_recipient=email_recipient,
     )
+
+    # Send daily digest even if no issues (if requested)
+    if args.always_email and email_recipient and not result.get("email_sent"):
+        send_email_alert(
+            recipient=email_recipient,
+            subject="✅ ASM Data Quality - All Checks Passed",
+            body=f"Daily data quality check completed.\n\n"
+                 f"Portfolios checked: {result.get('portfolios_checked', 0)}\n"
+                 f"Days analyzed: {result.get('days_checked', 7)}\n"
+                 f"Status: PASS - No issues detected.\n\n"
+                 f"Timestamp: {result.get('timestamp')}",
+            html_body=generate_html_report([], result),
+        )
 
     # Exit code based on results
     if result.get("error"):
