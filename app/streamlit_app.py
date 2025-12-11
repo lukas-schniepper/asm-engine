@@ -1452,33 +1452,75 @@ def _show_cleanup_unused_tickers_ui():
         st.success("✅ All tickers in the price database are used in portfolios. Nothing to clean up!")
         return
 
-    # Show unused tickers
+    # Show unused tickers grouped by source
     st.markdown("---")
-    st.markdown("### Unused Tickers")
-    st.warning(f"The following **{len(unused_tickers)}** tickers have price data but are not in any portfolio:")
+    st.markdown("### Unused Tickers by Source")
+    st.info("""
+    **Note:** These tickers are in your price database but NOT in any portfolio holdings.
+    They may still be useful for:
+    - Screening/backtesting (e.g., Topweights lists)
+    - Historical analysis
+    - Future portfolio candidates
 
-    # Count records per unused ticker
+    Review the sources below before deleting!
+    """)
+
+    # Get ticker info with sources
     try:
         with get_session() as session:
-            ticker_counts = []
+            # Get all ticker_period entries for unused tickers
+            ticker_source_data = []
+            source_summary = {}
+
             for ticker in sorted(unused_tickers):
+                # Get sources for this ticker
+                sources = session.exec(
+                    select(TickerPeriod.source).distinct().where(
+                        TickerPeriod.ticker == ticker
+                    )
+                ).all()
+                sources_list = [str(s) for s in sources if s]
+                sources_str = ", ".join(sources_list) if sources_list else "Unknown"
+
+                # Count records
                 count = session.exec(
                     select(func.count()).select_from(TickerPeriod).where(
                         TickerPeriod.ticker == ticker
                     )
                 ).one()
-                ticker_counts.append({"Ticker": ticker, "Records": count})
 
-            ticker_df = pd.DataFrame(ticker_counts)
+                ticker_source_data.append({
+                    "Ticker": ticker,
+                    "Sources": sources_str,
+                    "Records": count
+                })
+
+                # Track by source for summary
+                for src in sources_list:
+                    if src not in source_summary:
+                        source_summary[src] = {"tickers": set(), "records": 0}
+                    source_summary[src]["tickers"].add(ticker)
+                    source_summary[src]["records"] += count
+
+            # Show source summary first
+            st.markdown("#### Summary by Source")
+            source_df = pd.DataFrame([
+                {"Source": src, "Unused Tickers": len(data["tickers"]), "Records": data["records"]}
+                for src, data in sorted(source_summary.items())
+            ])
+            st.dataframe(source_df, use_container_width=True)
+
+            # Show detailed ticker list
+            st.markdown("#### Detailed Ticker List")
+            ticker_df = pd.DataFrame(ticker_source_data)
             total_records = ticker_df["Records"].sum()
-
             st.dataframe(ticker_df, use_container_width=True, height=300)
-            st.markdown(f"**Total records to delete: {total_records:,}**")
+            st.markdown(f"**Total records: {total_records:,}**")
 
     except Exception as e:
-        st.warning(f"Could not count records: {e}")
-        # Still show tickers without counts
+        st.warning(f"Could not load source info: {e}")
         st.write(sorted(unused_tickers))
+        source_summary = {}
 
     # Deletion options
     st.markdown("---")
@@ -1486,18 +1528,37 @@ def _show_cleanup_unused_tickers_ui():
 
     delete_option = st.radio(
         "What do you want to delete?",
-        ["Delete ALL unused tickers", "Delete specific tickers"],
+        ["Delete by SOURCE (recommended)", "Delete specific tickers", "Delete ALL unused tickers"],
         key="cleanup_delete_option"
     )
 
-    if delete_option == "Delete specific tickers":
+    tickers_to_delete = set()
+
+    if delete_option == "Delete by SOURCE (recommended)":
+        if source_summary:
+            sources_to_delete = st.multiselect(
+                "Select SOURCES to delete (all unused tickers from these sources):",
+                options=sorted(source_summary.keys()),
+                key="cleanup_select_sources",
+                help="This deletes all unused tickers that belong to the selected sources"
+            )
+            for src in sources_to_delete:
+                tickers_to_delete.update(source_summary[src]["tickers"])
+            if sources_to_delete:
+                st.info(f"Selected {len(tickers_to_delete)} tickers from {len(sources_to_delete)} sources")
+        else:
+            st.warning("Could not load source information")
+
+    elif delete_option == "Delete specific tickers":
         selected_to_delete = st.multiselect(
             "Select tickers to delete:",
             options=sorted(unused_tickers),
             key="cleanup_select_tickers"
         )
         tickers_to_delete = set(selected_to_delete)
-    else:
+
+    else:  # Delete ALL
+        st.error("⚠️ This will delete ALL 600+ unused tickers! Are you sure you don't need them for screening/backtesting?")
         tickers_to_delete = unused_tickers
 
     if not tickers_to_delete:
