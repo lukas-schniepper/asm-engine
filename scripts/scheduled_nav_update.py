@@ -215,8 +215,28 @@ def update_portfolio_nav(
         )
 
         if prev_nav_df.empty:
-            previous_raw_nav = 100.0  # Initial NAV
-            initial_nav = 100.0
+            # Check if this is truly the first day or if there's a data issue
+            # by checking if ANY NAV exists for this portfolio
+            all_nav_df = tracker.get_nav_series(portfolio.id, Variants.RAW)
+
+            if not all_nav_df.empty:
+                # Portfolio has history but query returned empty - likely a date filter issue
+                # This is dangerous - could cause NAV reset!
+                # Use the most recent NAV we can find
+                previous_raw_nav = all_nav_df["nav"].iloc[-1]
+                initial_nav = all_nav_df["nav"].iloc[0]
+                logger.warning(
+                    f"SAFEGUARD ACTIVATED for {portfolio.name}: prev_nav query returned empty "
+                    f"but portfolio has {len(all_nav_df)} historical records. "
+                    f"Using most recent NAV: {previous_raw_nav:.2f} (from {all_nav_df.index[-1].date()})"
+                )
+            else:
+                # Truly a new portfolio - use initial NAV
+                previous_raw_nav = 100.0
+                initial_nav = 100.0
+                logger.info(
+                    f"First NAV record for {portfolio.name} - starting at {initial_nav}"
+                )
         else:
             previous_raw_nav = prev_nav_df["nav"].iloc[-1]
             initial_nav = prev_nav_df["nav"].iloc[0]
@@ -232,6 +252,19 @@ def update_portfolio_nav(
 
         # Calculate raw NAV using current and previous prices
         raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)
+
+        # SAFEGUARD: Validate NAV change is realistic
+        # Alert if daily change exceeds 20% (extremely rare for diversified portfolios)
+        if previous_raw_nav > 0:
+            daily_change_pct = abs((raw_nav / previous_raw_nav) - 1) * 100
+            if daily_change_pct > 20:
+                logger.error(
+                    f"UNREALISTIC NAV CHANGE for {portfolio.name} on {trade_date}: "
+                    f"Previous NAV={previous_raw_nav:.2f}, New NAV={raw_nav:.2f}, "
+                    f"Change={daily_change_pct:.1f}% - THIS LIKELY INDICATES A DATA ERROR!"
+                )
+                # Still update but flag it - could also return "error" to skip
+                # For now, we log loud warning but continue
 
         # Update NAV for all variants
         results = tracker.update_daily_nav(
