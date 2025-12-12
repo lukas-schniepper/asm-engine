@@ -187,6 +187,69 @@ class DataQualityValidator:
 
         return is_valid, alerts
 
+    def validate_methodology_consistency(
+        self,
+        portfolio_name: str,
+        trade_date: date,
+        shares_based_return: float,
+        weight_based_return: float,
+        tolerance_pct: float = 2.0,
+    ) -> Tuple[bool, List[DataQualityAlert]]:
+        """
+        Compare share-based vs weight-based daily return.
+
+        If they diverge by more than tolerance, this indicates either:
+        - Incorrect share counts in holdings
+        - Data corruption
+        - Calculation error
+
+        BLOCKS update if divergence > tolerance.
+
+        Args:
+            portfolio_name: Name of portfolio
+            trade_date: Date being validated
+            shares_based_return: Daily return calculated from shares × price
+            weight_based_return: Daily return calculated from weights × price change
+            tolerance_pct: Maximum allowed divergence (default 2%)
+
+        Returns:
+            Tuple of (is_valid, alerts)
+        """
+        alerts = []
+        is_valid = True
+
+        diff = abs(shares_based_return - weight_based_return)
+
+        if diff > tolerance_pct:
+            # Determine severity based on magnitude
+            if diff > 5.0:
+                severity = AlertSeverity.CRITICAL
+            elif diff > 3.0:
+                severity = AlertSeverity.ERROR
+            else:
+                severity = AlertSeverity.WARNING
+
+            alerts.append(DataQualityAlert(
+                timestamp=datetime.now(),
+                severity=severity,
+                portfolio_name=portfolio_name,
+                trade_date=trade_date,
+                alert_type="METHODOLOGY_DIVERGENCE",
+                message=f"Share-based return ({shares_based_return:+.2f}%) vs weight-based ({weight_based_return:+.2f}%) differ by {diff:.2f}%",
+                details={
+                    "shares_based_return": shares_based_return,
+                    "weight_based_return": weight_based_return,
+                    "difference": diff,
+                    "tolerance": tolerance_pct,
+                },
+            ))
+
+            # Block update if divergence exceeds tolerance
+            is_valid = False
+
+        self.alerts.extend(alerts)
+        return is_valid, alerts
+
     def validate_holdings_prices(
         self,
         portfolio_name: str,

@@ -174,6 +174,53 @@ def _ensure_holdings_have_shares(
     return True
 
 
+def _calculate_weight_based_nav(
+    holdings,
+    prices: dict[str, float],
+    previous_prices: dict[str, float],
+    previous_nav: float,
+) -> float:
+    """
+    Calculate NAV using weight-based methodology (for comparison/validation).
+
+    This calculates: new_nav = previous_nav * (1 + weighted_return)
+    where weighted_return = sum(weight * (curr_price / prev_price - 1))
+
+    Used to cross-check against share-based NAV calculation.
+    """
+    if not holdings or previous_nav is None:
+        return previous_nav or 100.0
+
+    # Build weights dict (normalize to sum=1)
+    weights = {}
+    for h in holdings:
+        w = float(h.weight) if h.weight else 1.0 / len(holdings)
+        weights[h.ticker] = w
+
+    total_weight = sum(weights.values())
+    if total_weight > 0:
+        weights = {t: w / total_weight for t, w in weights.items()}
+
+    # Calculate weighted return from prices
+    weighted_return = 0.0
+    tickers_used = 0
+
+    for ticker, weight in weights.items():
+        curr_price = prices.get(ticker)
+        prev_price = previous_prices.get(ticker) if previous_prices else None
+
+        if curr_price and prev_price and prev_price > 0:
+            ticker_return = (curr_price / prev_price) - 1
+            weighted_return += weight * ticker_return
+            tickers_used += 1
+
+    # If we couldn't calculate any returns, return previous NAV
+    if tickers_used == 0:
+        return previous_nav
+
+    return previous_nav * (1 + weighted_return)
+
+
 def update_portfolio_nav(
     tracker,
     portfolio,
@@ -277,6 +324,32 @@ def update_portfolio_nav(
             initial_nav=initial_nav,
             peak_nav=peak_nav,
         )
+
+        # PRE-FLIGHT CHECK: Compare share-based vs weight-based NAV
+        # This catches data corruption where shares/weights are inconsistent
+        if prev_price_data and previous_raw_nav > 0:
+            weight_based_nav = _calculate_weight_based_nav(
+                holdings, price_data, prev_price_data, previous_raw_nav
+            )
+
+            shares_return = ((raw_nav / previous_raw_nav) - 1) * 100
+            weight_return = ((weight_based_nav / previous_raw_nav) - 1) * 100
+
+            methodology_valid, methodology_alerts = validator.validate_methodology_consistency(
+                portfolio_name=portfolio.name,
+                trade_date=trade_date,
+                shares_based_return=shares_return,
+                weight_based_return=weight_return,
+                tolerance_pct=2.0,
+            )
+
+            if not methodology_valid:
+                is_valid = False
+                alerts.extend(methodology_alerts)
+                logger.error(
+                    f"METHODOLOGY DIVERGENCE for {portfolio.name}: "
+                    f"shares-based={shares_return:+.2f}%, weight-based={weight_return:+.2f}%"
+                )
 
         # Log all alerts
         for alert in alerts:

@@ -411,6 +411,172 @@ def reconcile_mtd_from_prices(
     return issues
 
 
+def check_methodology_divergence(
+    portfolios: List,
+    tracker,
+    days_back: int = 7,
+    tolerance_pct: float = 2.0,
+) -> List[Dict]:
+    """
+    Compare share-based NAV (stored) vs weight-based NAV for divergence.
+
+    This catches methodology inconsistencies that can accumulate over time:
+    - Share-based: NAV = sum(shares × price) - buy-and-hold
+    - Weight-based: NAV = prev_NAV × (1 + weighted_return)
+
+    For short periods, these should match within tolerance.
+    Large divergence indicates data corruption or calculation bugs.
+
+    Args:
+        portfolios: List of portfolios to check
+        tracker: Portfolio tracker instance
+        days_back: Number of days to analyze
+        tolerance_pct: Maximum allowed return difference (default 2%)
+
+    Returns:
+        List of issues found
+    """
+    import pandas as pd
+    from decimal import Decimal
+    from AlphaMachine_core.tracking import Variants
+    from AlphaMachine_core.data_manager import StockDataManager
+
+    issues = []
+    today = date.today()
+    start_date = today - timedelta(days=days_back)
+
+    # Collect all tickers
+    all_tickers = set()
+    for portfolio in portfolios:
+        holdings = tracker.get_holdings(portfolio.id, today)
+        if holdings:
+            for h in holdings:
+                all_tickers.add(h.ticker)
+
+    if not all_tickers:
+        return issues
+
+    # Load price data
+    try:
+        dm = StockDataManager()
+        price_dicts = dm.get_price_data(
+            list(all_tickers),
+            (start_date - timedelta(days=7)).strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d"),
+        )
+        if not price_dicts:
+            return issues
+
+        price_df = pd.DataFrame(price_dicts)
+        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+    except Exception as e:
+        logger.warning(f"Could not load price data for methodology check: {e}")
+        return issues
+
+    for portfolio in portfolios:
+        try:
+            # Get stored NAV
+            nav_df = tracker.get_nav_series(
+                portfolio.id, Variants.RAW, start_date, today
+            )
+            if nav_df.empty or len(nav_df) < 2:
+                continue
+
+            # Get holdings (we use latest holdings for weight reference)
+            holdings = tracker.get_holdings(portfolio.id, today)
+            if not holdings:
+                continue
+
+            # Build weights dict (normalize)
+            weights = {}
+            for h in holdings:
+                w = float(h.weight) if h.weight else 1.0 / len(holdings)
+                weights[h.ticker] = w
+            total_weight = sum(weights.values())
+            if total_weight > 0:
+                weights = {t: w / total_weight for t, w in weights.items()}
+
+            # Compare stored daily return vs weight-based calculation
+            divergence_days = []
+
+            for i in range(1, len(nav_df)):
+                nav_date = nav_df.index[i]
+                nav_date_dt = nav_date.date() if hasattr(nav_date, 'date') else nav_date
+                prev_date = nav_df.index[i - 1]
+                prev_date_dt = prev_date.date() if hasattr(prev_date, 'date') else prev_date
+
+                # Stored return (share-based)
+                stored_return = nav_df.iloc[i]["daily_return"] * 100
+
+                # Calculate weight-based return from prices
+                curr_prices = price_df[price_df["trade_date"] == nav_date_dt]
+                prev_prices = price_df[price_df["trade_date"] == prev_date_dt]
+
+                if curr_prices.empty or prev_prices.empty:
+                    continue
+
+                weighted_return = 0.0
+                tickers_used = 0
+
+                for ticker, weight in weights.items():
+                    curr_row = curr_prices[curr_prices["ticker"] == ticker]
+                    prev_row = prev_prices[prev_prices["ticker"] == ticker]
+
+                    if curr_row.empty or prev_row.empty:
+                        continue
+
+                    # Use adjusted close
+                    if "adjusted_close" in curr_row.columns:
+                        curr_price = curr_row["adjusted_close"].fillna(curr_row["close"]).iloc[0]
+                        prev_price = prev_row["adjusted_close"].fillna(prev_row["close"]).iloc[0]
+                    else:
+                        curr_price = curr_row["close"].iloc[0]
+                        prev_price = prev_row["close"].iloc[0]
+
+                    if prev_price and prev_price > 0:
+                        ticker_return = ((curr_price / prev_price) - 1) * 100
+                        weighted_return += weight * ticker_return
+                        tickers_used += 1
+
+                if tickers_used < len(weights) * 0.5:
+                    continue
+
+                # Compare
+                diff = abs(stored_return - weighted_return)
+                if diff > tolerance_pct:
+                    divergence_days.append({
+                        "date": str(nav_date_dt),
+                        "stored": stored_return,
+                        "expected": weighted_return,
+                        "diff": diff,
+                    })
+
+            # Report significant divergences
+            if divergence_days:
+                # Find worst divergence
+                worst = max(divergence_days, key=lambda x: x["diff"])
+
+                severity = "error" if worst["diff"] > 5.0 else "warning"
+                issues.append({
+                    "portfolio": portfolio.name,
+                    "date": worst["date"],
+                    "type": "METHODOLOGY_DIVERGENCE",
+                    "severity": severity,
+                    "message": (
+                        f"Share-based return {worst['stored']:+.2f}% vs "
+                        f"weight-based {worst['expected']:+.2f}% (diff: {worst['diff']:.2f}%)"
+                    ),
+                    "divergent_days": len(divergence_days),
+                    "worst_diff": worst["diff"],
+                })
+
+        except Exception as e:
+            logger.warning(f"Error checking methodology divergence for {portfolio.name}: {e}")
+
+    return issues
+
+
 def check_missing_ticker_data(
     portfolios: List,
     tracker,
@@ -816,6 +982,9 @@ def run_monitor(
 
     logger.info("Checking for missing ticker data...")
     all_issues.extend(check_missing_ticker_data(portfolios, tracker, days_back))
+
+    logger.info("Checking for methodology divergence (share-based vs weight-based)...")
+    all_issues.extend(check_methodology_divergence(portfolios, tracker, days_back, tolerance_pct=2.0))
 
     # Generate report
     report = generate_report(all_issues)
