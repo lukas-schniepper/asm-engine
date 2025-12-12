@@ -577,6 +577,126 @@ def check_methodology_divergence(
     return issues
 
 
+def check_nav_baseline_accuracy(
+    portfolios: List,
+    tracker,
+    tolerance_pct: float = 0.5,
+) -> List[Dict]:
+    """
+    Check that stored NAV equals sum(shares × price) for each portfolio.
+
+    This catches "baseline offset" issues where:
+    - Daily returns are correct (wrong shares cancel out)
+    - But absolute NAV values are wrong due to incorrect shares calculation
+    - MTD/YTD calculations are wrong because baseline is off
+
+    Args:
+        portfolios: List of portfolios to check
+        tracker: Portfolio tracker instance
+        tolerance_pct: Acceptable drift percentage (default 0.5%)
+
+    Returns:
+        List of issues found
+    """
+    from decimal import Decimal
+    from sqlmodel import Session, select
+    from AlphaMachine_core.db import engine
+    from AlphaMachine_core.models import PriceData
+    from AlphaMachine_core.tracking.models import PortfolioDailyNAV, Variants
+
+    issues = []
+    today = date.today()
+
+    for portfolio in portfolios:
+        try:
+            with Session(engine) as session:
+                # Get latest NAV
+                nav_stmt = (
+                    select(PortfolioDailyNAV)
+                    .where(PortfolioDailyNAV.portfolio_id == portfolio.id)
+                    .where(PortfolioDailyNAV.variant == Variants.RAW)
+                    .order_by(PortfolioDailyNAV.trade_date.desc())
+                    .limit(1)
+                )
+                latest_nav = session.exec(nav_stmt).first()
+
+                if not latest_nav:
+                    continue
+
+                check_date = latest_nav.trade_date
+                stored_nav = float(latest_nav.nav)
+
+                # Get holdings for that date
+                holdings = tracker.get_holdings(portfolio.id, check_date)
+                if not holdings:
+                    continue
+
+                # Calculate expected NAV = sum(shares × price)
+                expected_nav = Decimal("0")
+                missing_prices = []
+
+                for h in holdings:
+                    if not h.shares:
+                        continue
+
+                    # Get price for this ticker on check_date
+                    price_stmt = (
+                        select(PriceData)
+                        .where(PriceData.ticker == h.ticker)
+                        .where(PriceData.trade_date <= check_date)
+                        .order_by(PriceData.trade_date.desc())
+                        .limit(1)
+                    )
+                    price_record = session.exec(price_stmt).first()
+
+                    if price_record:
+                        price = price_record.adjusted_close or price_record.close
+                        expected_nav += h.shares * Decimal(str(price))
+                    else:
+                        missing_prices.append(h.ticker)
+
+                if missing_prices:
+                    logger.warning(
+                        f"  {portfolio.name}: Missing prices for {missing_prices}"
+                    )
+                    continue
+
+                if expected_nav == 0:
+                    continue
+
+                # Calculate drift
+                expected_nav_float = float(expected_nav)
+                drift_pct = ((stored_nav / expected_nav_float) - 1) * 100
+
+                if abs(drift_pct) > tolerance_pct:
+                    issues.append({
+                        "portfolio": portfolio.name,
+                        "check": "nav_baseline_accuracy",
+                        "severity": "error" if abs(drift_pct) > 2.0 else "warning",
+                        "message": (
+                            f"NAV baseline drift: stored={stored_nav:.2f}, "
+                            f"expected={expected_nav_float:.2f}, drift={drift_pct:.2f}%"
+                        ),
+                        "details": {
+                            "check_date": str(check_date),
+                            "stored_nav": stored_nav,
+                            "expected_nav": expected_nav_float,
+                            "drift_pct": drift_pct,
+                        },
+                    })
+                    logger.info(
+                        f"  {portfolio.name}: DRIFT {drift_pct:.2f}% "
+                        f"(stored={stored_nav:.2f}, expected={expected_nav_float:.2f})"
+                    )
+                else:
+                    logger.debug(f"  {portfolio.name}: OK (drift={drift_pct:.3f}%)")
+
+        except Exception as e:
+            logger.warning(f"Error checking baseline accuracy for {portfolio.name}: {e}")
+
+    return issues
+
+
 def check_missing_ticker_data(
     portfolios: List,
     tracker,
@@ -985,6 +1105,9 @@ def run_monitor(
 
     logger.info("Checking for methodology divergence (share-based vs weight-based)...")
     all_issues.extend(check_methodology_divergence(portfolios, tracker, days_back, tolerance_pct=2.0))
+
+    logger.info("Checking NAV baseline accuracy (shares x price = NAV)...")
+    all_issues.extend(check_nav_baseline_accuracy(portfolios, tracker, tolerance_pct=0.5))
 
     # Generate report
     report = generate_report(all_issues)
