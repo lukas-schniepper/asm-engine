@@ -122,15 +122,17 @@ def check_nav_anomalies(
 
         # Check for NAV near 100 (potential reset) when it shouldn't be
         latest_nav = nav_df["nav"].iloc[-1]
-        if portfolio.start_date and portfolio.start_date < end_date - timedelta(days=30):
-            # Portfolio is >30 days old, NAV near 100 is suspicious
+        first_nav_date = nav_df.index[0].date() if hasattr(nav_df.index[0], 'date') else nav_df.index[0]
+        nav_days = (end_date - first_nav_date).days
+        if nav_days > 60:
+            # Portfolio has >60 days of NAV data, NAV near 100 is suspicious
             if 95 < latest_nav < 105:
                 issues.append({
                     "portfolio": portfolio.name,
                     "date": nav_df.index[-1].strftime("%Y-%m-%d"),
                     "type": "SUSPICIOUS_NAV",
                     "severity": "warning",
-                    "message": f"NAV is {latest_nav:.2f} (near initial 100) for mature portfolio",
+                    "message": f"NAV is {latest_nav:.2f} (near initial 100) after {nav_days} days of tracking",
                     "value": float(latest_nav),
                 })
 
