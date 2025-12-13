@@ -2480,6 +2480,244 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         summary_df = summary_df.sort_values("Total Return", ascending=False, key=lambda x: x.str.replace("%", "").astype(float))
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
+    # ===== Ticker-Level Returns Section =====
+    st.markdown("---")
+    st.markdown("### Ticker-Level Returns")
+    st.markdown("View daily returns for individual holdings within a portfolio.")
+
+    # Portfolio selector for ticker view
+    ticker_portfolio = st.selectbox(
+        "Select Portfolio for Ticker View",
+        options=portfolios_with_data,
+        format_func=clean_portfolio_name,
+        key="scraper_view_ticker_portfolio",
+    )
+
+    if ticker_portfolio:
+        # Get portfolio object
+        portfolio_obj = next((p for p in all_portfolios_sorted if p.name == ticker_portfolio), None)
+        if portfolio_obj:
+            # Get holdings for this portfolio
+            holdings = tracker.get_holdings(portfolio_obj.id, end_date)
+
+            if holdings:
+                tickers = [h.ticker for h in holdings]
+                weights = {h.ticker: float(h.weight) if h.weight else 0 for h in holdings}
+
+                # Get price data for these tickers
+                from ..data_manager import StockDataManager
+                dm = StockDataManager()
+
+                try:
+                    price_dicts = dm.get_price_data(
+                        tickers,
+                        start_date.strftime("%Y-%m-%d"),
+                        end_date.strftime("%Y-%m-%d"),
+                    )
+
+                    if price_dicts:
+                        price_df = pd.DataFrame(price_dicts)
+                        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+                        # Calculate daily returns for each ticker
+                        ticker_returns = {}
+                        for ticker in tickers:
+                            ticker_data = price_df[price_df["ticker"] == ticker].copy()
+                            ticker_data = ticker_data.sort_values("trade_date")
+
+                            if len(ticker_data) > 1:
+                                # Use adjusted close if available
+                                if "adjusted_close" in ticker_data.columns:
+                                    prices = ticker_data["adjusted_close"].fillna(ticker_data["close"])
+                                else:
+                                    prices = ticker_data["close"]
+
+                                ticker_data["return"] = prices.pct_change()
+                                returns_series = pd.Series(
+                                    ticker_data["return"].values,
+                                    index=ticker_data["trade_date"].values
+                                )
+                                ticker_returns[ticker] = returns_series
+
+                        if ticker_returns:
+                            # Create DataFrame (tickers as rows, dates as columns)
+                            ticker_df = pd.DataFrame(ticker_returns).T
+                            ticker_df = ticker_df.reindex(sorted(ticker_df.columns), axis=1)
+
+                            # Group by month like the portfolio table
+                            ticker_date_cols = list(ticker_df.columns)
+                            ticker_month_groups = {}
+                            ticker_month_totals = {}
+
+                            for d in ticker_date_cols:
+                                if hasattr(d, 'strftime'):
+                                    month_key = d.strftime("%Y-%m")
+                                elif isinstance(d, date):
+                                    month_key = d.strftime("%Y-%m")
+                                else:
+                                    continue
+                                if month_key not in ticker_month_groups:
+                                    ticker_month_groups[month_key] = []
+                                ticker_month_groups[month_key].append(d)
+
+                            # Add monthly totals
+                            ticker_new_columns = []
+                            for month_key in sorted(ticker_month_groups.keys()):
+                                month_dates = ticker_month_groups[month_key]
+                                month_name = pd.Timestamp(month_dates[0]).strftime("%b %Y")
+                                total_col_name = f"{month_name} Total"
+                                ticker_month_totals[month_key] = total_col_name
+
+                                # Calculate compounded monthly return
+                                monthly_returns = []
+                                for ticker in ticker_df.index:
+                                    month_data = ticker_df.loc[ticker, month_dates].dropna()
+                                    if len(month_data) > 0:
+                                        compounded = (1 + month_data).prod() - 1
+                                        monthly_returns.append(compounded)
+                                    else:
+                                        monthly_returns.append(np.nan)
+
+                                ticker_df[total_col_name] = monthly_returns
+                                ticker_new_columns.append(total_col_name)
+                                ticker_new_columns.extend(month_dates)
+
+                            ticker_df = ticker_df[ticker_new_columns]
+
+                            # Format column headers
+                            ticker_date_to_field = {}
+                            for col in ticker_df.columns:
+                                if hasattr(col, 'strftime'):
+                                    ticker_date_to_field[col] = col.strftime("%Y-%m-%d")
+                                elif isinstance(col, date):
+                                    ticker_date_to_field[col] = col.strftime("%Y-%m-%d")
+                                else:
+                                    ticker_date_to_field[col] = str(col)
+
+                            ticker_df.columns = [ticker_date_to_field.get(c, str(c)) for c in ticker_df.columns]
+
+                            # Convert to percentages
+                            ticker_display_df = ticker_df.copy()
+                            for col in ticker_display_df.columns:
+                                ticker_display_df[col] = ticker_display_df[col].apply(
+                                    lambda x: f"{x*100:.2f}%" if pd.notna(x) else ""
+                                )
+
+                            # Add weight column and reset index
+                            ticker_display_df = ticker_display_df.reset_index()
+                            ticker_display_df.rename(columns={"index": "Ticker"}, inplace=True)
+                            ticker_display_df.insert(1, "Weight", ticker_display_df["Ticker"].map(
+                                lambda t: f"{weights.get(t, 0)*100:.1f}%"
+                            ))
+
+                            # Build column defs for ticker grid
+                            ticker_column_defs = [
+                                {
+                                    "field": "Ticker",
+                                    "pinned": "left",
+                                    "minWidth": 80,
+                                    "cellStyle": {"fontWeight": "bold"},
+                                },
+                                {
+                                    "field": "Weight",
+                                    "pinned": "left",
+                                    "width": 70,
+                                    "cellStyle": {"fontWeight": "bold", "backgroundColor": "#f0f0f0"},
+                                }
+                            ]
+
+                            # Build column groups for each month
+                            for month_key in sorted(ticker_month_groups.keys()):
+                                month_dates = ticker_month_groups[month_key]
+                                total_col = ticker_month_totals[month_key]
+                                month_display = pd.Timestamp(f"{month_key}-01").strftime("%b %Y")
+                                is_current_month = month_key == current_month
+
+                                children = []
+                                for d in month_dates:
+                                    if hasattr(d, 'strftime'):
+                                        field_name = d.strftime("%Y-%m-%d")
+                                        day_label = d.strftime("%d %b")
+                                    elif isinstance(d, date):
+                                        field_name = d.strftime("%Y-%m-%d")
+                                        day_label = d.strftime("%d %b")
+                                    else:
+                                        continue
+                                    children.append({
+                                        "field": field_name,
+                                        "headerName": day_label,
+                                        "width": 65,
+                                        "columnGroupShow": "open",
+                                        "cellStyle": cell_style_jscode,
+                                    })
+
+                                children.append({
+                                    "field": total_col,
+                                    "headerName": "Total",
+                                    "width": 70,
+                                    "cellStyle": cell_style_jscode,
+                                })
+
+                                ticker_column_defs.append({
+                                    "headerName": month_display,
+                                    "children": children,
+                                    "openByDefault": is_current_month,
+                                    "marryChildren": True,
+                                })
+
+                            ticker_grid_options = {
+                                "columnDefs": ticker_column_defs,
+                                "defaultColDef": {
+                                    "resizable": True,
+                                    "sortable": True,
+                                },
+                                "suppressColumnVirtualisation": True,
+                                "groupHeaderHeight": 25,
+                            }
+
+                            ticker_height = 35 * (len(ticker_display_df) + 1) + 60
+
+                            AgGrid(
+                                ticker_display_df,
+                                gridOptions=ticker_grid_options,
+                                height=min(ticker_height, 600),  # Cap height
+                                allow_unsafe_jscode=True,
+                                theme="streamlit",
+                                key="ticker_level_grid",
+                            )
+
+                            # Ticker summary
+                            st.markdown("#### Ticker Performance Summary")
+                            ticker_summary = []
+                            for ticker in tickers:
+                                if ticker in ticker_returns:
+                                    valid_returns = ticker_returns[ticker].dropna()
+                                    if len(valid_returns) > 0:
+                                        total_return = (1 + valid_returns).prod() - 1
+                                        ticker_summary.append({
+                                            "Ticker": ticker,
+                                            "Weight": f"{weights.get(ticker, 0)*100:.1f}%",
+                                            "Total Return": f"{total_return*100:.2f}%",
+                                            "Trading Days": len(valid_returns),
+                                        })
+
+                            if ticker_summary:
+                                ticker_summary_df = pd.DataFrame(ticker_summary)
+                                ticker_summary_df = ticker_summary_df.sort_values(
+                                    "Total Return",
+                                    ascending=False,
+                                    key=lambda x: x.str.replace("%", "").astype(float)
+                                )
+                                st.dataframe(ticker_summary_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("Could not calculate returns for tickers.")
+                    else:
+                        st.info("No price data available for the selected date range.")
+                except Exception as e:
+                    st.warning(f"Could not load ticker data: {e}")
+            else:
+                st.info("No holdings found for this portfolio.")
+
 
 def _render_demo_mode():
     """Render demo content when no portfolios are available."""
