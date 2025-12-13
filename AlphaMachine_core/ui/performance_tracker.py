@@ -2301,13 +2301,20 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
             total_col_name = f"{month_name} Total"
             month_totals[month_key] = total_col_name
 
-            # Calculate compounded monthly return for each portfolio
+            # Calculate monthly return for each portfolio
+            # IMPORTANT: Exclude first day's return - it represents prev_month_last → month_first
+            # Monthly return should be: month_first → month_last (i.e., within-month only)
             monthly_returns = []
             for portfolio in df.index:
                 month_data = df.loc[portfolio, month_dates].dropna()
-                if len(month_data) > 0:
-                    compounded = (1 + month_data).prod() - 1
+                if len(month_data) > 1:
+                    # Exclude first day's return, compound the rest
+                    within_month_data = month_data.iloc[1:]
+                    compounded = (1 + within_month_data).prod() - 1
                     monthly_returns.append(compounded)
+                elif len(month_data) == 1:
+                    # Only one day in month - no within-month return yet
+                    monthly_returns.append(0.0)
                 else:
                     monthly_returns.append(np.nan)
 
@@ -2567,13 +2574,17 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                 total_col_name = f"{month_name} Total"
                                 ticker_month_totals[month_key] = total_col_name
 
-                                # Calculate compounded monthly return
+                                # Calculate monthly return (exclude first day - it spans prev month)
                                 monthly_returns = []
                                 for ticker in ticker_df.index:
                                     month_data = ticker_df.loc[ticker, month_dates].dropna()
-                                    if len(month_data) > 0:
-                                        compounded = (1 + month_data).prod() - 1
+                                    if len(month_data) > 1:
+                                        # Exclude first day's return, compound the rest
+                                        within_month_data = month_data.iloc[1:]
+                                        compounded = (1 + within_month_data).prod() - 1
                                         monthly_returns.append(compounded)
+                                    elif len(month_data) == 1:
+                                        monthly_returns.append(0.0)
                                     else:
                                         monthly_returns.append(np.nan)
 
