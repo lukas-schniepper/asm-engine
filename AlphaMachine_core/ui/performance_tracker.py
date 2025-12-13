@@ -2508,13 +2508,16 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                 weights = {h.ticker: float(h.weight) if h.weight else 0 for h in holdings}
 
                 # Get price data for these tickers
+                # Fetch extra days BEFORE start_date to calculate first day's return
+                # (pct_change needs previous day's price)
                 from ..data_manager import StockDataManager
                 dm = StockDataManager()
+                price_fetch_start = start_date - timedelta(days=10)  # Buffer for weekends/holidays
 
                 try:
                     price_dicts = dm.get_price_data(
                         tickers,
-                        start_date.strftime("%Y-%m-%d"),
+                        price_fetch_start.strftime("%Y-%m-%d"),
                         end_date.strftime("%Y-%m-%d"),
                     )
 
@@ -2523,6 +2526,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                         price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
 
                         # Calculate daily returns for each ticker
+                        # We fetched extra days before start_date to calculate first day's return
                         ticker_returns = {}
                         for ticker in tickers:
                             ticker_data = price_df[price_df["ticker"] == ticker].copy()
@@ -2535,7 +2539,12 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                 else:
                                     prices = ticker_data["close"]
 
+                                # Calculate returns (first day will now have return from previous day)
                                 ticker_data["return"] = prices.pct_change()
+
+                                # Filter to only include dates within user's selected range
+                                ticker_data = ticker_data[ticker_data["trade_date"] >= start_date]
+
                                 returns_series = pd.Series(
                                     ticker_data["return"].values,
                                     index=ticker_data["trade_date"].values
