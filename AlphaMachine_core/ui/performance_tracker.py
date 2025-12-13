@@ -2020,11 +2020,11 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             portfolio_nav = nav_df["nav"]
             nav_len = len(portfolio_nav)
 
-            if nav_len < 20:
+            if nav_len < 30:
                 corr_diagnostics.append({
                     "portfolio": col_name,
-                    "status": "❌ < 20 days",
-                    "reason": f"Only {nav_len} data points (need 20+)",
+                    "status": "❌ < 30 days",
+                    "reason": f"Only {nav_len} data points (need 30+)",
                     "rows": nav_len,
                 })
                 continue
@@ -2063,7 +2063,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         returns_df = pd.DataFrame(returns_data)
         returns_df = returns_df.dropna()
 
-        if len(returns_df) >= 20:
+        if len(returns_df) >= 30:
             # Calculate correlation matrix
             corr_matrix = returns_df.corr()
 
@@ -2108,7 +2108,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_corr, use_container_width=True)
 
         else:
-            st.caption(f"Need at least 20 aligned trading days for correlation. Found: {len(returns_df)}")
+            st.caption(f"Need at least 30 aligned trading days for correlation. Found: {len(returns_df)}")
     else:
         st.caption("Select at least 2 portfolios to view correlation matrix.")
 
