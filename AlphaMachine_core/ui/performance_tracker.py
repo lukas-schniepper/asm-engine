@@ -2154,6 +2154,109 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         )
         st.plotly_chart(scatter, use_container_width=True)
 
+    # ===== Sector Exposure by Month =====
+    st.markdown("---")
+    st.markdown("#### Sector Exposure by Month")
+    st.markdown("View sector allocation for each portfolio across months in the selected date range.")
+
+    # Get sector data for all tickers
+    from ..data_manager import StockDataManager
+    from ..models import TickerInfo
+    from ..db import get_session
+    from sqlmodel import select
+
+    # Build sector lookup from TickerInfo table
+    sector_lookup = {}
+    with get_session() as session:
+        ticker_infos = session.exec(select(TickerInfo)).all()
+        for ti in ticker_infos:
+            if ti.sector:
+                sector_lookup[ti.ticker] = ti.sector
+
+    # Get months in date range
+    sector_months = []
+    current_month = start_date.replace(day=1)
+    while current_month <= end_date:
+        sector_months.append(current_month)
+        if current_month.month == 12:
+            current_month = current_month.replace(year=current_month.year + 1, month=1)
+        else:
+            current_month = current_month.replace(month=current_month.month + 1)
+
+    # Build sector exposure data for each portfolio and month
+    sector_data = []
+
+    for portfolio_name in selected_portfolio_names:
+        portfolio_id = portfolio_options[portfolio_name]
+        clean_pf_name = clean_name(portfolio_name)
+
+        for month_start in sector_months:
+            # Get holdings for this month
+            holdings = tracker.get_holdings(portfolio_id, month_start)
+
+            if holdings:
+                # Calculate sector weights
+                sector_weights = {}
+                total_weight = 0
+
+                for h in holdings:
+                    ticker = h.ticker
+                    weight = float(h.weight) if h.weight else 0
+                    sector = sector_lookup.get(ticker, "Unknown")
+
+                    if sector not in sector_weights:
+                        sector_weights[sector] = 0
+                    sector_weights[sector] += weight
+                    total_weight += weight
+
+                # Normalize weights if needed
+                if total_weight > 0:
+                    for sector in sector_weights:
+                        sector_weights[sector] = sector_weights[sector] / total_weight
+
+                # Add row for each sector
+                for sector, weight in sector_weights.items():
+                    sector_data.append({
+                        "Portfolio": clean_pf_name,
+                        "Month": month_start.strftime("%b %Y"),
+                        "Sector": sector,
+                        "Weight": weight,
+                    })
+
+    if sector_data:
+        sector_df = pd.DataFrame(sector_data)
+
+        # Create pivot table: rows = Portfolio + Sector, columns = Month
+        pivot_df = sector_df.pivot_table(
+            index=["Portfolio", "Sector"],
+            columns="Month",
+            values="Weight",
+            aggfunc="sum",
+            fill_value=0
+        )
+
+        # Reorder columns chronologically
+        month_order = [m.strftime("%b %Y") for m in sector_months]
+        pivot_df = pivot_df.reindex(columns=[c for c in month_order if c in pivot_df.columns])
+
+        # Format as percentages
+        styled_pivot = pivot_df.style.format("{:.1%}").background_gradient(
+            cmap="Blues", axis=None, vmin=0, vmax=0.5
+        )
+
+        st.dataframe(styled_pivot, use_container_width=True)
+
+        # Also show a summary by sector across all portfolios
+        with st.expander("Sector Summary (All Portfolios Combined)"):
+            summary_df = sector_df.groupby(["Month", "Sector"])["Weight"].mean().unstack(fill_value=0)
+            summary_df = summary_df.reindex(index=[c for c in month_order if c in summary_df.index])
+            styled_summary = summary_df.style.format("{:.1%}").background_gradient(
+                cmap="Greens", axis=None, vmin=0, vmax=0.5
+            )
+            st.dataframe(styled_summary, use_container_width=True)
+    else:
+        st.info("No sector data available for the selected portfolios and date range.")
+
 
 def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     """Render the Scraper View tab - pivot table of daily returns across all portfolios."""
