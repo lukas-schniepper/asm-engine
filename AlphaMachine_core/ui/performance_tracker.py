@@ -336,9 +336,8 @@ def _render_overview_tab(
         except Exception:
             pass  # Will show N/A in KPI grid
 
-    # Add info ratio to perf dict for KPI grid
-    if info_ratio is not None:
-        perf["information_ratio"] = info_ratio
+    # Add info ratio to perf dict for KPI grid (always show, even if N/A)
+    perf["information_ratio"] = info_ratio
 
     kpis = format_metrics_for_display(perf)
     st.markdown(render_kpi_grid(kpis), unsafe_allow_html=True)
