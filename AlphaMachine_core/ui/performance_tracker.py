@@ -2500,12 +2500,61 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         # Get portfolio object
         portfolio_obj = next((p for p in all_portfolios_sorted if p.name == ticker_portfolio), None)
         if portfolio_obj:
-            # Get holdings for this portfolio
-            holdings = tracker.get_holdings(portfolio_obj.id, end_date)
+            # Get holdings across all months in the date range
+            # This ensures we show the correct tickers for each period (handles rebalances)
+            all_tickers = set()
+            holdings_by_date = {}  # date -> set of tickers active on that date
 
-            if holdings:
-                tickers = [h.ticker for h in holdings]
-                weights = {h.ticker: float(h.weight) if h.weight else 0 for h in holdings}
+            # Get first day of each month in the range
+            current = start_date.replace(day=1)
+            month_dates = []
+            while current <= end_date:
+                month_dates.append(current)
+                # Move to next month
+                if current.month == 12:
+                    current = current.replace(year=current.year + 1, month=1)
+                else:
+                    current = current.replace(month=current.month + 1)
+
+            # Get holdings for each month-start date
+            for month_start in month_dates:
+                month_holdings = tracker.get_holdings(portfolio_obj.id, month_start)
+                if month_holdings:
+                    month_tickers = set(h.ticker for h in month_holdings)
+                    all_tickers.update(month_tickers)
+                    # Get effective_date to know when these holdings are valid
+                    eff_date = month_holdings[0].effective_date
+                    holdings_by_date[eff_date] = month_tickers
+
+            # Also get end_date holdings in case of recent rebalance
+            end_holdings = tracker.get_holdings(portfolio_obj.id, end_date)
+            if end_holdings:
+                all_tickers.update(h.ticker for h in end_holdings)
+                eff_date = end_holdings[0].effective_date
+                holdings_by_date[eff_date] = set(h.ticker for h in end_holdings)
+
+            # Convert to sorted lists
+            tickers = sorted(all_tickers)
+            weights = {}  # weights will vary by period, use end_date weights for display
+            if end_holdings:
+                weights = {h.ticker: float(h.weight) if h.weight else 0 for h in end_holdings}
+
+            # Build date-to-tickers mapping for masking returns
+            # For each trading date, determine which tickers were in the portfolio
+            effective_dates_sorted = sorted(holdings_by_date.keys())
+
+            def get_active_tickers_for_date(trade_date):
+                """Get which tickers were in portfolio on a given date."""
+                # Find the most recent effective_date <= trade_date
+                active_eff = None
+                for eff in effective_dates_sorted:
+                    if eff <= trade_date:
+                        active_eff = eff
+                    else:
+                        break
+                return holdings_by_date.get(active_eff, set()) if active_eff else set()
+
+            if tickers:
 
                 # Get price data for these tickers
                 # Fetch extra days BEFORE start_date to calculate first day's return
@@ -2549,6 +2598,14 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                     ticker_data["return"].values,
                                     index=ticker_data["trade_date"].values
                                 )
+
+                                # Mask returns for dates when ticker wasn't in portfolio
+                                # (handles rebalances where tickers are added/removed)
+                                for trade_date in returns_series.index:
+                                    active_tickers = get_active_tickers_for_date(trade_date)
+                                    if ticker not in active_tickers:
+                                        returns_series[trade_date] = np.nan
+
                                 ticker_returns[ticker] = returns_series
 
                         if ticker_returns:

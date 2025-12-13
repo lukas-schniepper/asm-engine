@@ -227,13 +227,45 @@ def recalculate_portfolio_nav(
         if initial_nav is None:
             initial_nav = raw_nav
 
-        # Calculate returns
-        if previous_nav is None:
-            daily_return = 0.0
-        else:
-            daily_return = (raw_nav / previous_nav) - 1 if previous_nav > 0 else 0.0
+        # =====================================================================
+        # GIPS-COMPLIANT RETURN HANDLING
+        # =====================================================================
+        # 1. First day: daily_return = 0 (no prior NAV to compare)
+        # 2. Rebalance days: daily_return = (prev_holdings × today_prices) / prev_NAV - 1
+        #    This reflects ONLY price changes, not portfolio restructuring.
 
-        cumulative_return = (raw_nav / initial_nav) - 1 if initial_nav > 0 else 0.0
+        daily_return_override = None
+
+        # FIRST DAY: No previous NAV, so daily return must be 0
+        if previous_nav is None:
+            daily_return_override = 0.0
+            logger.debug(f"  {trade_date}: FIRST DAY - setting daily_return=0%")
+
+        # REBALANCE DETECTION (only if not first day)
+        if previous_nav is not None:
+            prev_holdings = tracker.get_holdings(portfolio.id, trade_date - timedelta(days=1))
+            today_eff_date = holdings[0].effective_date if holdings else None
+            prev_eff_date = prev_holdings[0].effective_date if prev_holdings else None
+
+            if prev_holdings and today_eff_date != prev_eff_date:
+                # Rebalance detected - calculate GIPS-compliant return
+                # using previous holdings at today's prices
+                if all(h.shares for h in prev_holdings):
+                    prev_holdings_value_today = sum(
+                        float(h.shares) * price_data.get(h.ticker, 0)
+                        for h in prev_holdings
+                    )
+
+                    if prev_holdings_value_today > 0 and previous_nav > 0:
+                        gips_daily_return = (prev_holdings_value_today / previous_nav) - 1
+                        naive_return = (raw_nav / previous_nav) - 1
+
+                        logger.debug(
+                            f"  {trade_date}: REBALANCE - GIPS return={gips_daily_return*100:.2f}% "
+                            f"(naive={naive_return*100:.2f}%)"
+                        )
+
+                        daily_return_override = gips_daily_return
 
         # Record NAV
         if not dry_run:
@@ -253,12 +285,14 @@ def recalculate_portfolio_nav(
                     prev_price_data = dict(zip(prev_day["ticker"], prev_day["close"]))
 
             # Use tracker's update method for all variants
+            # Pass daily_return_override for GIPS compliance on rebalance days
             tracker.update_daily_nav(
                 portfolio_id=portfolio.id,
                 trade_date=trade_date,
                 raw_nav=raw_nav,
                 previous_raw_nav=previous_nav or 100.0,
                 initial_nav=initial_nav,
+                daily_return_override=daily_return_override,
             )
 
         stats["nav_calculated"] += 1

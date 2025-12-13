@@ -221,6 +221,92 @@ def _calculate_weight_based_nav(
     return previous_nav * (1 + weighted_return)
 
 
+def _calculate_gips_daily_return(
+    prev_holdings,
+    today_prices: dict[str, float],
+    previous_nav: float,
+) -> Optional[float]:
+    """
+    Calculate GIPS-compliant daily return on rebalance days.
+
+    Per GIPS (Global Investment Performance Standards):
+    - Daily return should reflect ONLY price changes, not rebalancing effects
+    - On rebalance days, use PREVIOUS day's holdings (shares) with TODAY's prices
+    - This isolates the price-driven return from the portfolio restructuring
+
+    Formula:
+        daily_return = (prev_shares × today_prices) / previous_nav - 1
+
+    Args:
+        prev_holdings: Holdings from previous day (with shares)
+        today_prices: Today's prices
+        previous_nav: Previous day's NAV
+
+    Returns:
+        Daily return using previous holdings, or None if calculation not possible
+    """
+    if not prev_holdings or previous_nav is None or previous_nav <= 0:
+        return None
+
+    # Calculate what previous holdings would be worth at today's prices
+    prev_holdings_value_today = 0.0
+    holdings_valued = 0
+
+    for h in prev_holdings:
+        if h.shares is not None:
+            price = today_prices.get(h.ticker)
+            if price is not None:
+                prev_holdings_value_today += float(h.shares) * price
+                holdings_valued += 1
+
+    # Need to value all holdings for accurate return
+    if holdings_valued == 0:
+        return None
+
+    # Calculate daily return: what would previous portfolio be worth today?
+    daily_return = (prev_holdings_value_today / previous_nav) - 1
+    return daily_return
+
+
+def _detect_rebalance(
+    today_holdings,
+    prev_holdings,
+) -> tuple[bool, str]:
+    """
+    Detect if a rebalance occurred between previous day and today.
+
+    A rebalance is detected when:
+    1. The effective_date of holdings changed, OR
+    2. The set of tickers changed
+
+    Args:
+        today_holdings: Today's holdings
+        prev_holdings: Previous day's holdings
+
+    Returns:
+        Tuple of (is_rebalance, reason)
+    """
+    if not prev_holdings:
+        return False, "no_previous_holdings"
+
+    if not today_holdings:
+        return False, "no_today_holdings"
+
+    # Get effective dates
+    today_eff_date = today_holdings[0].effective_date if today_holdings else None
+    prev_eff_date = prev_holdings[0].effective_date if prev_holdings else None
+
+    # Check if effective date changed
+    if today_eff_date != prev_eff_date:
+        today_tickers = set(h.ticker for h in today_holdings)
+        prev_tickers = set(h.ticker for h in prev_holdings)
+        added = today_tickers - prev_tickers
+        removed = prev_tickers - today_tickers
+        return True, f"effective_date_changed: {prev_eff_date} -> {today_eff_date}, added={added}, removed={removed}"
+
+    return False, "no_rebalance"
+
+
 def update_portfolio_nav(
     tracker,
     portfolio,
@@ -299,6 +385,53 @@ def update_portfolio_nav(
 
         # Calculate raw NAV using current and previous prices
         raw_nav = tracker.calculate_raw_nav(holdings, price_data, previous_raw_nav, prev_price_data)
+
+        # =====================================================================
+        # GIPS-COMPLIANT RETURN HANDLING
+        # =====================================================================
+        # 1. First day: daily_return = 0 (no prior NAV to compare)
+        # 2. Rebalance days: daily_return = (prev_holdings × today_prices) / prev_NAV - 1
+        #    This reflects ONLY price changes, not portfolio restructuring.
+
+        daily_return_override = None
+        is_first_day = prev_nav_df.empty and all_nav_df.empty if 'all_nav_df' in dir() else prev_nav_df.empty
+
+        # FIRST DAY: No previous NAV, so daily return must be 0
+        if is_first_day:
+            daily_return_override = 0.0
+            logger.info(f"FIRST DAY for {portfolio.name} - setting daily_return=0%")
+
+        # REBALANCE DETECTION (only if not first day)
+        if not is_first_day:
+            prev_holdings = tracker.get_holdings(portfolio.id, trade_date - timedelta(days=1))
+            is_rebalance, rebalance_reason = _detect_rebalance(holdings, prev_holdings)
+
+            if is_rebalance:
+                logger.info(
+                    f"REBALANCE DETECTED for {portfolio.name} on {trade_date}: {rebalance_reason}"
+                )
+
+                # Calculate GIPS-compliant daily return using previous day's holdings
+                gips_daily_return = _calculate_gips_daily_return(
+                    prev_holdings, price_data, previous_raw_nav
+                )
+
+                if gips_daily_return is not None:
+                    # Calculate what the naive return would be (for logging)
+                    naive_return = (raw_nav / previous_raw_nav - 1) if previous_raw_nav > 0 else 0
+
+                    logger.info(
+                        f"  GIPS correction: naive_return={naive_return*100:.2f}%, "
+                        f"gips_return={gips_daily_return*100:.2f}% "
+                        f"(difference={abs(naive_return - gips_daily_return)*100:.2f}%)"
+                    )
+
+                    daily_return_override = gips_daily_return
+                else:
+                    logger.warning(
+                        f"  Could not calculate GIPS daily return for {portfolio.name} - "
+                        "previous holdings may not have shares"
+                    )
 
         # =====================================================================
         # DATA QUALITY VALIDATION (Circuit Breaker)
@@ -403,6 +536,7 @@ def update_portfolio_nav(
             raw_nav=raw_nav,
             previous_raw_nav=previous_raw_nav,
             initial_nav=initial_nav,
+            daily_return_override=daily_return_override,  # GIPS-compliant on rebalance days
         )
 
         logger.info(

@@ -461,6 +461,7 @@ class PortfolioTracker:
         raw_nav: float,
         previous_raw_nav: Optional[float] = None,
         initial_nav: float = 100.0,
+        daily_return_override: Optional[float] = None,
     ) -> dict[str, dict]:
         """
         Update NAV for all variants (raw + overlays) for a specific date.
@@ -471,6 +472,8 @@ class PortfolioTracker:
             raw_nav: Raw portfolio NAV (100% equity)
             previous_raw_nav: Previous day's raw NAV (for return calculation)
             initial_nav: Initial NAV at portfolio inception
+            daily_return_override: Optional override for daily return (used on rebalance days
+                to ensure GIPS-compliant return calculation using previous day's holdings)
 
         Returns:
             Dict mapping variant names to NAV data dicts with keys:
@@ -478,8 +481,10 @@ class PortfolioTracker:
         """
         results = {}
 
-        # Calculate returns
-        if previous_raw_nav and previous_raw_nav > 0:
+        # Calculate returns - use override if provided (for rebalance days per GIPS)
+        if daily_return_override is not None:
+            daily_return = daily_return_override
+        elif previous_raw_nav and previous_raw_nav > 0:
             daily_return = (raw_nav / previous_raw_nav) - 1
         else:
             daily_return = 0.0
