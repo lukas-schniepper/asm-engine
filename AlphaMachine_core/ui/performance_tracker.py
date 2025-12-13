@@ -2596,6 +2596,19 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
                             ticker_df.columns = [ticker_date_to_field.get(c, str(c)) for c in ticker_df.columns]
 
+                            # Add Portfolio Total row (weighted sum of returns)
+                            portfolio_total = {}
+                            for col in ticker_df.columns:
+                                weighted_sum = 0.0
+                                for ticker in ticker_df.index:
+                                    ret = ticker_df.loc[ticker, col]
+                                    if pd.notna(ret):
+                                        weighted_sum += weights.get(ticker, 0) * ret
+                                portfolio_total[col] = weighted_sum
+
+                            # Add total row to dataframe
+                            ticker_df.loc["Portfolio Total"] = portfolio_total
+
                             # Convert to percentages
                             ticker_display_df = ticker_df.copy()
                             for col in ticker_display_df.columns:
@@ -2607,8 +2620,64 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                             ticker_display_df = ticker_display_df.reset_index()
                             ticker_display_df.rename(columns={"index": "Ticker"}, inplace=True)
                             ticker_display_df.insert(1, "Weight", ticker_display_df["Ticker"].map(
-                                lambda t: f"{weights.get(t, 0)*100:.1f}%"
+                                lambda t: "100.0%" if t == "Portfolio Total" else f"{weights.get(t, 0)*100:.1f}%"
                             ))
+
+                            # JavaScript for highlighting the Portfolio Total row
+                            ticker_cell_style = JsCode("""
+                            function(params) {
+                                if (params.data && params.data.Ticker === 'Portfolio Total') {
+                                    return {'fontWeight': 'bold', 'backgroundColor': '#e3f2fd'};
+                                }
+                                return {'fontWeight': 'bold'};
+                            }
+                            """)
+
+                            weight_cell_style = JsCode("""
+                            function(params) {
+                                if (params.data && params.data.Ticker === 'Portfolio Total') {
+                                    return {'fontWeight': 'bold', 'backgroundColor': '#bbdefb'};
+                                }
+                                return {'fontWeight': 'bold', 'backgroundColor': '#f0f0f0'};
+                            }
+                            """)
+
+                            # Cell style for returns that also highlights total row
+                            ticker_return_style = JsCode("""
+                            function(params) {
+                                var isPortfolioTotal = params.data && params.data.Ticker === 'Portfolio Total';
+                                var baseStyle = {};
+
+                                if (params.value === '' || params.value === null || params.value === undefined) {
+                                    return isPortfolioTotal ? {'backgroundColor': '#e3f2fd'} : {};
+                                }
+                                try {
+                                    var num = parseFloat(params.value.replace('%', ''));
+                                    var isTotal = params.colDef.field.includes('Total');
+
+                                    if (isPortfolioTotal || isTotal) {
+                                        if (num > 5) baseStyle = {'backgroundColor': '#145214', 'color': 'white', 'fontWeight': 'bold'};
+                                        else if (num > 2) baseStyle = {'backgroundColor': '#1e7b1e', 'color': 'white', 'fontWeight': 'bold'};
+                                        else if (num > 0) baseStyle = {'backgroundColor': '#2d8f2d', 'color': 'white', 'fontWeight': 'bold'};
+                                        else if (num === 0) baseStyle = {'backgroundColor': '#6c757d', 'color': 'white', 'fontWeight': 'bold'};
+                                        else if (num > -2) baseStyle = {'backgroundColor': '#c82333', 'color': 'white', 'fontWeight': 'bold'};
+                                        else if (num > -5) baseStyle = {'backgroundColor': '#a71d2a', 'color': 'white', 'fontWeight': 'bold'};
+                                        else baseStyle = {'backgroundColor': '#6b0f18', 'color': 'white', 'fontWeight': 'bold'};
+                                    } else {
+                                        if (num > 5) baseStyle = {'backgroundColor': '#1e7b1e', 'color': 'white'};
+                                        else if (num > 2) baseStyle = {'backgroundColor': '#28a745', 'color': 'white'};
+                                        else if (num > 0) baseStyle = {'backgroundColor': '#90EE90', 'color': 'black'};
+                                        else if (num === 0) baseStyle = {'backgroundColor': '#f8f9fa', 'color': 'black'};
+                                        else if (num > -2) baseStyle = {'backgroundColor': '#ffcccb', 'color': 'black'};
+                                        else if (num > -5) baseStyle = {'backgroundColor': '#dc3545', 'color': 'white'};
+                                        else baseStyle = {'backgroundColor': '#8b0000', 'color': 'white'};
+                                    }
+                                } catch(e) {
+                                    return isPortfolioTotal ? {'backgroundColor': '#e3f2fd'} : {};
+                                }
+                                return baseStyle;
+                            }
+                            """)
 
                             # Build column defs for ticker grid
                             ticker_column_defs = [
@@ -2616,13 +2685,13 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                     "field": "Ticker",
                                     "pinned": "left",
                                     "minWidth": 80,
-                                    "cellStyle": {"fontWeight": "bold"},
+                                    "cellStyle": ticker_cell_style,
                                 },
                                 {
                                     "field": "Weight",
                                     "pinned": "left",
                                     "width": 70,
-                                    "cellStyle": {"fontWeight": "bold", "backgroundColor": "#f0f0f0"},
+                                    "cellStyle": weight_cell_style,
                                 }
                             ]
 
@@ -2648,14 +2717,14 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                         "headerName": day_label,
                                         "width": 65,
                                         "columnGroupShow": "open",
-                                        "cellStyle": cell_style_jscode,
+                                        "cellStyle": ticker_return_style,
                                     })
 
                                 children.append({
                                     "field": total_col,
                                     "headerName": "Total",
                                     "width": 70,
-                                    "cellStyle": cell_style_jscode,
+                                    "cellStyle": ticker_return_style,
                                 })
 
                                 ticker_column_defs.append({
