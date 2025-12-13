@@ -354,6 +354,15 @@ def format_metrics_for_display(metrics: dict) -> list[dict]:
             "value_class": get_value_class(val),
         })
 
+    if "information_ratio" in metrics:
+        val = metrics["information_ratio"]
+        kpis.append({
+            "label": "Info Ratio",
+            "value": format_ratio(val),
+            "value_class": get_value_class(val),
+            "subtitle": "vs SPY",
+        })
+
     if "volatility" in metrics:
         val = metrics["volatility"]
         kpis.append({

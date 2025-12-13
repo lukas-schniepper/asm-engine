@@ -300,11 +300,12 @@ def _render_overview_tab(
         portfolio_id, primary_variant, start_date, end_date
     )
 
-    kpis = format_metrics_for_display(perf)
-    st.markdown(render_kpi_grid(kpis), unsafe_allow_html=True)
-
-    # Second row: Institutional Risk Metrics
-    st.markdown("#### Risk Metrics (vs SPY)")
+    # Calculate info ratio for KPI grid (before rendering)
+    info_ratio = None
+    beta = None
+    alpha = None
+    var_95 = None
+    cvar_95 = None
 
     if primary_variant in nav_data:
         portfolio_nav = nav_data[primary_variant]
@@ -332,23 +333,36 @@ def _render_overview_tab(
                 info_ratio = calculate_information_ratio(portfolio_nav, benchmark_nav)
                 var_95 = calculate_var(aligned_port, 0.95)
                 cvar_95 = calculate_cvar(aligned_port, 0.95)
+        except Exception:
+            pass  # Will show N/A in KPI grid
 
-                # Display second row of KPIs
-                col1, col2, col3, col4, col5 = st.columns(5)
-                with col1:
-                    st.metric("Beta", f"{beta:.2f}")
-                with col2:
-                    st.metric("Alpha (Ann.)", f"{alpha*100:+.2f}%")
-                with col3:
-                    st.metric("Info Ratio", f"{info_ratio:.2f}")
-                with col4:
-                    st.metric("VaR (95%)", f"{var_95*100:.2f}%")
-                with col5:
-                    st.metric("CVaR (95%)", f"{cvar_95*100:.2f}%")
-            else:
-                st.caption("Insufficient data for risk metrics (need 30+ days).")
-        except Exception as e:
-            st.caption(f"Could not calculate risk metrics: {e}")
+    # Add info ratio to perf dict for KPI grid
+    if info_ratio is not None:
+        perf["information_ratio"] = info_ratio
+
+    kpis = format_metrics_for_display(perf)
+    st.markdown(render_kpi_grid(kpis), unsafe_allow_html=True)
+
+    # Second row: Institutional Risk Metrics
+    st.markdown("#### Risk Metrics (vs SPY)")
+
+    if beta is not None:
+        # Display second row of KPIs
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Beta", f"{beta:.2f}")
+        with col2:
+            st.metric("Alpha (Ann.)", f"{alpha*100:+.2f}%")
+        with col3:
+            st.metric("Info Ratio", f"{info_ratio:.2f}")
+        with col4:
+            st.metric("VaR (95%)", f"{var_95*100:.2f}%")
+        with col5:
+            st.metric("CVaR (95%)", f"{cvar_95*100:.2f}%")
+    elif primary_variant in nav_data:
+        st.caption("Insufficient data for risk metrics (need 30+ days).")
+    else:
+        st.caption("No NAV data available for risk metrics.")
 
     # NAV Chart
     st.markdown("---")
