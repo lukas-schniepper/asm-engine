@@ -2020,11 +2020,11 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             portfolio_nav = nav_df["nav"]
             nav_len = len(portfolio_nav)
 
-            if nav_len < 30:
+            if nav_len < 20:
                 corr_diagnostics.append({
                     "portfolio": col_name,
-                    "status": "❌ < 30 days",
-                    "reason": f"Only {nav_len} data points (need 30+)",
+                    "status": "❌ < 20 days",
+                    "reason": f"Only {nav_len} data points (need 20+)",
                     "rows": nav_len,
                 })
                 continue
@@ -2063,7 +2063,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         returns_df = pd.DataFrame(returns_data)
         returns_df = returns_df.dropna()
 
-        if len(returns_df) >= 30:
+        if len(returns_df) >= 20:
             # Calculate correlation matrix
             corr_matrix = returns_df.corr()
 
@@ -2108,13 +2108,13 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_corr, use_container_width=True)
 
         else:
-            st.caption(f"Need at least 30 aligned trading days for correlation. Found: {len(returns_df)}")
+            st.caption(f"Need at least 20 aligned trading days for correlation. Found: {len(returns_df)}")
     else:
         st.caption("Select at least 2 portfolios to view correlation matrix.")
 
     # Diagnostic expander - shows why portfolios were included/excluded
     if corr_diagnostics:
-        with st.expander("🔍 Correlation Matrix Diagnostics", expanded=False):
+        with st.expander("🔍 Portfolio Data Summary", expanded=True):
             st.markdown(f"**Input:** {len(portfolios_with_data)} portfolios × {len(selected_variants)} variants = {len(portfolios_with_data) * len(selected_variants)} combinations")
             st.markdown(f"**Output:** {len(returns_data)} series included in correlation matrix")
 
