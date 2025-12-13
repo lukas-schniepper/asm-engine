@@ -683,6 +683,8 @@ def _render_benchmark_comparison_tab(
         calculate_stock_attribution,
         calculate_portfolio_monthly_returns_buyhold,
         calculate_benchmark_monthly_returns_buyhold,
+        calculate_portfolio_monthly_returns_gips,
+        calculate_benchmark_monthly_returns_gips,
     )
     from .styles import COLORS
     import plotly.graph_objects as go
@@ -859,29 +861,29 @@ def _render_benchmark_comparison_tab(
 
     # ===== Monthly Comparison Table =====
     st.markdown("---")
-    st.markdown("### Monthly Returns Comparison (Buy-and-Hold)")
+    st.markdown("### Monthly Returns Comparison")
     st.caption(
-        "Returns calculated using buy-and-hold methodology: "
-        "weight × (month_end_price / month_start_price - 1). "
-        "This matches the attribution analysis below."
+        "Returns calculated using GIPS-compliant methodology: compound daily returns. "
+        "This matches the Scraper View and industry standards (GIPS/IBKR). "
+        "Note: Stock attribution below uses buy-and-hold for per-stock analysis."
     )
 
-    # Calculate monthly returns using buy-and-hold methodology
-    # This ensures consistency with the attribution analysis
-    with st.spinner("Calculating buy-and-hold monthly returns..."):
-        portfolio_monthly_bh = calculate_portfolio_monthly_returns_buyhold(
+    # Calculate monthly returns using GIPS methodology (compound daily returns)
+    # This ensures consistency with the Scraper View and industry standards
+    with st.spinner("Calculating monthly returns..."):
+        portfolio_monthly_gips = calculate_portfolio_monthly_returns_gips(
             portfolio_id, start_date, end_date, tracker
         )
-        benchmark_monthly_bh = calculate_benchmark_monthly_returns_buyhold(
+        benchmark_monthly_gips = calculate_benchmark_monthly_returns_gips(
             source, start_date, end_date, use_adjusted_close=True
         )
 
-    # Build monthly_data from buy-and-hold calculations
-    all_months = sorted(set(portfolio_monthly_bh.keys()) | set(benchmark_monthly_bh.keys()))
+    # Build monthly_data from GIPS calculations
+    all_months = sorted(set(portfolio_monthly_gips.keys()) | set(benchmark_monthly_gips.keys()))
     monthly_data = []
     for month in all_months:
-        port_ret = portfolio_monthly_bh.get(month)
-        bench_ret = benchmark_monthly_bh.get(month)
+        port_ret = portfolio_monthly_gips.get(month)
+        bench_ret = benchmark_monthly_gips.get(month)
         diff = None
         if port_ret is not None and bench_ret is not None:
             diff = port_ret - bench_ret

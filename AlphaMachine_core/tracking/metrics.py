@@ -68,7 +68,31 @@ def calculate_cumulative_returns(nav_series: pd.Series) -> pd.Series:
 
 def calculate_total_return(nav_series: pd.Series) -> float:
     """
-    Calculate total return over the period.
+    Calculate total return over the period using GIPS-compliant daily compounding.
+
+    This is the industry-standard method (GIPS/IBKR) that compounds daily returns.
+    The first day's return belongs to the current period.
+
+    Args:
+        nav_series: NAV time series
+
+    Returns:
+        Total return as decimal (e.g., 0.15 for 15%)
+    """
+    if len(nav_series) < 2:
+        return 0.0
+    daily_returns = nav_series.pct_change().dropna()
+    if len(daily_returns) == 0:
+        return 0.0
+    return float((1 + daily_returns).prod() - 1)
+
+
+def calculate_total_return_point_to_point(nav_series: pd.Series) -> float:
+    """
+    Calculate total return using simple point-to-point NAV ratio.
+
+    This is the legacy method: (end_nav / start_nav) - 1
+    Kept for backwards compatibility.
 
     Args:
         nav_series: NAV time series
@@ -79,6 +103,26 @@ def calculate_total_return(nav_series: pd.Series) -> float:
     if len(nav_series) < 2:
         return 0.0
     return float(nav_series.iloc[-1] / nav_series.iloc[0] - 1)
+
+
+def calculate_period_return_gips(daily_returns: pd.Series) -> float:
+    """
+    Calculate return for a period using GIPS-compliant daily compounding.
+
+    This compounds daily returns for any period (day, month, quarter, year, etc.)
+    Industry standard per GIPS and Interactive Brokers.
+
+    Formula: (1 + r1) × (1 + r2) × ... × (1 + rn) - 1
+
+    Args:
+        daily_returns: Series of daily returns for the period
+
+    Returns:
+        Compounded return as decimal (e.g., 0.15 for 15%)
+    """
+    if len(daily_returns) == 0:
+        return 0.0
+    return float((1 + daily_returns).prod() - 1)
 
 
 def calculate_cagr(

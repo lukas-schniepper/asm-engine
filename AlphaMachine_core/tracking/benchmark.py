@@ -666,6 +666,84 @@ def get_benchmark_monthly_returns(
     return monthly_returns
 
 
+def calculate_portfolio_monthly_returns_gips(
+    portfolio_id: int,
+    start_date: date,
+    end_date: date,
+    tracker: "PortfolioTracker",
+) -> dict[str, float]:
+    """
+    Calculate monthly returns for portfolio using GIPS-compliant daily compounding.
+
+    For each month:
+    1. Get daily NAV returns
+    2. Compound daily returns: (1 + r1) × (1 + r2) × ... × (1 + rn) - 1
+
+    This is the industry-standard method (GIPS/IBKR) and matches the Scraper View tab.
+    First day's return belongs to the current month.
+
+    Args:
+        portfolio_id: Portfolio ID
+        start_date: Start date
+        end_date: End date
+        tracker: PortfolioTracker instance
+
+    Returns:
+        Dictionary mapping month (YYYY-MM) to compounded return
+    """
+    from .models import Variants
+
+    # Get NAV data with daily returns
+    nav_df = tracker.get_nav_series(portfolio_id, Variants.RAW, start_date, end_date)
+
+    if nav_df.empty:
+        return {}
+
+    # Calculate daily returns if not present
+    if "daily_return" not in nav_df.columns:
+        nav_df["daily_return"] = nav_df["nav"].pct_change()
+
+    # Group by month and compound returns (GIPS methodology)
+    monthly_returns = {}
+    for month, group in nav_df.groupby(nav_df.index.strftime("%Y-%m")):
+        daily_rets = group["daily_return"].dropna()
+        if len(daily_rets) > 0:
+            monthly_total = (1 + daily_rets).prod() - 1
+            monthly_returns[month] = float(monthly_total)
+
+    return monthly_returns
+
+
+def calculate_benchmark_monthly_returns_gips(
+    source: str,
+    start_date: date,
+    end_date: date,
+    use_adjusted_close: bool = True,
+) -> dict[str, float]:
+    """
+    Calculate monthly returns for EW benchmark using GIPS-compliant daily compounding.
+
+    For each month:
+    1. Get daily EW benchmark returns
+    2. Compound daily returns: (1 + r1) × (1 + r2) × ... × (1 + rn) - 1
+
+    This is the industry-standard method (GIPS/IBKR) and matches the Scraper View tab.
+    First day's return belongs to the current month.
+
+    Args:
+        source: Data source
+        start_date: Start date
+        end_date: End date
+        use_adjusted_close: Whether to use adjusted close prices
+
+    Returns:
+        Dictionary mapping month (YYYY-MM) to compounded return
+    """
+    # This is identical to get_benchmark_monthly_returns but kept for symmetry
+    # and explicit naming
+    return get_benchmark_monthly_returns(source, start_date, end_date, use_adjusted_close)
+
+
 def compare_portfolio_to_benchmark(
     portfolio_nav_df: pd.DataFrame,
     source: str,
