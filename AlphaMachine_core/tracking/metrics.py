@@ -366,6 +366,7 @@ def calculate_all_metrics(
     risk_free_rate: float = 0.0,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    daily_returns: Optional[pd.Series] = None,
 ) -> dict:
     """
     Calculate all performance metrics for a NAV series.
@@ -375,6 +376,9 @@ def calculate_all_metrics(
         risk_free_rate: Annual risk-free rate
         start_date: Override start date
         end_date: Override end date
+        daily_returns: Pre-calculated daily returns (optional, recommended for GIPS compliance).
+                       When provided, these are used for total_return calculation to ensure
+                       the first day's return is included (GIPS standard).
 
     Returns:
         Dictionary with all metrics
@@ -391,10 +395,17 @@ def calculate_all_metrics(
             "win_rate": 0.0,
         }
 
-    returns = calculate_returns(nav_series)
+    # Use pre-calculated returns if provided (GIPS-compliant)
+    # Otherwise calculate from NAV (loses first day's return)
+    if daily_returns is not None and len(daily_returns) > 0:
+        returns = daily_returns.dropna()
+        total_return = calculate_period_return_gips(returns)
+    else:
+        returns = calculate_returns(nav_series)
+        total_return = calculate_total_return(nav_series)
 
     return {
-        "total_return": calculate_total_return(nav_series),
+        "total_return": total_return,
         "cagr": calculate_cagr(nav_series, start_date, end_date),
         "sharpe_ratio": calculate_sharpe_ratio(returns, risk_free_rate),
         "sortino_ratio": calculate_sortino_ratio(returns, risk_free_rate),

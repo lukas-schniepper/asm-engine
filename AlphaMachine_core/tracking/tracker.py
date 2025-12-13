@@ -677,7 +677,13 @@ class PortfolioTracker:
             }
 
         nav_series = nav_df["nav"]
-        metrics = calculate_all_metrics(nav_series, risk_free_rate, start_date, end_date)
+
+        # Pass pre-calculated daily returns for GIPS-compliant total return
+        # This ensures the first day's return is included in the calculation
+        daily_returns = nav_df["daily_return"] if "daily_return" in nav_df.columns else None
+        metrics = calculate_all_metrics(
+            nav_series, risk_free_rate, start_date, end_date, daily_returns
+        )
 
         return {
             "portfolio_id": portfolio_id,
