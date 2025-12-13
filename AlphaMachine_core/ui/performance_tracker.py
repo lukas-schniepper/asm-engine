@@ -2266,8 +2266,8 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
             returns = nav_df["nav"].pct_change()
 
         # Store returns with clean name
-        clean_portfolio_name = clean_name(portfolio.name)
-        returns_data[clean_portfolio_name] = returns
+        cleaned_name = clean_name(portfolio.name)
+        returns_data[cleaned_name] = returns
 
     if not returns_data:
         st.warning("No data available for the selected date range and variant.")
