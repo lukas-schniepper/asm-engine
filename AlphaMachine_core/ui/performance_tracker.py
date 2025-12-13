@@ -300,10 +300,10 @@ def _render_overview_tab(
         portfolio_id, primary_variant, start_date, end_date
     )
 
-    # Calculate info ratio for KPI grid (before rendering)
-    info_ratio = None
+    # Initialize risk metrics (calculated below if enough data)
     beta = None
     alpha = None
+    info_ratio = None
     var_95 = None
     cvar_95 = None
 
