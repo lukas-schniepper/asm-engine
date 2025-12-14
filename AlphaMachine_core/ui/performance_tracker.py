@@ -2157,7 +2157,14 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     # ===== Sector Exposure by Month =====
     st.markdown("---")
     st.markdown("#### Sector Exposure by Month")
-    st.markdown("View sector allocation for each portfolio across months in the selected date range.")
+
+    # Option to combine all portfolios
+    combine_all_sectors = st.checkbox(
+        "Combine All Portfolios",
+        value=False,
+        key="sector_combine_all",
+        help="Aggregate sector exposure across all selected portfolios (average weights)"
+    )
 
     # Get sector data for all tickers
     from ..data_manager import StockDataManager
@@ -2231,35 +2238,49 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
     if sector_data:
         sector_df = pd.DataFrame(sector_data)
-
-        # Create pivot table: rows = Portfolio + Sector, columns = Month
-        pivot_df = sector_df.pivot_table(
-            index=["Portfolio", "Sector"],
-            columns="Month",
-            values="Weight",
-            aggfunc="sum",
-            fill_value=0
-        )
-
-        # Reorder columns chronologically
         month_order = [m[0] for m in sector_months]  # m[0] is month_label
-        pivot_df = pivot_df.reindex(columns=[c for c in month_order if c in pivot_df.columns])
 
-        # Format as percentages
-        styled_pivot = pivot_df.style.format("{:.1%}").background_gradient(
-            cmap="Blues", axis=None, vmin=0, vmax=0.5
-        )
+        if combine_all_sectors:
+            # Aggregate across all portfolios: average sector weight per month
+            pivot_df = sector_df.groupby(["Month", "Sector"])["Weight"].mean().unstack(fill_value=0)
+            pivot_df = pivot_df.reindex(index=[c for c in month_order if c in pivot_df.index])
+            # Transpose so sectors are rows, months are columns
+            pivot_df = pivot_df.T
 
-        st.dataframe(styled_pivot, use_container_width=True)
+            st.caption(f"Average sector weights across {len(selected_portfolio_names)} portfolios")
 
-        # Also show a summary by sector across all portfolios
-        with st.expander("Sector Summary (All Portfolios Combined)"):
-            summary_df = sector_df.groupby(["Month", "Sector"])["Weight"].mean().unstack(fill_value=0)
-            summary_df = summary_df.reindex(index=[c for c in month_order if c in summary_df.index])
-            styled_summary = summary_df.style.format("{:.1%}").background_gradient(
-                cmap="Greens", axis=None, vmin=0, vmax=0.5
+            # Format as percentages
+            styled_pivot = pivot_df.style.format("{:.1%}").background_gradient(
+                cmap="Blues", axis=None, vmin=0, vmax=0.5
             )
-            st.dataframe(styled_summary, use_container_width=True)
+            st.dataframe(styled_pivot, use_container_width=True)
+        else:
+            # Show by portfolio: rows = Portfolio + Sector, columns = Month
+            pivot_df = sector_df.pivot_table(
+                index=["Portfolio", "Sector"],
+                columns="Month",
+                values="Weight",
+                aggfunc="sum",
+                fill_value=0
+            )
+
+            # Reorder columns chronologically
+            pivot_df = pivot_df.reindex(columns=[c for c in month_order if c in pivot_df.columns])
+
+            # Format as percentages
+            styled_pivot = pivot_df.style.format("{:.1%}").background_gradient(
+                cmap="Blues", axis=None, vmin=0, vmax=0.5
+            )
+            st.dataframe(styled_pivot, use_container_width=True)
+
+            # Also show a summary by sector across all portfolios
+            with st.expander("Sector Summary (All Portfolios Combined)"):
+                summary_df = sector_df.groupby(["Month", "Sector"])["Weight"].mean().unstack(fill_value=0)
+                summary_df = summary_df.reindex(index=[c for c in month_order if c in summary_df.index])
+                styled_summary = summary_df.style.format("{:.1%}").background_gradient(
+                    cmap="Greens", axis=None, vmin=0, vmax=0.5
+                )
+                st.dataframe(styled_summary, use_container_width=True)
     else:
         st.info("No sector data available for the selected portfolios and date range.")
 
