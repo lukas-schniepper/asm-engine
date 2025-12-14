@@ -2173,11 +2173,17 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             if ti.sector:
                 sector_lookup[ti.ticker] = ti.sector
 
-    # Get months in date range
-    sector_months = []
+    # Get months in date range (respecting exact start_date and end_date)
+    sector_months = []  # List of (month_label, holdings_date) tuples
     current_month = start_date.replace(day=1)
     while current_month <= end_date:
-        sector_months.append(current_month)
+        # Use the later of (first day of month) and (start_date) for holdings lookup
+        holdings_date = max(current_month, start_date)
+        # But cap at end_date
+        holdings_date = min(holdings_date, end_date)
+        month_label = current_month.strftime("%b %Y")
+        sector_months.append((month_label, holdings_date))
+
         if current_month.month == 12:
             current_month = current_month.replace(year=current_month.year + 1, month=1)
         else:
@@ -2190,9 +2196,9 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         portfolio_id = portfolio_options[portfolio_name]
         clean_pf_name = clean_name(portfolio_name)
 
-        for month_start in sector_months:
-            # Get holdings for this month
-            holdings = tracker.get_holdings(portfolio_id, month_start)
+        for month_label, holdings_date in sector_months:
+            # Get holdings for this month using a date within the selected range
+            holdings = tracker.get_holdings(portfolio_id, holdings_date)
 
             if holdings:
                 # Calculate sector weights
@@ -2218,7 +2224,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 for sector, weight in sector_weights.items():
                     sector_data.append({
                         "Portfolio": clean_pf_name,
-                        "Month": month_start.strftime("%b %Y"),
+                        "Month": month_label,
                         "Sector": sector,
                         "Weight": weight,
                     })
@@ -2236,7 +2242,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         )
 
         # Reorder columns chronologically
-        month_order = [m.strftime("%b %Y") for m in sector_months]
+        month_order = [m[0] for m in sector_months]  # m[0] is month_label
         pivot_df = pivot_df.reindex(columns=[c for c in month_order if c in pivot_df.columns])
 
         # Format as percentages
