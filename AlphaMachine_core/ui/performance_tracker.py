@@ -2198,6 +2198,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
     # Build sector exposure data for each portfolio and month
     sector_data = []
+    missing_sector_tickers = {}  # {ticker: [portfolios]}
 
     for portfolio_name in selected_portfolio_names:
         portfolio_id = portfolio_options[portfolio_name]
@@ -2215,7 +2216,14 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 for h in holdings:
                     ticker = h.ticker
                     weight = float(h.weight) if h.weight else 0
-                    sector = sector_lookup.get(ticker, "Unknown")
+                    sector = sector_lookup.get(ticker)
+
+                    # Track tickers with missing sector
+                    if not sector:
+                        sector = "Unknown"
+                        if ticker not in missing_sector_tickers:
+                            missing_sector_tickers[ticker] = set()
+                        missing_sector_tickers[ticker].add(clean_pf_name)
 
                     if sector not in sector_weights:
                         sector_weights[sector] = 0
@@ -2299,6 +2307,19 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                 st.dataframe(styled_summary, use_container_width=True)
     else:
         st.info("No sector data available for the selected portfolios and date range.")
+
+    # Show tickers with missing sector data
+    if missing_sector_tickers:
+        with st.expander(f"⚠️ Tickers Missing Sector Data ({len(missing_sector_tickers)})"):
+            st.markdown("The following tickers are categorized as 'Unknown' because sector data is missing:")
+            missing_data = []
+            for ticker, portfolios in sorted(missing_sector_tickers.items()):
+                missing_data.append({
+                    "Ticker": ticker,
+                    "Portfolios": ", ".join(sorted(portfolios))
+                })
+            st.dataframe(pd.DataFrame(missing_data), use_container_width=True, hide_index=True)
+            st.caption("To fix: Add sector data to the TickerInfo table for these tickers.")
 
 
 def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
