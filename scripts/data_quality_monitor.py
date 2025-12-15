@@ -72,6 +72,64 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def is_trading_day(check_date: date) -> bool:
+    """
+    Check if a given date is a US stock market trading day.
+
+    Returns False for:
+    - Weekends (Saturday, Sunday)
+    - Major US holidays (approximate)
+    """
+    # Check weekend
+    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+        return False
+
+    # Major US market holidays (approximate - doesn't handle all edge cases)
+    # These are fixed dates; actual holidays may shift if they fall on weekends
+    year = check_date.year
+    us_holidays = [
+        date(year, 1, 1),   # New Year's Day
+        date(year, 7, 4),   # Independence Day
+        date(year, 12, 25), # Christmas
+    ]
+
+    # Variable holidays (approximate)
+    # MLK Day: 3rd Monday of January
+    # Presidents Day: 3rd Monday of February
+    # Memorial Day: Last Monday of May
+    # Labor Day: 1st Monday of September
+    # Thanksgiving: 4th Thursday of November
+
+    # For simplicity, just check weekends and fixed holidays
+    # A more robust solution would use a library like `pandas_market_calendars`
+
+    if check_date in us_holidays:
+        return False
+
+    return True
+
+
+def get_last_trading_day(reference_date: date = None) -> date:
+    """
+    Get the most recent trading day on or before the reference date.
+
+    If reference_date is a weekend or holiday, returns the previous trading day.
+    """
+    if reference_date is None:
+        reference_date = date.today()
+
+    check_date = reference_date
+    max_lookback = 10  # Don't look back more than 10 days
+
+    for _ in range(max_lookback):
+        if is_trading_day(check_date):
+            return check_date
+        check_date -= timedelta(days=1)
+
+    # Fallback - shouldn't happen
+    return reference_date
+
+
 def check_nav_anomalies(
     portfolios: List,
     tracker,
@@ -711,13 +769,18 @@ def check_missing_ticker_data(
     - Tickers with no price data at all
     - Tickers missing recent trading days
     - Stale price data (last update > days_back ago)
+
+    Note: Uses last trading day as reference (handles weekends/holidays).
     """
     import pandas as pd
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    today = date.today()
+    # Use last trading day instead of today (handles weekends/holidays)
+    today = get_last_trading_day()
     cutoff_date = today - timedelta(days=days_back)
+
+    logger.debug(f"Using reference date: {today} (last trading day)")
 
     # Collect all unique tickers across portfolios
     all_tickers = set()
@@ -785,16 +848,20 @@ def check_missing_ticker_data(
         # Check last available date
         last_date = ticker_prices["trade_date"].max()
 
+        # Only flag as stale if last_date is more than 3 trading days before reference
+        # This handles weekends and short holidays gracefully
         if last_date < cutoff_date:
             days_stale = (today - last_date).days
-            checked_tickers[ticker] = {
-                "has_issue": True,
-                "type": "STALE_TICKER_DATA",
-                "severity": "warning",
-                "message": f"{ticker} price data is {days_stale} days old (last: {last_date})",
-                "last_date": str(last_date),
-            }
-            continue
+            # Only report if significantly stale (more than a long weekend)
+            if days_stale > 4:
+                checked_tickers[ticker] = {
+                    "has_issue": True,
+                    "type": "STALE_TICKER_DATA",
+                    "severity": "warning",
+                    "message": f"{ticker} price data is {days_stale} days old (last: {last_date})",
+                    "last_date": str(last_date),
+                }
+                continue
 
         # Count trading days
         trading_days = len(ticker_prices)
@@ -1071,6 +1138,18 @@ def run_monitor(
     from AlphaMachine_core.tracking import get_tracker
 
     logger.info("Starting data quality monitoring...")
+
+    # Check if today is a trading day
+    today = date.today()
+    last_trading = get_last_trading_day(today)
+
+    if today != last_trading:
+        logger.info(
+            f"Note: Today ({today}, {today.strftime('%A')}) is not a trading day. "
+            f"Using last trading day: {last_trading} ({last_trading.strftime('%A')})"
+        )
+    else:
+        logger.info(f"Reference date: {today} (trading day)")
 
     tracker = get_tracker()
 
