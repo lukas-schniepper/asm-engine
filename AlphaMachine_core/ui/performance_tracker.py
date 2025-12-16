@@ -2250,28 +2250,43 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
         if combine_all_sectors:
             # Aggregate across all portfolios: average sector weight per month
-            # First, ensure all portfolios have 0% for sectors they don't hold
+            # Only average across portfolios that have data for each month
+            # (don't include portfolios that didn't exist yet)
+
             all_sectors = sector_df["Sector"].unique()
-            all_months = sector_df["Month"].unique()
-            all_portfolios = sector_df["Portfolio"].unique()
 
-            # Create complete grid and merge with actual data
-            from itertools import product
-            complete_grid = pd.DataFrame(
-                list(product(all_portfolios, all_months, all_sectors)),
-                columns=["Portfolio", "Month", "Sector"]
-            )
-            sector_df_complete = complete_grid.merge(
-                sector_df, on=["Portfolio", "Month", "Sector"], how="left"
-            ).fillna(0)
+            # Find which portfolios have data for each month
+            portfolios_per_month = sector_df.groupby("Month")["Portfolio"].apply(set).to_dict()
 
-            # Now average across portfolios - each sector will be 0 if portfolio doesn't have it
+            # For each month, create complete sector grid only for portfolios that exist
+            combined_data = []
+            for month in sector_df["Month"].unique():
+                month_portfolios = portfolios_per_month.get(month, set())
+                month_df = sector_df[sector_df["Month"] == month]
+
+                # Create complete grid for this month's portfolios × all sectors
+                from itertools import product
+                month_grid = pd.DataFrame(
+                    list(product(month_portfolios, [month], all_sectors)),
+                    columns=["Portfolio", "Month", "Sector"]
+                )
+                month_complete = month_grid.merge(
+                    month_df, on=["Portfolio", "Month", "Sector"], how="left"
+                ).fillna(0)
+                combined_data.append(month_complete)
+
+            sector_df_complete = pd.concat(combined_data, ignore_index=True)
+
+            # Now average across portfolios - only portfolios that existed in each month
             pivot_df = sector_df_complete.groupby(["Month", "Sector"])["Weight"].mean().unstack(fill_value=0)
             pivot_df = pivot_df.reindex(index=[c for c in month_order if c in pivot_df.index])
             # Transpose so sectors are rows, months are columns
             pivot_df = pivot_df.T
 
-            st.caption(f"Average sector weights across {len(selected_portfolio_names)} portfolios (sums to 100%)")
+            # Count portfolios per month for caption
+            portfolios_counts = {m: len(p) for m, p in portfolios_per_month.items()}
+            count_str = ", ".join(f"{m}: {c}" for m, c in sorted(portfolios_counts.items()))
+            st.caption(f"Average sector weights (portfolios per month: {count_str})")
 
             # Format as percentages
             styled_pivot = pivot_df.style.format("{:.1%}").background_gradient(
