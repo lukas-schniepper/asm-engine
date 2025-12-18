@@ -3138,54 +3138,50 @@ def _render_etoro_compare_tab():
             else:
                 return f'{val:.1f}{suffix}'
 
-        # Build HTML table
+        # Build HTML table rows
         html_rows = []
         for row in comparison_data:
             profile_url = row["Profile"]
             investor_name = row["Investor"]
-            html_rows.append(f'''
-            <tr>
-                <td style="text-align: center;">{row["⭐"]}</td>
-                <td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none;">{investor_name}</a></td>
-                <td style="text-align: right;">{row["Copiers"]:,}</td>
-                <td style="text-align: right;">{color_value(row["MTD %"])}</td>
-                <td style="text-align: right;">{color_value(row["1Y %"])}</td>
-                <td style="text-align: right;">{color_value(row["2Y %"])}</td>
-                <td style="text-align: right;">{color_value(row["YTD %"])}</td>
-                <td style="text-align: right;">{row["Win %"]:.0f}%</td>
-                <td style="text-align: right;">{row["Prof.Mo %"]:.0f}%</td>
-            </tr>
-            ''')
+            html_rows.append(
+                f'<tr>'
+                f'<td style="text-align: center;">{row["⭐"]}</td>'
+                f'<td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none;">{investor_name}</a></td>'
+                f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
+                f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
+                f'<td style="text-align: right;">{color_value(row["1Y %"])}</td>'
+                f'<td style="text-align: right;">{color_value(row["2Y %"])}</td>'
+                f'<td style="text-align: right;">{color_value(row["YTD %"])}</td>'
+                f'<td style="text-align: right;">{row["Win %"]:.0f}%</td>'
+                f'<td style="text-align: right;">{row["Prof.Mo %"]:.0f}%</td>'
+                f'</tr>'
+            )
 
-        html_table = f'''
-        <style>
-            .etoro-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-            .etoro-table th {{ text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; }}
-            .etoro-table th:first-child {{ text-align: center; }}
-            .etoro-table th:nth-child(2) {{ text-align: left; }}
-            .etoro-table td {{ padding: 8px 12px; border-bottom: 1px solid #eee; }}
-            .etoro-table tr:hover {{ background-color: #f5f5f5; }}
-            .etoro-table a:hover {{ text-decoration: underline; }}
-        </style>
-        <table class="etoro-table">
-            <thead>
-                <tr>
-                    <th style="text-align: center;">⭐</th>
-                    <th style="text-align: left;">Investor</th>
-                    <th style="text-align: right;">Copiers</th>
-                    <th style="text-align: right;">MTD %</th>
-                    <th style="text-align: right;">1Y %</th>
-                    <th style="text-align: right;">2Y %</th>
-                    <th style="text-align: right;">YTD %</th>
-                    <th style="text-align: right;">Win %</th>
-                    <th style="text-align: right;">Prof.Mo %</th>
-                </tr>
-            </thead>
-            <tbody>
-                {"".join(html_rows)}
-            </tbody>
-        </table>
-        '''
+        html_table = (
+            '<style>'
+            '.etoro-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
+            '.etoro-table th { text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; }'
+            '.etoro-table th:first-child { text-align: center; }'
+            '.etoro-table th:nth-child(2) { text-align: left; }'
+            '.etoro-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }'
+            '.etoro-table tr:hover { background-color: #f5f5f5; }'
+            '.etoro-table a:hover { text-decoration: underline; }'
+            '</style>'
+            '<table class="etoro-table">'
+            '<thead><tr>'
+            '<th style="text-align: center;">⭐</th>'
+            '<th style="text-align: left;">Investor</th>'
+            '<th style="text-align: right;">Copiers</th>'
+            '<th style="text-align: right;">MTD %</th>'
+            '<th style="text-align: right;">1Y %</th>'
+            '<th style="text-align: right;">2Y %</th>'
+            '<th style="text-align: right;">YTD %</th>'
+            '<th style="text-align: right;">Win %</th>'
+            '<th style="text-align: right;">Prof.Mo %</th>'
+            '</tr></thead>'
+            '<tbody>' + ''.join(html_rows) + '</tbody>'
+            '</table>'
+        )
 
         st.markdown(html_table, unsafe_allow_html=True)
 
