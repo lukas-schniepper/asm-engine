@@ -3117,7 +3117,6 @@ def _render_etoro_compare_tab():
                 "⭐": "⭐" if is_me else "",
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Profile": profile_url,
-                "Risk": inv.risk_score,
                 "Copiers": inv.copiers,
                 "MTD %": mtd,
                 "1Y %": inv.gain_1y,
@@ -3141,7 +3140,6 @@ def _render_etoro_compare_tab():
                 "⭐": st.column_config.TextColumn("⭐", width="small"),
                 "Investor": st.column_config.TextColumn("Investor", width="medium"),
                 "Profile": st.column_config.LinkColumn("Profile", display_text="Open"),
-                "Risk": st.column_config.NumberColumn("Risk", format="%d/10"),
                 "Copiers": st.column_config.NumberColumn("Copiers", format="%d"),
                 "MTD %": st.column_config.NumberColumn("MTD %", format="%.1f%%"),
                 "1Y %": st.column_config.NumberColumn("1Y %", format="%.1f%%"),
@@ -3153,7 +3151,7 @@ def _render_etoro_compare_tab():
         )
 
         # Add explanation
-        st.caption("Risk: 1-10 scale (lower = less risky) | Win %: Percentage of profitable weeks")
+        st.caption("Win %: Percentage of profitable weeks | Prof.Mo %: Percentage of profitable months")
 
         # Section 3: Monthly Returns Chart
         st.markdown("---")
