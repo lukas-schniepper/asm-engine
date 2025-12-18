@@ -188,11 +188,14 @@ def scrape_monthly_returns(driver, username: str) -> dict:
                     # Debug: print what we found
                     print(f"    Found {len(pct_values)} percentage values: {pct_values[:14]}")
 
-                    # If we got more than 12 values, skip the extra ones at the start
-                    # (likely year totals like YTD or annual returns)
-                    while len(pct_values) > 12:
+                    # eToro shows: [2025 YTD, Dec, Nov, Oct, ..., Jan, 2024 YTD, ...]
+                    # We need exactly 12 months: Dec through Jan
+                    # If we have 14 values: skip first (2025 YTD) and take next 12
+                    # If we have 13 values: skip first (2025 YTD) and take next 12
+                    if len(pct_values) > 12:
                         print(f"    Skipping first value: {pct_values[0]} (likely year total)")
-                        pct_values = pct_values[1:]
+                        pct_values = pct_values[1:13]  # Take elements 1-12 (Dec through Jan)
+                        print(f"    Using 12 monthly values: {pct_values}")
 
                     if len(pct_values) >= 12:
                         # Map percentages to months
