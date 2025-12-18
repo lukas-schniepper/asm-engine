@@ -191,12 +191,8 @@ class EToroScraper:
         },
     }
 
-    # S3 configuration for live data (updated by GitHub Actions daily)
-    S3_BUCKET = "alphamachine-data"
-    S3_KEY = "etoro/live_stats.json"
-
     # Cache for live data (loaded once per session)
-    _live_data_cache: Optional[Dict] = None
+    _live_data_cache: Optional[List] = None
     _live_data_loaded_at: Optional[datetime] = None
 
     def __init__(self, username: str = None, password: str = None):
@@ -213,8 +209,8 @@ class EToroScraper:
         self._driver = None
 
     @classmethod
-    def _load_live_data(cls) -> Dict:
-        """Load live data from S3 using boto3 (cached for 5 minutes)."""
+    def _load_live_data(cls) -> List:
+        """Load live data from Supabase (cached for 5 minutes)."""
         now = datetime.now()
 
         # Check if cache is valid (less than 5 minutes old)
@@ -223,45 +219,54 @@ class EToroScraper:
             (now - cls._live_data_loaded_at).total_seconds() < 300):
             return cls._live_data_cache
 
-        # Try to load from S3 using boto3
+        # Try to load from Supabase
         try:
-            import boto3
-            import os
+            from AlphaMachine_core.db import get_session
+            from AlphaMachine_core.models import EToroStats
+            from sqlmodel import select
+            from datetime import date
 
-            # Get credentials from environment or Streamlit secrets
-            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
-            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+            with get_session() as session:
+                # Get the most recent scraped date
+                latest_date_query = select(EToroStats.scraped_date).order_by(
+                    EToroStats.scraped_date.desc()
+                ).limit(1)
+                result = session.exec(latest_date_query).first()
 
-            # Try Streamlit secrets if env vars not set
-            if not aws_access_key:
-                try:
-                    import streamlit as st
-                    aws_access_key = st.secrets.get('AWS_ACCESS_KEY_ID')
-                    aws_secret_key = st.secrets.get('AWS_SECRET_ACCESS_KEY')
-                except Exception:
-                    pass
+                if not result:
+                    logger.warning("No eToro stats in database")
+                    return []
 
-            if not aws_access_key:
-                logger.warning("AWS credentials not found")
-                return []
+                latest_date = result
 
-            s3 = boto3.client(
-                's3',
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-                region_name='eu-central-1'
-            )
+                # Get all investors for that date
+                query = select(EToroStats).where(EToroStats.scraped_date == latest_date)
+                stats = session.exec(query).all()
 
-            response = s3.get_object(Bucket=cls.S3_BUCKET, Key=cls.S3_KEY)
-            data = json.loads(response['Body'].read().decode('utf-8'))
+                # Convert to list of dicts
+                live_data = []
+                for stat in stats:
+                    live_data.append({
+                        'username': stat.username,
+                        'full_name': stat.full_name,
+                        'user_id': stat.user_id,
+                        'risk_score': stat.risk_score,
+                        'copiers': stat.copiers,
+                        'gain_1y': stat.gain_1y,
+                        'gain_2y': stat.gain_2y,
+                        'gain_ytd': stat.gain_ytd,
+                        'win_ratio': stat.win_ratio,
+                        'profitable_months_pct': stat.profitable_months_pct,
+                        'monthly_returns': stat.monthly_returns or {},
+                    })
 
-            cls._live_data_cache = data.get('investors', [])
-            cls._live_data_loaded_at = now
-            logger.info(f"Loaded live eToro data from S3 ({len(cls._live_data_cache)} investors)")
-            return cls._live_data_cache
+                cls._live_data_cache = live_data
+                cls._live_data_loaded_at = now
+                logger.info(f"Loaded live eToro data from Supabase ({len(live_data)} investors, date: {latest_date})")
+                return cls._live_data_cache
 
         except Exception as e:
-            logger.warning(f"Failed to load live data from S3: {e}")
+            logger.warning(f"Failed to load live data from Supabase: {e}")
 
         return []
 

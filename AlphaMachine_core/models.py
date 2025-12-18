@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing           import Optional
 from datetime         import date
 from sqlmodel         import SQLModel, Field
-from sqlalchemy       import Column, Date, UniqueConstraint
+from sqlalchemy       import Column, Date, UniqueConstraint, JSON
 from sqlalchemy.types import BigInteger
+from typing import Dict, Any
 
 class TickerPeriod(SQLModel, table=True):
     __tablename__  = "ticker_period"
@@ -60,4 +61,32 @@ class PriceData(SQLModel, table=True):
     volume: int   = Field(
         sa_column=Column(BigInteger, nullable=False),
         description="Handelsvolumen"
+    )
+
+
+class EToroStats(SQLModel, table=True):
+    """eToro investor statistics - scraped daily by GitHub Actions"""
+    __tablename__ = "etoro_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "username", "scraped_date",
+            name="uix_etoro_stats_username_date"
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scraped_date: date = Field(index=True, description="Date when data was scraped")
+    username: str = Field(index=True, description="eToro username")
+    full_name: str = Field(description="Display name")
+    user_id: Optional[int] = Field(default=None, description="eToro user ID (for avatar)")
+    risk_score: int = Field(default=5, description="Risk score 1-10")
+    copiers: int = Field(default=0, description="Number of copiers")
+    gain_1y: float = Field(default=0.0, description="1 year return %")
+    gain_2y: float = Field(default=0.0, description="2 year return %")
+    gain_ytd: float = Field(default=0.0, description="Year-to-date return %")
+    win_ratio: float = Field(default=50.0, description="Win ratio %")
+    profitable_months_pct: float = Field(default=50.0, description="% of profitable months")
+    monthly_returns: Dict[str, Any] = Field(
+        sa_column=Column(JSON, nullable=False),
+        description="Monthly returns dict {'2024-01': 1.5, ...}"
     )
