@@ -3120,91 +3120,73 @@ def _render_etoro_compare_tab():
 
         from datetime import datetime, timedelta
         current_month_key = datetime.now().strftime('%Y-%m')
-        st.caption(f"MTD = {current_month_key} performance")
+        st.caption(f"MTD = {current_month_key} performance | Click column headers to sort")
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
-            profile_url = f"https://www.etoro.com/people/{inv.username}"
             # Get MTD from current month's return in monthly_returns
             mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
             comparison_data.append({
-                "": "⭐" if is_me else "",
-                "Username": inv.username,
-                "ProfileURL": profile_url,
+                "⭐": "⭐" if is_me else "",
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Risk": inv.risk_score,
                 "Copiers": inv.copiers,
-                "MTD": mtd,
-                "1Y Return": inv.gain_1y,
-                "2Y Return": inv.gain_2y,
-                "YTD": inv.gain_ytd,
+                "MTD %": mtd,
+                "1Y %": inv.gain_1y,
+                "2Y %": inv.gain_2y,
+                "YTD %": inv.gain_ytd,
                 "Win %": inv.win_ratio,
-                "Profitable Mo.": inv.profitable_months_pct,
+                "Prof.Mo %": inv.profitable_months_pct,
             })
 
         df = pd.DataFrame(comparison_data)
 
-        # Display comparison table
+        # Display comparison table with sorting enabled
         st.markdown("#### Performance Comparison")
 
-        # Header row
-        header_cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1.2, 1, 1.2])
-        with header_cols[0]:
-            st.write("")
-        with header_cols[1]:
-            st.write("**Investor**")
-        with header_cols[2]:
-            st.write("**Risk**")
-        with header_cols[3]:
-            st.write("**Copiers**")
-        with header_cols[4]:
-            st.write("**MTD**")
-        with header_cols[5]:
-            st.write("**1Y**")
-        with header_cols[6]:
-            st.write("**2Y**")
-        with header_cols[7]:
-            st.write("**YTD**")
-        with header_cols[8]:
-            st.write("**Win%**")
-        with header_cols[9]:
-            st.write("**Prof.Mo**")
+        # Style the dataframe with color for returns
+        def color_returns(val):
+            """Color positive values green, negative red."""
+            if isinstance(val, (int, float)):
+                color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+                return f'color: {color}'
+            return ''
 
-        # Data rows
-        for i, row in df.iterrows():
-            is_me = row[""] == "⭐"
+        # Apply styling to return columns
+        return_cols = ['MTD %', '1Y %', '2Y %', 'YTD %']
+        styled_df = df.style.map(
+            color_returns,
+            subset=return_cols
+        ).format({
+            'MTD %': '{:.1f}%',
+            '1Y %': '{:.1f}%',
+            '2Y %': '{:.1f}%',
+            'YTD %': '{:.1f}%',
+            'Win %': '{:.0f}%',
+            'Prof.Mo %': '{:.0f}%',
+            'Copiers': '{:,}',
+        })
 
-            cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1.2, 1, 1.2])
+        # Display sortable dataframe
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "⭐": st.column_config.TextColumn("⭐", width="small"),
+                "Investor": st.column_config.TextColumn("Investor", width="large"),
+                "Risk": st.column_config.NumberColumn("Risk", format="%d/10", width="small"),
+                "Copiers": st.column_config.NumberColumn("Copiers", width="small"),
+                "MTD %": st.column_config.NumberColumn("MTD %", width="small"),
+                "1Y %": st.column_config.NumberColumn("1Y %", width="small"),
+                "2Y %": st.column_config.NumberColumn("2Y %", width="small"),
+                "YTD %": st.column_config.NumberColumn("YTD %", width="small"),
+                "Win %": st.column_config.NumberColumn("Win %", width="small"),
+                "Prof.Mo %": st.column_config.NumberColumn("Prof.Mo %", width="small"),
+            }
+        )
 
-            with cols[0]:
-                st.write(row[""])
-            with cols[1]:
-                if is_me:
-                    st.markdown(f"**[{row['Investor']}]({row['ProfileURL']})** (You)")
-                else:
-                    st.markdown(f"[{row['Investor']}]({row['ProfileURL']})")
-            with cols[2]:
-                st.write(f"{row['Risk']}/10")
-            with cols[3]:
-                st.write(f"{row['Copiers']:,}")
-            with cols[4]:
-                color = "green" if row["MTD"] > 0 else "red"
-                st.markdown(f":{color}[{row['MTD']:.1f}%]")
-            with cols[5]:
-                color = "green" if row["1Y Return"] > 0 else "red"
-                st.markdown(f":{color}[{row['1Y Return']:.1f}%]")
-            with cols[6]:
-                color = "green" if row["2Y Return"] > 0 else "red"
-                st.markdown(f":{color}[{row['2Y Return']:.1f}%]")
-            with cols[7]:
-                color = "green" if row["YTD"] > 0 else "red"
-                st.markdown(f":{color}[{row['YTD']:.1f}%]")
-            with cols[8]:
-                st.write(f"{row['Win %']:.0f}%")
-            with cols[9]:
-                st.write(f"{row['Profitable Mo.']:.0f}%")
-
-        # Add header row explanation
+        # Add explanation
         st.caption("Risk: 1-10 scale (lower = less risky) | Win %: Percentage of profitable weeks")
 
         # Section 3: Monthly Returns Chart
@@ -3286,33 +3268,6 @@ def _render_etoro_compare_tab():
         st.dataframe(styled_mtd, use_container_width=True, hide_index=True)
 
         st.caption(f"📌 {today.strftime('%B %Y')}: Day {days_elapsed} of ~{days_in_month}")
-
-        # Section 5: Ranking
-        st.markdown("---")
-        st.markdown("### 🎯 Your Ranking")
-
-        # Calculate rankings
-        all_1y_returns = [(inv.username, inv.gain_1y) for inv in all_investors]
-        all_1y_returns.sort(key=lambda x: x[1], reverse=True)
-        my_rank_1y = next(i+1 for i, (u, _) in enumerate(all_1y_returns) if u.lower() == MY_ETORO_USERNAME.lower())
-
-        all_2y_returns = [(inv.username, inv.gain_2y) for inv in all_investors]
-        all_2y_returns.sort(key=lambda x: x[1], reverse=True)
-        my_rank_2y = next(i+1 for i, (u, _) in enumerate(all_2y_returns) if u.lower() == MY_ETORO_USERNAME.lower())
-
-        rank_cols = st.columns(2)
-        with rank_cols[0]:
-            st.metric(
-                "1Y Return Rank",
-                f"#{my_rank_1y} of {len(all_investors)}",
-                delta=f"Top {my_rank_1y}/{len(all_investors)}"
-            )
-        with rank_cols[1]:
-            st.metric(
-                "2Y Return Rank",
-                f"#{my_rank_2y} of {len(all_investors)}",
-                delta=f"Top {my_rank_2y}/{len(all_investors)}"
-            )
 
     else:
         st.info("Could not fetch top investors data.")
