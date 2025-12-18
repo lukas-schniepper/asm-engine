@@ -3044,19 +3044,25 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                 st.info("No holdings found for this portfolio.")
 
 
+@st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 minutes
+def _fetch_etoro_data():
+    """Fetch eToro data with Streamlit caching."""
+    from ..data_sources.etoro_scraper import get_etoro_comparison_data
+    return get_etoro_comparison_data("alphawizzard", top_count=5)
+
+
 def _render_etoro_compare_tab():
     """Render the eToro Compare tab - compare portfolio against top popular investors."""
     import pandas as pd
-    from ..data_sources.etoro_scraper import get_etoro_comparison_data
 
     st.markdown("### eToro Portfolio Comparison")
 
     # Configuration
     MY_ETORO_USERNAME = "alphawizzard"
 
-    # Fetch data (cached in scraper for 5 minutes)
+    # Fetch data (cached by Streamlit for 5 minutes)
     try:
-        data = get_etoro_comparison_data(MY_ETORO_USERNAME, top_count=5)
+        data = _fetch_etoro_data()
     except Exception as e:
         st.error(f"Failed to fetch eToro data: {e}")
         return
@@ -3124,49 +3130,22 @@ def _render_etoro_compare_tab():
         # Display comparison table with sorting enabled
         st.markdown("#### Performance Comparison")
 
-        # Style the dataframe with color for returns
-        def color_returns(val):
-            """Color positive values green, negative red."""
-            if isinstance(val, (int, float)):
-                color = 'green' if val > 0 else 'red' if val < 0 else 'black'
-                return f'color: {color}'
-            return ''
-
-        # Apply styling to return columns
-        return_cols = ['MTD %', '1Y %', '2Y %', 'YTD %']
-        numeric_cols = ['Risk', 'Copiers', 'MTD %', '1Y %', '2Y %', 'YTD %', 'Win %', 'Prof.Mo %']
-        styled_df = df.style.map(
-            color_returns,
-            subset=return_cols
-        ).format({
-            'MTD %': '{:.1f}%',
-            '1Y %': '{:.1f}%',
-            '2Y %': '{:.1f}%',
-            'YTD %': '{:.1f}%',
-            'Win %': '{:.0f}%',
-            'Prof.Mo %': '{:.0f}%',
-            'Copiers': '{:,}',
-        }).set_properties(
-            subset=numeric_cols,
-            **{'text-align': 'right'}
-        )
-
-        # Display sortable dataframe
+        # Display sortable dataframe (NumberColumn auto right-aligns)
         st.dataframe(
-            styled_df,
+            df,
             use_container_width=True,
             hide_index=True,
             column_config={
                 "⭐": st.column_config.TextColumn("⭐", width="small"),
                 "Investor": st.column_config.TextColumn("Investor", width="large"),
-                "Risk": st.column_config.NumberColumn("Risk", format="%d/10", width="small"),
-                "Copiers": st.column_config.NumberColumn("Copiers", width="small"),
-                "MTD %": st.column_config.NumberColumn("MTD %", width="small"),
-                "1Y %": st.column_config.NumberColumn("1Y %", width="small"),
-                "2Y %": st.column_config.NumberColumn("2Y %", width="small"),
-                "YTD %": st.column_config.NumberColumn("YTD %", width="small"),
-                "Win %": st.column_config.NumberColumn("Win %", width="small"),
-                "Prof.Mo %": st.column_config.NumberColumn("Prof.Mo %", width="small"),
+                "Risk": st.column_config.NumberColumn("Risk", format="%d/10"),
+                "Copiers": st.column_config.NumberColumn("Copiers", format="%d"),
+                "MTD %": st.column_config.NumberColumn("MTD %", format="%.1f%%"),
+                "1Y %": st.column_config.NumberColumn("1Y %", format="%.1f%%"),
+                "2Y %": st.column_config.NumberColumn("2Y %", format="%.1f%%"),
+                "YTD %": st.column_config.NumberColumn("YTD %", format="%.1f%%"),
+                "Win %": st.column_config.NumberColumn("Win %", format="%.0f%%"),
+                "Prof.Mo %": st.column_config.NumberColumn("Prof.Mo %", format="%.0f%%"),
             }
         )
 
@@ -3200,7 +3179,7 @@ def _render_etoro_compare_tab():
                 with st.expander("View Monthly Returns Table", expanded=True):
                     styled_monthly = monthly_df.style.format("{:.2f}%").background_gradient(
                         cmap="RdYlGn", axis=None, vmin=-10, vmax=10
-                    )
+                    ).set_properties(**{'text-align': 'right'})
                     st.dataframe(styled_monthly, use_container_width=True, height=400)
         else:
             st.info("Monthly returns data not available.")
@@ -3242,13 +3221,14 @@ def _render_etoro_compare_tab():
                 return f'color: {color}'
             return ''
 
-        styled_mtd = mtd_df.style.applymap(
+        numeric_cols = ["MTD %", "Days", "Avg Daily %", "Projected Month %"]
+        styled_mtd = mtd_df.style.map(
             color_mtd, subset=["MTD %", "Avg Daily %", "Projected Month %"]
         ).format({
             "MTD %": "{:.2f}%",
             "Avg Daily %": "{:.3f}%",
             "Projected Month %": "{:.2f}%"
-        })
+        }).set_properties(subset=numeric_cols, **{'text-align': 'right'})
         st.dataframe(styled_mtd, use_container_width=True, hide_index=True)
 
         st.caption(f"📌 {today.strftime('%B %Y')}: Day {days_elapsed} of ~{days_in_month}")
