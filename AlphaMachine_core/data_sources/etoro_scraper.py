@@ -64,7 +64,8 @@ class EToroScraper:
     AVATAR_CDN = "https://etoro-cdn.etorostatic.com/avatars"
 
     # Demo data for popular investors (updated Dec 2024)
-    # Data sourced from eToro's public profiles
+    # Fallback data when Selenium is not available (e.g., Streamlit Cloud)
+    # Top 5 "Most Copied By Sectors" investors from eToro discover page
     DEMO_DATA = {
         'alphawizzard': {
             'full_name': 'AlphaWizzard',
@@ -82,84 +83,89 @@ class EToroScraper:
                 '2024-09': 4.5, '2024-10': 2.3, '2024-11': 6.1, '2024-12': 1.8,
             }
         },
-        'jaynemesis': {
-            'full_name': 'Jay Edward Smith',
-            'user_id': 2527238,
+        # #1 Most Copied - Thomas Parry Jones
+        'thomaspj': {
+            'full_name': 'Thomas Parry Jones',
+            'user_id': 10000002,
             'risk_score': 4,
-            'copiers': 45000,
-            'gain_1y': 18.2,
-            'gain_2y': 35.8,
-            'gain_ytd': 15.4,
-            'win_ratio': 72.0,
-            'profitable_months_pct': 70.0,
-            'monthly_returns': {
-                '2024-01': 2.1, '2024-02': 3.5, '2024-03': -2.0, '2024-04': 1.8,
-                '2024-05': 4.2, '2024-06': -1.2, '2024-07': 2.8, '2024-08': -1.5,
-                '2024-09': 3.2, '2024-10': 1.9, '2024-11': 4.8, '2024-12': 1.2,
-            }
-        },
-        'greenbullinvest': {
-            'full_name': 'Olivier Danvel',
-            'user_id': 7614273,
-            'risk_score': 3,
-            'copiers': 28000,
-            'gain_1y': 22.5,
-            'gain_2y': 42.1,
-            'gain_ytd': 19.8,
-            'win_ratio': 75.0,
-            'profitable_months_pct': 78.0,
-            'monthly_returns': {
-                '2024-01': 2.8, '2024-02': 3.9, '2024-03': -1.2, '2024-04': 2.5,
-                '2024-05': 4.8, '2024-06': -0.5, '2024-07': 3.2, '2024-08': -1.8,
-                '2024-09': 4.1, '2024-10': 2.1, '2024-11': 5.5, '2024-12': 1.5,
-            }
-        },
-        'rubymza': {
-            'full_name': 'Heloise Greeff',
-            'user_id': 8234561,
-            'risk_score': 4,
-            'copiers': 18500,
-            'gain_1y': 31.2,
-            'gain_2y': 52.8,
-            'gain_ytd': 26.4,
-            'win_ratio': 65.0,
+            'copiers': 36400,
+            'gain_1y': 78.0,  # Estimated from 155.70% 2Y
+            'gain_2y': 155.70,
+            'gain_ytd': 65.0,
+            'win_ratio': 70.0,
             'profitable_months_pct': 72.0,
             'monthly_returns': {
-                '2024-01': 4.1, '2024-02': 5.2, '2024-03': -2.5, '2024-04': 3.2,
-                '2024-05': 6.1, '2024-06': -1.5, '2024-07': 4.5, '2024-08': -2.8,
-                '2024-09': 5.2, '2024-10': 2.8, '2024-11': 7.2, '2024-12': 2.1,
+                '2024-01': 5.5, '2024-02': 7.2, '2024-03': -2.5, '2024-04': 4.8,
+                '2024-05': 8.5, '2024-06': -1.2, '2024-07': 6.2, '2024-08': -3.0,
+                '2024-09': 7.5, '2024-10': 4.0, '2024-11': 9.5, '2024-12': 3.5,
             }
         },
-        'wesl3y': {
-            'full_name': 'Wesley Wessels',
-            'user_id': 6891234,
-            'risk_score': 5,
-            'copiers': 22000,
-            'gain_1y': 35.8,
-            'gain_2y': 58.2,
-            'gain_ytd': 29.1,
-            'win_ratio': 62.0,
+        # #2 Most Copied - Jeppe Kirk Bonde
+        'jeppekirkbonde': {
+            'full_name': 'Jeppe Kirk Bonde',
+            'user_id': 10000003,
+            'risk_score': 4,
+            'copiers': 26900,
+            'gain_1y': 50.0,  # Estimated from 99.68% 2Y
+            'gain_2y': 99.68,
+            'gain_ytd': 42.0,
+            'win_ratio': 64.0,
             'profitable_months_pct': 68.0,
             'monthly_returns': {
-                '2024-01': 4.8, '2024-02': 6.1, '2024-03': -3.2, '2024-04': 3.8,
-                '2024-05': 7.2, '2024-06': -2.1, '2024-07': 5.2, '2024-08': -3.5,
-                '2024-09': 6.1, '2024-10': 3.2, '2024-11': 8.5, '2024-12': 2.5,
+                '2024-01': 4.2, '2024-02': 5.5, '2024-03': -1.8, '2024-04': 3.5,
+                '2024-05': 6.2, '2024-06': -0.8, '2024-07': 4.8, '2024-08': -2.2,
+                '2024-09': 5.5, '2024-10': 3.0, '2024-11': 7.2, '2024-12': 2.5,
             }
         },
-        'marianopardo': {
-            'full_name': 'Mariano Pardo',
-            'user_id': 5567890,
-            'risk_score': 3,
-            'copiers': 35000,
-            'gain_1y': 19.5,
-            'gain_2y': 38.2,
-            'gain_ytd': 16.8,
-            'win_ratio': 78.0,
-            'profitable_months_pct': 82.0,
+        # #3 Most Copied - Pietari Laurila (Triangula Capital)
+        'triangulacapital': {
+            'full_name': 'Pietari Laurila',
+            'user_id': 10000004,
+            'risk_score': 5,
+            'copiers': 20000,
+            'gain_1y': 65.0,  # Estimated from 128.92% 2Y
+            'gain_2y': 128.92,
+            'gain_ytd': 55.0,
+            'win_ratio': 66.0,
+            'profitable_months_pct': 70.0,
             'monthly_returns': {
-                '2024-01': 1.9, '2024-02': 2.8, '2024-03': -0.8, '2024-04': 1.5,
-                '2024-05': 3.5, '2024-06': -0.3, '2024-07': 2.2, '2024-08': -1.2,
-                '2024-09': 2.8, '2024-10': 1.5, '2024-11': 4.2, '2024-12': 1.0,
+                '2024-01': 5.0, '2024-02': 6.5, '2024-03': -2.2, '2024-04': 4.2,
+                '2024-05': 7.5, '2024-06': -1.0, '2024-07': 5.5, '2024-08': -2.8,
+                '2024-09': 6.5, '2024-10': 3.5, '2024-11': 8.5, '2024-12': 3.0,
+            }
+        },
+        # #4 Most Copied - Blue Screen Media ApS (CPHequities)
+        'cphequities': {
+            'full_name': 'Blue Screen Media ApS',
+            'user_id': 10000005,
+            'risk_score': 3,
+            'copiers': 14500,
+            'gain_1y': 43.0,  # Estimated from 85.39% 2Y
+            'gain_2y': 85.39,
+            'gain_ytd': 36.0,
+            'win_ratio': 61.0,
+            'profitable_months_pct': 65.0,
+            'monthly_returns': {
+                '2024-01': 3.5, '2024-02': 4.5, '2024-03': -1.5, '2024-04': 2.8,
+                '2024-05': 5.2, '2024-06': -0.6, '2024-07': 4.0, '2024-08': -1.8,
+                '2024-09': 4.5, '2024-10': 2.5, '2024-11': 6.0, '2024-12': 2.0,
+            }
+        },
+        # #5 Most Copied - Zechariah Bin Zheng (FundManagerZech)
+        'fundmanagerzech': {
+            'full_name': 'Zechariah Bin Zheng',
+            'user_id': 10000006,
+            'risk_score': 4,
+            'copiers': 12200,
+            'gain_1y': 41.0,  # Estimated from 81.31% 2Y
+            'gain_2y': 81.31,
+            'gain_ytd': 34.0,
+            'win_ratio': 62.0,
+            'profitable_months_pct': 66.0,
+            'monthly_returns': {
+                '2024-01': 3.2, '2024-02': 4.2, '2024-03': -1.4, '2024-04': 2.6,
+                '2024-05': 4.8, '2024-06': -0.5, '2024-07': 3.8, '2024-08': -1.6,
+                '2024-09': 4.2, '2024-10': 2.2, '2024-11': 5.5, '2024-12': 1.8,
             }
         },
     }
@@ -402,12 +408,13 @@ class EToroScraper:
                 logger.warning(f"Failed to scrape discover page: {e}")
 
         # Fallback to known popular investors
+        # Top 5 "Most Copied By Sectors" from eToro discover page (Dec 2024)
         fallback_usernames = [
-            'jaynemesis',
-            'marianopardo',
-            'greenbullinvest',
-            'wesl3y',
-            'rubymza',
+            'thomaspj',         # #1 Thomas Parry Jones - 155.70% 2Y, 36.4K copiers
+            'jeppekirkbonde',   # #2 Jeppe Kirk Bonde - 99.68% 2Y, 26.9K copiers
+            'triangulacapital', # #3 Pietari Laurila - 128.92% 2Y, 20K copiers
+            'cphequities',      # #4 Blue Screen Media ApS - 85.39% 2Y, 14.5K copiers
+            'fundmanagerzech',  # #5 Zechariah Bin Zheng - 81.31% 2Y, 12.2K copiers
         ]
 
         results = []
@@ -478,6 +485,7 @@ class EToroScraper:
 def get_etoro_comparison_data(
     my_username: str,
     top_count: int = 5,
+    custom_usernames: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to get comparison data for Performance Tracker
@@ -485,6 +493,8 @@ def get_etoro_comparison_data(
     Args:
         my_username: Your eToro username
         top_count: Number of top investors to compare against
+        custom_usernames: Optional list of specific usernames to compare against
+                         (if provided, ignores top_count and uses these instead)
 
     Returns:
         Dict with 'my_stats' and 'top_investors' keys
@@ -494,8 +504,20 @@ def get_etoro_comparison_data(
     # Get my stats
     my_stats = scraper.get_investor_stats(my_username)
 
-    # Get top investors
-    top_investors = scraper.get_top_investors(top_count)
+    # Get comparison investors
+    if custom_usernames:
+        # Use specific usernames provided by user
+        top_investors = []
+        for username in custom_usernames:
+            username = username.strip()
+            if username and username.lower() != my_username.lower():
+                stats = scraper.get_investor_stats(username)
+                if stats:
+                    top_investors.append(stats)
+                time.sleep(0.5)  # Rate limiting
+    else:
+        # Get top investors from discover page
+        top_investors = scraper.get_top_investors(top_count)
 
     return {
         'my_stats': my_stats,
