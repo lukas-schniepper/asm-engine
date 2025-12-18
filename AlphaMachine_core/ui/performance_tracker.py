@@ -3118,9 +3118,14 @@ def _render_etoro_compare_tab():
         comparison_data = []
         all_investors = [my_stats] + top_investors
 
+        from datetime import datetime
+        current_month_key = datetime.now().strftime('%Y-%m')
+
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
             profile_url = f"https://www.etoro.com/people/{inv.username}"
+            # Get MTD from current month's return in monthly_returns
+            mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
             comparison_data.append({
                 "": "⭐" if is_me else "",
                 "Username": inv.username,
@@ -3128,6 +3133,7 @@ def _render_etoro_compare_tab():
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Risk": inv.risk_score,
                 "Copiers": inv.copiers,
+                "MTD": mtd,
                 "1Y Return": inv.gain_1y,
                 "2Y Return": inv.gain_2y,
                 "YTD": inv.gain_ytd,
@@ -3140,11 +3146,34 @@ def _render_etoro_compare_tab():
         # Display comparison table
         st.markdown("#### Performance Comparison")
 
-        # Custom display with clickable profile links
+        # Header row
+        header_cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1.2, 1, 1.2])
+        with header_cols[0]:
+            st.write("")
+        with header_cols[1]:
+            st.write("**Investor**")
+        with header_cols[2]:
+            st.write("**Risk**")
+        with header_cols[3]:
+            st.write("**Copiers**")
+        with header_cols[4]:
+            st.write("**MTD**")
+        with header_cols[5]:
+            st.write("**1Y**")
+        with header_cols[6]:
+            st.write("**2Y**")
+        with header_cols[7]:
+            st.write("**YTD**")
+        with header_cols[8]:
+            st.write("**Win%**")
+        with header_cols[9]:
+            st.write("**Prof.Mo**")
+
+        # Data rows
         for i, row in df.iterrows():
             is_me = row[""] == "⭐"
 
-            cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1, 1.2])
+            cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1.2, 1, 1.2])
 
             with cols[0]:
                 st.write(row[""])
@@ -3158,17 +3187,20 @@ def _render_etoro_compare_tab():
             with cols[3]:
                 st.write(f"{row['Copiers']:,}")
             with cols[4]:
+                color = "green" if row["MTD"] > 0 else "red"
+                st.markdown(f":{color}[{row['MTD']:.1f}%]")
+            with cols[5]:
                 color = "green" if row["1Y Return"] > 0 else "red"
                 st.markdown(f":{color}[{row['1Y Return']:.1f}%]")
-            with cols[5]:
+            with cols[6]:
                 color = "green" if row["2Y Return"] > 0 else "red"
                 st.markdown(f":{color}[{row['2Y Return']:.1f}%]")
-            with cols[6]:
+            with cols[7]:
                 color = "green" if row["YTD"] > 0 else "red"
                 st.markdown(f":{color}[{row['YTD']:.1f}%]")
-            with cols[7]:
-                st.write(f"{row['Win %']:.0f}%")
             with cols[8]:
+                st.write(f"{row['Win %']:.0f}%")
+            with cols[9]:
                 st.write(f"{row['Profitable Mo.']:.0f}%")
 
         # Add header row explanation
