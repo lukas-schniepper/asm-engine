@@ -2,14 +2,17 @@
 eToro Data Scraper - Fetch investor stats from eToro
 
 Note: eToro's public APIs require authentication. This module provides:
-1. Demo data for immediate use
-2. Optional Selenium-based scraping for real data (requires: pip install selenium webdriver-manager)
+1. Live data from JSON file (updated by GitHub Actions daily)
+2. Demo data as fallback
+3. Optional Selenium-based scraping for real data (requires: pip install selenium webdriver-manager)
 
 To enable real scraping:
     pip install selenium webdriver-manager
 """
 import requests
 import logging
+import json
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
@@ -188,6 +191,13 @@ class EToroScraper:
         },
     }
 
+    # S3 URL for live data (updated by GitHub Actions daily)
+    S3_LIVE_DATA_URL = "https://alphamachine-data.s3.eu-central-1.amazonaws.com/etoro/live_stats.json"
+
+    # Cache for live data (loaded once per session)
+    _live_data_cache: Optional[Dict] = None
+    _live_data_loaded_at: Optional[datetime] = None
+
     def __init__(self, username: str = None, password: str = None):
         """
         Initialize eToro scraper
@@ -201,12 +211,64 @@ class EToroScraper:
         self._use_selenium = SELENIUM_AVAILABLE
         self._driver = None
 
+    @classmethod
+    def _load_live_data(cls) -> Dict:
+        """Load live data from S3 (cached for 5 minutes)."""
+        now = datetime.now()
+
+        # Check if cache is valid (less than 5 minutes old)
+        if (cls._live_data_cache is not None and
+            cls._live_data_loaded_at is not None and
+            (now - cls._live_data_loaded_at).total_seconds() < 300):
+            return cls._live_data_cache
+
+        # Try to load from S3
+        try:
+            import requests as req
+            response = req.get(cls.S3_LIVE_DATA_URL, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                cls._live_data_cache = data.get('investors', [])
+                cls._live_data_loaded_at = now
+                logger.info(f"Loaded live eToro data from S3 ({len(cls._live_data_cache)} investors)")
+                return cls._live_data_cache
+            else:
+                logger.warning(f"S3 returned status {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to load live data from S3: {e}")
+
+        return []
+
     def _get_avatar_url(self, user_id: int, size: int = 50) -> str:
         """Get avatar URL for user"""
         return f"{self.AVATAR_CDN}/{user_id}/{size}x{size}.jpg"
 
+    def _get_live_stats(self, username: str) -> Optional[InvestorStats]:
+        """Get stats from live JSON data (updated by GitHub Actions)."""
+        live_data = self._load_live_data()
+
+        # Live data is a list, find by username
+        if isinstance(live_data, list):
+            for inv in live_data:
+                if inv.get('username', '').lower() == username.lower():
+                    return InvestorStats(
+                        username=username,
+                        full_name=inv.get('full_name', username),
+                        avatar_url=self._get_avatar_url(inv.get('user_id', 0), 50),
+                        risk_score=inv.get('risk_score', 5),
+                        copiers=inv.get('copiers', 0),
+                        gain_1y=inv.get('gain_1y', 0.0),
+                        gain_2y=inv.get('gain_2y', 0.0),
+                        gain_ytd=inv.get('gain_ytd', 0.0),
+                        win_ratio=inv.get('win_ratio', 50.0),
+                        avg_trades_per_week=5.0,
+                        profitable_months_pct=inv.get('profitable_months_pct', 50.0),
+                        monthly_returns=inv.get('monthly_returns', {}),
+                    )
+        return None
+
     def _get_demo_stats(self, username: str) -> Optional[InvestorStats]:
-        """Get demo stats for a username"""
+        """Get demo stats for a username (fallback)."""
         data = self.DEMO_DATA.get(username.lower())
         if not data:
             return None
@@ -235,7 +297,18 @@ class EToroScraper:
 
         Returns:
             InvestorStats object or None if failed
+
+        Data sources (in priority order):
+        1. Live data from S3 (updated daily by GitHub Actions)
+        2. Selenium scraping (if available)
+        3. Demo data (hardcoded fallback)
         """
+        # Try live data from S3 first
+        live_stats = self._get_live_stats(username)
+        if live_stats:
+            logger.info(f"Using live S3 data for {username}")
+            return live_stats
+
         # Try Selenium scraping if available
         if self._use_selenium:
             try:
