@@ -191,8 +191,9 @@ class EToroScraper:
         },
     }
 
-    # S3 URL for live data (updated by GitHub Actions daily)
-    S3_LIVE_DATA_URL = "https://alphamachine-data.s3.eu-central-1.amazonaws.com/etoro/live_stats.json"
+    # S3 configuration for live data (updated by GitHub Actions daily)
+    S3_BUCKET = "alphamachine-data"
+    S3_KEY = "etoro/live_stats.json"
 
     # Cache for live data (loaded once per session)
     _live_data_cache: Optional[Dict] = None
@@ -213,7 +214,7 @@ class EToroScraper:
 
     @classmethod
     def _load_live_data(cls) -> Dict:
-        """Load live data from S3 (cached for 5 minutes)."""
+        """Load live data from S3 using boto3 (cached for 5 minutes)."""
         now = datetime.now()
 
         # Check if cache is valid (less than 5 minutes old)
@@ -222,18 +223,43 @@ class EToroScraper:
             (now - cls._live_data_loaded_at).total_seconds() < 300):
             return cls._live_data_cache
 
-        # Try to load from S3
+        # Try to load from S3 using boto3
         try:
-            import requests as req
-            response = req.get(cls.S3_LIVE_DATA_URL, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                cls._live_data_cache = data.get('investors', [])
-                cls._live_data_loaded_at = now
-                logger.info(f"Loaded live eToro data from S3 ({len(cls._live_data_cache)} investors)")
-                return cls._live_data_cache
-            else:
-                logger.warning(f"S3 returned status {response.status_code}")
+            import boto3
+            import os
+
+            # Get credentials from environment or Streamlit secrets
+            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
+            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+
+            # Try Streamlit secrets if env vars not set
+            if not aws_access_key:
+                try:
+                    import streamlit as st
+                    aws_access_key = st.secrets.get('AWS_ACCESS_KEY_ID')
+                    aws_secret_key = st.secrets.get('AWS_SECRET_ACCESS_KEY')
+                except Exception:
+                    pass
+
+            if not aws_access_key:
+                logger.warning("AWS credentials not found")
+                return []
+
+            s3 = boto3.client(
+                's3',
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key,
+                region_name='eu-central-1'
+            )
+
+            response = s3.get_object(Bucket=cls.S3_BUCKET, Key=cls.S3_KEY)
+            data = json.loads(response['Body'].read().decode('utf-8'))
+
+            cls._live_data_cache = data.get('investors', [])
+            cls._live_data_loaded_at = now
+            logger.info(f"Loaded live eToro data from S3 ({len(cls._live_data_cache)} investors)")
+            return cls._live_data_cache
+
         except Exception as e:
             logger.warning(f"Failed to load live data from S3: {e}")
 
