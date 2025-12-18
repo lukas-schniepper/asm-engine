@@ -112,10 +112,18 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     if risk_match:
         result['risk_score'] = int(risk_match.group(1))
 
-    # Extract copiers count
-    copiers_match = re.search(r'([\d,]+)\s*Copiers', visible_text)
+    # Extract copiers count - try multiple patterns
+    # Pattern 1: "X Copiers" or "X,XXX Copiers"
+    copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
+    if not copiers_match:
+        # Pattern 2: "Copiers X" or "Copiers: X"
+        copiers_match = re.search(r'[Cc]opiers[:\s]*([\d,]+)', visible_text)
+    if not copiers_match:
+        # Pattern 3: Look in page source for data attributes
+        copiers_match = re.search(r'"copiers"[:\s]*(\d+)', page_source)
     if copiers_match:
         result['copiers'] = int(copiers_match.group(1).replace(',', ''))
+        print(f"    Copiers found: {result['copiers']}")
 
     # Extract win ratio (profitable weeks)
     win_match = re.search(r'(\d+\.?\d*)%\s*Profitable', visible_text)

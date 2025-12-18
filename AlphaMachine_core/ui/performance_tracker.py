@@ -3118,7 +3118,7 @@ def _render_etoro_compare_tab():
         comparison_data = []
         all_investors = [my_stats] + top_investors
 
-        from datetime import datetime
+        from datetime import datetime, timedelta
         current_month_key = datetime.now().strftime('%Y-%m')
         st.caption(f"MTD = {current_month_key} performance")
 
@@ -3222,24 +3222,72 @@ def _render_etoro_compare_tab():
         if monthly_data:
             # Create DataFrame for monthly returns
             monthly_df = pd.DataFrame(monthly_data)
-            monthly_df = monthly_df.sort_index()
-
-            # Limit to last 12 months
-            monthly_df = monthly_df.tail(12)
+            # Sort descending (newest month first)
+            monthly_df = monthly_df.sort_index(ascending=False)
 
             if not monthly_df.empty:
-                st.line_chart(monthly_df)
+                # For chart, use ascending order (chronological)
+                chart_df = monthly_df.sort_index(ascending=True).tail(12)
+                st.line_chart(chart_df)
 
-                # Also show as table
-                with st.expander("View Monthly Returns Table"):
+                # Show table with newest month on top (all months including 2024)
+                with st.expander("View Monthly Returns Table", expanded=True):
                     styled_monthly = monthly_df.style.format("{:.2f}%").background_gradient(
                         cmap="RdYlGn", axis=None, vmin=-10, vmax=10
                     )
-                    st.dataframe(styled_monthly, use_container_width=True)
+                    st.dataframe(styled_monthly, use_container_width=True, height=400)
         else:
             st.info("Monthly returns data not available.")
 
-        # Section 4: Ranking
+        # Section 4: Current Month Details
+        st.markdown("---")
+        st.markdown("### 📅 Current Month Performance (MTD)")
+
+        # Calculate days elapsed in current month
+        today = datetime.now()
+        days_in_month = (today.replace(month=today.month % 12 + 1, day=1) - timedelta(days=1)).day if today.month < 12 else 31
+        days_elapsed = today.day
+
+        # Create MTD comparison table
+        mtd_data = []
+        for inv in all_investors:
+            is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
+            label = f"⭐ {inv.full_name}" if is_me else inv.full_name
+            mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
+            avg_daily = mtd / days_elapsed if days_elapsed > 0 else 0
+            projected = avg_daily * days_in_month
+
+            mtd_data.append({
+                "Investor": label,
+                "MTD %": mtd,
+                "Days": days_elapsed,
+                "Avg Daily %": round(avg_daily, 3),
+                "Projected Month %": round(projected, 2),
+            })
+
+        # Sort by MTD descending
+        mtd_data.sort(key=lambda x: x["MTD %"], reverse=True)
+        mtd_df = pd.DataFrame(mtd_data)
+
+        # Style the dataframe
+        def color_mtd(val):
+            if isinstance(val, (int, float)):
+                color = 'green' if val > 0 else 'red' if val < 0 else 'gray'
+                return f'color: {color}'
+            return ''
+
+        styled_mtd = mtd_df.style.applymap(
+            color_mtd, subset=["MTD %", "Avg Daily %", "Projected Month %"]
+        ).format({
+            "MTD %": "{:.2f}%",
+            "Avg Daily %": "{:.3f}%",
+            "Projected Month %": "{:.2f}%"
+        })
+        st.dataframe(styled_mtd, use_container_width=True, hide_index=True)
+
+        st.caption(f"📌 {today.strftime('%B %Y')}: Day {days_elapsed} of ~{days_in_month}")
+
+        # Section 5: Ranking
         st.markdown("---")
         st.markdown("### 🎯 Your Ranking")
 
