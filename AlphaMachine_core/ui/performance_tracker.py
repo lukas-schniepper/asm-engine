@@ -218,6 +218,7 @@ def _render_performance_tracker():
         "Allocation History",
         "Signal Analysis",
         "Scraper View",
+        "eToro Compare",
     ])
 
     # ===== Tab 1: Overview =====
@@ -273,6 +274,10 @@ def _render_performance_tracker():
     # ===== Tab 9: Scraper View =====
     with tabs[8]:
         _render_scraper_view_tab(tracker, start_date, end_date)
+
+    # ===== Tab 10: eToro Compare =====
+    with tabs[9]:
+        _render_etoro_compare_tab()
 
 
 def _render_overview_tab(
@@ -3037,6 +3042,203 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     st.warning(f"Could not load ticker data: {e}")
             else:
                 st.info("No holdings found for this portfolio.")
+
+
+def _render_etoro_compare_tab():
+    """Render the eToro Compare tab - compare portfolio against top popular investors."""
+    import pandas as pd
+
+    st.markdown("### eToro Portfolio Comparison")
+    st.markdown("Compare your eToro portfolio against top popular investors.")
+
+    # Configuration
+    MY_ETORO_USERNAME = "alphawizzard"
+
+    # Use caching to avoid excessive scraping
+    @st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
+    def fetch_etoro_data(username: str, top_count: int):
+        """Fetch eToro data with caching."""
+        from ..data_sources.etoro_scraper import get_etoro_comparison_data
+        return get_etoro_comparison_data(username, top_count)
+
+    # Controls
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        top_count = st.slider("Number of top investors to compare", 3, 10, 5)
+    with col2:
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+
+    # Fetch data
+    with st.spinner("Fetching eToro data..."):
+        try:
+            data = fetch_etoro_data(MY_ETORO_USERNAME, top_count)
+        except Exception as e:
+            st.error(f"Failed to fetch eToro data: {e}")
+            return
+
+    my_stats = data.get('my_stats')
+    top_investors = data.get('top_investors', [])
+    fetched_at = data.get('fetched_at', 'Unknown')
+
+    st.caption(f"Data fetched at: {fetched_at}")
+
+    if not my_stats:
+        st.warning(f"Could not fetch stats for {MY_ETORO_USERNAME}")
+        return
+
+    # Section 1: My Portfolio Stats
+    st.markdown("---")
+    st.markdown("### 📊 Your Portfolio")
+
+    col1, col2, col3 = st.columns([1, 3, 1])
+    with col1:
+        st.image(my_stats.avatar_url, width=60)
+    with col2:
+        st.markdown(f"**{my_stats.full_name}** (@{my_stats.username})")
+        st.markdown(f"Risk Score: **{my_stats.risk_score}/10** | Copiers: **{my_stats.copiers:,}**")
+
+    # KPIs for my portfolio
+    kpi_cols = st.columns(5)
+    with kpi_cols[0]:
+        st.metric("1Y Return", f"{my_stats.gain_1y:.1f}%")
+    with kpi_cols[1]:
+        st.metric("2Y Return", f"{my_stats.gain_2y:.1f}%")
+    with kpi_cols[2]:
+        st.metric("YTD Return", f"{my_stats.gain_ytd:.1f}%")
+    with kpi_cols[3]:
+        st.metric("Win Ratio", f"{my_stats.win_ratio:.0f}%")
+    with kpi_cols[4]:
+        st.metric("Profitable Months", f"{my_stats.profitable_months_pct:.0f}%")
+
+    # Section 2: Top Investors Comparison
+    if top_investors:
+        st.markdown("---")
+        st.markdown(f"### 🏆 Top {len(top_investors)} Popular Investors")
+
+        # Build comparison table
+        comparison_data = []
+        all_investors = [my_stats] + top_investors
+
+        for inv in all_investors:
+            is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
+            comparison_data.append({
+                "": "⭐" if is_me else "",
+                "Avatar": inv.avatar_url,
+                "Investor": f"{inv.full_name} (@{inv.username})",
+                "Risk": inv.risk_score,
+                "Copiers": inv.copiers,
+                "1Y Return": inv.gain_1y,
+                "2Y Return": inv.gain_2y,
+                "YTD": inv.gain_ytd,
+                "Win %": inv.win_ratio,
+                "Profitable Mo.": inv.profitable_months_pct,
+            })
+
+        df = pd.DataFrame(comparison_data)
+
+        # Display with avatars
+        st.markdown("#### Performance Comparison")
+
+        # Custom display with images
+        for i, row in df.iterrows():
+            is_me = row[""] == "⭐"
+            bg_color = "#e8f5e9" if is_me else "#ffffff"
+
+            cols = st.columns([0.5, 0.8, 3, 1, 1.5, 1.2, 1.2, 1.2, 1, 1.2])
+
+            with cols[0]:
+                st.write(row[""])
+            with cols[1]:
+                st.image(row["Avatar"], width=40)
+            with cols[2]:
+                if is_me:
+                    st.markdown(f"**{row['Investor']}** (You)")
+                else:
+                    st.write(row["Investor"])
+            with cols[3]:
+                st.write(f"{row['Risk']}/10")
+            with cols[4]:
+                st.write(f"{row['Copiers']:,}")
+            with cols[5]:
+                color = "green" if row["1Y Return"] > 0 else "red"
+                st.markdown(f":{color}[{row['1Y Return']:.1f}%]")
+            with cols[6]:
+                color = "green" if row["2Y Return"] > 0 else "red"
+                st.markdown(f":{color}[{row['2Y Return']:.1f}%]")
+            with cols[7]:
+                color = "green" if row["YTD"] > 0 else "red"
+                st.markdown(f":{color}[{row['YTD']:.1f}%]")
+            with cols[8]:
+                st.write(f"{row['Win %']:.0f}%")
+            with cols[9]:
+                st.write(f"{row['Profitable Mo.']:.0f}%")
+
+        # Add header row explanation
+        st.caption("Risk: 1-10 scale (lower = less risky) | Win %: Percentage of profitable weeks")
+
+        # Section 3: Monthly Returns Chart
+        st.markdown("---")
+        st.markdown("### 📈 Monthly Returns Comparison")
+
+        # Get monthly returns for all investors
+        monthly_data = {}
+        for inv in all_investors:
+            if inv.monthly_returns:
+                is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
+                label = f"{inv.username} (You)" if is_me else inv.username
+                monthly_data[label] = inv.monthly_returns
+
+        if monthly_data:
+            # Create DataFrame for monthly returns
+            monthly_df = pd.DataFrame(monthly_data)
+            monthly_df = monthly_df.sort_index()
+
+            # Limit to last 12 months
+            monthly_df = monthly_df.tail(12)
+
+            if not monthly_df.empty:
+                st.line_chart(monthly_df)
+
+                # Also show as table
+                with st.expander("View Monthly Returns Table"):
+                    styled_monthly = monthly_df.style.format("{:.2f}%").background_gradient(
+                        cmap="RdYlGn", axis=None, vmin=-10, vmax=10
+                    )
+                    st.dataframe(styled_monthly, use_container_width=True)
+        else:
+            st.info("Monthly returns data not available.")
+
+        # Section 4: Ranking
+        st.markdown("---")
+        st.markdown("### 🎯 Your Ranking")
+
+        # Calculate rankings
+        all_1y_returns = [(inv.username, inv.gain_1y) for inv in all_investors]
+        all_1y_returns.sort(key=lambda x: x[1], reverse=True)
+        my_rank_1y = next(i+1 for i, (u, _) in enumerate(all_1y_returns) if u.lower() == MY_ETORO_USERNAME.lower())
+
+        all_2y_returns = [(inv.username, inv.gain_2y) for inv in all_investors]
+        all_2y_returns.sort(key=lambda x: x[1], reverse=True)
+        my_rank_2y = next(i+1 for i, (u, _) in enumerate(all_2y_returns) if u.lower() == MY_ETORO_USERNAME.lower())
+
+        rank_cols = st.columns(2)
+        with rank_cols[0]:
+            st.metric(
+                "1Y Return Rank",
+                f"#{my_rank_1y} of {len(all_investors)}",
+                delta=f"Top {my_rank_1y}/{len(all_investors)}"
+            )
+        with rank_cols[1]:
+            st.metric(
+                "2Y Return Rank",
+                f"#{my_rank_2y} of {len(all_investors)}",
+                delta=f"Top {my_rank_2y}/{len(all_investors)}"
+            )
+
+    else:
+        st.info("Could not fetch top investors data.")
 
 
 def _render_demo_mode():
