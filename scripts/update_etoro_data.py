@@ -113,10 +113,14 @@ def scrape_monthly_returns(driver, username: str) -> dict:
         result['risk_score'] = int(risk_match.group(1))
 
     # Extract copiers count - try multiple patterns
-    # Debug: find lines containing "copier" or numbers near it
-    for line in visible_text.split('\n'):
+    # Debug: find lines containing "copier" and nearby lines
+    text_lines = visible_text.split('\n')
+    for i, line in enumerate(text_lines):
         if 'copier' in line.lower():
-            print(f"    DEBUG copiers line: '{line.strip()}'")
+            # Show line before and after
+            prev_line = text_lines[i-1].strip() if i > 0 else ""
+            next_line = text_lines[i+1].strip() if i < len(text_lines)-1 else ""
+            print(f"    DEBUG copiers: prev='{prev_line}' | curr='{line.strip()}' | next='{next_line}'")
 
     # Pattern 1: "X Copiers" or "X,XXX Copiers"
     copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
