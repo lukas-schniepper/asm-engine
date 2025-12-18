@@ -163,20 +163,36 @@ def scrape_monthly_returns(driver, username: str) -> dict:
                     last_month_idx = month_indices[start_idx + 11][0]
 
                     # Look for percentage values after the month headers
+                    # eToro often shows year totals (2025, 2024) before monthly values
+                    # We need to skip those and find exactly 12 monthly values
                     pct_values = []
                     for i in range(last_month_idx + 1, min(last_month_idx + 50, len(lines))):
                         line = lines[i]
+
+                        # Skip year labels like "2025", "2024"
+                        if line.isdigit() and len(line) == 4:
+                            continue
+
                         if pct_pattern.match(line):
                             val_str = line.replace('%', '')
                             try:
                                 pct_values.append(float(val_str))
-                                if len(pct_values) >= 12:
+                                if len(pct_values) >= 14:  # Get extra to handle year totals
                                     break
                             except ValueError:
                                 pass
                         elif line in month_to_num:
                             # Hit another month header, stop
                             break
+
+                    # Debug: print what we found
+                    print(f"    Found {len(pct_values)} percentage values: {pct_values[:14]}")
+
+                    # If we got more than 12 values, skip the extra ones at the start
+                    # (likely year totals like YTD or annual returns)
+                    while len(pct_values) > 12:
+                        print(f"    Skipping first value: {pct_values[0]} (likely year total)")
+                        pct_values = pct_values[1:]
 
                     if len(pct_values) >= 12:
                         # Map percentages to months
