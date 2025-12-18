@@ -3134,6 +3134,7 @@ def _render_etoro_compare_tab():
 
         # Apply styling to return columns
         return_cols = ['MTD %', '1Y %', '2Y %', 'YTD %']
+        numeric_cols = ['Risk', 'Copiers', 'MTD %', '1Y %', '2Y %', 'YTD %', 'Win %', 'Prof.Mo %']
         styled_df = df.style.map(
             color_returns,
             subset=return_cols
@@ -3145,7 +3146,10 @@ def _render_etoro_compare_tab():
             'Win %': '{:.0f}%',
             'Prof.Mo %': '{:.0f}%',
             'Copiers': '{:,}',
-        })
+        }).set_properties(
+            subset=numeric_cols,
+            **{'text-align': 'right'}
+        )
 
         # Display sortable dataframe
         st.dataframe(
