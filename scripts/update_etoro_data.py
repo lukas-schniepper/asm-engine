@@ -112,15 +112,7 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     if risk_match:
         result['risk_score'] = int(risk_match.group(1))
 
-    # Extract copiers count - try multiple patterns
-    # Debug: find lines containing "copier" and nearby lines
-    text_lines = visible_text.split('\n')
-    for i, line in enumerate(text_lines):
-        if 'copier' in line.lower():
-            # Show line before and after
-            prev_line = text_lines[i-1].strip() if i > 0 else ""
-            next_line = text_lines[i+1].strip() if i < len(text_lines)-1 else ""
-            print(f"    DEBUG copiers: prev='{prev_line}' | curr='{line.strip()}' | next='{next_line}'")
+    # Extract copiers count
 
     # Pattern 1: "Copiers (12M)\n{number}" - number on next line after label
     copiers_match = re.search(r'[Cc]opiers\s*\(12M\)\s*\n\s*([\d,]+)', visible_text)
@@ -135,7 +127,6 @@ def scrape_monthly_returns(driver, username: str) -> dict:
         copiers_match = re.search(r'"copiers"[:\s]*(\d+)', page_source)
     if copiers_match:
         result['copiers'] = int(copiers_match.group(1).replace(',', ''))
-        print(f"    Copiers found: {result['copiers']}")
 
     # Extract win ratio (profitable weeks)
     win_match = re.search(r'(\d+\.?\d*)%\s*Profitable', visible_text)
