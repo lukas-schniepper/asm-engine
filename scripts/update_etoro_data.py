@@ -114,9 +114,9 @@ def scrape_monthly_returns(driver, username: str) -> dict:
 
     # Extract copiers count - try multiple patterns
     # Debug: find lines containing "copier" or numbers near it
-    for line in lines:
-        if 'copier' in line.lower() or 'Copier' in line:
-            print(f"    DEBUG copiers line: '{line}'")
+    for line in visible_text.split('\n'):
+        if 'copier' in line.lower():
+            print(f"    DEBUG copiers line: '{line.strip()}'")
 
     # Pattern 1: "X Copiers" or "X,XXX Copiers"
     copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
