@@ -3120,6 +3120,7 @@ def _render_etoro_compare_tab():
 
         from datetime import datetime
         current_month_key = datetime.now().strftime('%Y-%m')
+        st.caption(f"MTD = {current_month_key} performance")
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
