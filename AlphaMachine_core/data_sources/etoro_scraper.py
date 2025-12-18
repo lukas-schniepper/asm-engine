@@ -301,7 +301,6 @@ class EToroScraper:
         Data sources (in priority order):
         1. Live data from S3 (updated daily by GitHub Actions)
         2. Selenium scraping (if available)
-        3. Demo data (hardcoded fallback)
         """
         # Try live data from S3 first
         live_stats = self._get_live_stats(username)
@@ -317,12 +316,6 @@ class EToroScraper:
                     return stats
             except Exception as e:
                 logger.warning(f"Selenium scraping failed for {username}: {e}")
-
-        # Fall back to demo data
-        demo_stats = self._get_demo_stats(username)
-        if demo_stats:
-            logger.info(f"Using demo data for {username}")
-            return demo_stats
 
         logger.warning(f"No data available for {username}")
         return None
