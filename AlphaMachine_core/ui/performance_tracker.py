@@ -3092,12 +3092,9 @@ def _render_etoro_compare_tab():
     st.markdown("---")
     st.markdown("### 📊 Your Portfolio")
 
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col1:
-        st.image(my_stats.avatar_url, width=60)
-    with col2:
-        st.markdown(f"**{my_stats.full_name}** (@{my_stats.username})")
-        st.markdown(f"Risk Score: **{my_stats.risk_score}/10** | Copiers: **{my_stats.copiers:,}**")
+    my_profile_url = f"https://www.etoro.com/people/{my_stats.username}"
+    st.markdown(f"**[{my_stats.full_name} (@{my_stats.username})]({my_profile_url})**")
+    st.markdown(f"Risk Score: **{my_stats.risk_score}/10** | Copiers: **{my_stats.copiers:,}**")
 
     # KPIs for my portfolio
     kpi_cols = st.columns(5)
@@ -3123,9 +3120,11 @@ def _render_etoro_compare_tab():
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
+            profile_url = f"https://www.etoro.com/people/{inv.username}"
             comparison_data.append({
                 "": "⭐" if is_me else "",
-                "Avatar": inv.avatar_url,
+                "Username": inv.username,
+                "ProfileURL": profile_url,
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Risk": inv.risk_score,
                 "Copiers": inv.copiers,
@@ -3138,41 +3137,38 @@ def _render_etoro_compare_tab():
 
         df = pd.DataFrame(comparison_data)
 
-        # Display with avatars
+        # Display comparison table
         st.markdown("#### Performance Comparison")
 
-        # Custom display with images
+        # Custom display with clickable profile links
         for i, row in df.iterrows():
             is_me = row[""] == "⭐"
-            bg_color = "#e8f5e9" if is_me else "#ffffff"
 
-            cols = st.columns([0.5, 0.8, 3, 1, 1.5, 1.2, 1.2, 1.2, 1, 1.2])
+            cols = st.columns([0.5, 3.5, 1, 1.5, 1.2, 1.2, 1.2, 1, 1.2])
 
             with cols[0]:
                 st.write(row[""])
             with cols[1]:
-                st.image(row["Avatar"], width=40)
-            with cols[2]:
                 if is_me:
-                    st.markdown(f"**{row['Investor']}** (You)")
+                    st.markdown(f"**[{row['Investor']}]({row['ProfileURL']})** (You)")
                 else:
-                    st.write(row["Investor"])
-            with cols[3]:
+                    st.markdown(f"[{row['Investor']}]({row['ProfileURL']})")
+            with cols[2]:
                 st.write(f"{row['Risk']}/10")
-            with cols[4]:
+            with cols[3]:
                 st.write(f"{row['Copiers']:,}")
-            with cols[5]:
+            with cols[4]:
                 color = "green" if row["1Y Return"] > 0 else "red"
                 st.markdown(f":{color}[{row['1Y Return']:.1f}%]")
-            with cols[6]:
+            with cols[5]:
                 color = "green" if row["2Y Return"] > 0 else "red"
                 st.markdown(f":{color}[{row['2Y Return']:.1f}%]")
-            with cols[7]:
+            with cols[6]:
                 color = "green" if row["YTD"] > 0 else "red"
                 st.markdown(f":{color}[{row['YTD']:.1f}%]")
-            with cols[8]:
+            with cols[7]:
                 st.write(f"{row['Win %']:.0f}%")
-            with cols[9]:
+            with cols[8]:
                 st.write(f"{row['Profitable Mo.']:.0f}%")
 
         # Add header row explanation
