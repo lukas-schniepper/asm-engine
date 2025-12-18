@@ -113,6 +113,11 @@ def scrape_monthly_returns(driver, username: str) -> dict:
         result['risk_score'] = int(risk_match.group(1))
 
     # Extract copiers count - try multiple patterns
+    # Debug: find lines containing "copier" or numbers near it
+    for line in lines:
+        if 'copier' in line.lower() or 'Copier' in line:
+            print(f"    DEBUG copiers line: '{line}'")
+
     # Pattern 1: "X Copiers" or "X,XXX Copiers"
     copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
     if not copiers_match:
@@ -121,6 +126,9 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     if not copiers_match:
         # Pattern 3: Look in page source for data attributes
         copiers_match = re.search(r'"copiers"[:\s]*(\d+)', page_source)
+    if not copiers_match:
+        # Pattern 4: "XXX\nCopiers" (number on line before "Copiers")
+        copiers_match = re.search(r'([\d,]+)\n\s*[Cc]opiers', visible_text)
     if copiers_match:
         result['copiers'] = int(copiers_match.group(1).replace(',', ''))
         print(f"    Copiers found: {result['copiers']}")
