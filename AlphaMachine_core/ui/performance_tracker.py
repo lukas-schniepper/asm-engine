@@ -3047,42 +3047,22 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 def _render_etoro_compare_tab():
     """Render the eToro Compare tab - compare portfolio against top popular investors."""
     import pandas as pd
+    from ..data_sources.etoro_scraper import get_etoro_comparison_data
 
     st.markdown("### eToro Portfolio Comparison")
-    st.markdown("Compare your eToro portfolio against top popular investors.")
 
     # Configuration
     MY_ETORO_USERNAME = "alphawizzard"
 
-    # Use caching to avoid excessive scraping
-    @st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
-    def fetch_etoro_data(username: str, top_count: int):
-        """Fetch eToro data with caching."""
-        from ..data_sources.etoro_scraper import get_etoro_comparison_data
-        return get_etoro_comparison_data(username, top_count)
-
-    # Controls
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        top_count = st.slider("Number of top investors to compare", 3, 10, 5)
-    with col2:
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
-
-    # Fetch data
-    with st.spinner("Fetching eToro data..."):
-        try:
-            data = fetch_etoro_data(MY_ETORO_USERNAME, top_count)
-        except Exception as e:
-            st.error(f"Failed to fetch eToro data: {e}")
-            return
+    # Fetch data (cached in scraper for 5 minutes)
+    try:
+        data = get_etoro_comparison_data(MY_ETORO_USERNAME, top_count=5)
+    except Exception as e:
+        st.error(f"Failed to fetch eToro data: {e}")
+        return
 
     my_stats = data.get('my_stats')
     top_investors = data.get('top_investors', [])
-    fetched_at = data.get('fetched_at', 'Unknown')
-
-    st.caption(f"Data fetched at: {fetched_at}")
 
     if not my_stats:
         st.warning(f"Could not fetch stats for {MY_ETORO_USERNAME}")
