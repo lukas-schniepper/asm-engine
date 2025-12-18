@@ -3106,7 +3106,7 @@ def _render_etoro_compare_tab():
 
         from datetime import datetime, timedelta
         current_month_key = datetime.now().strftime('%Y-%m')
-        st.caption(f"MTD = {current_month_key} performance | Click column headers to sort")
+        st.caption(f"MTD = {current_month_key} performance | Click investor name to view profile")
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
@@ -3126,29 +3126,68 @@ def _render_etoro_compare_tab():
                 "Prof.Mo %": inv.profitable_months_pct,
             })
 
-        df = pd.DataFrame(comparison_data)
-
-        # Display comparison table with sorting enabled
+        # Display comparison table with custom HTML for right-aligned headers and colored returns
         st.markdown("#### Performance Comparison")
 
-        # Display sortable dataframe
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "⭐": st.column_config.TextColumn("⭐", width="small"),
-                "Investor": st.column_config.TextColumn("Investor", width="medium"),
-                "Profile": st.column_config.LinkColumn("Profile", display_text="Open"),
-                "Copiers": st.column_config.NumberColumn("Copiers", format="%d"),
-                "MTD %": st.column_config.NumberColumn("MTD %", format="%.1f%%"),
-                "1Y %": st.column_config.NumberColumn("1Y %", format="%.1f%%"),
-                "2Y %": st.column_config.NumberColumn("2Y %", format="%.1f%%"),
-                "YTD %": st.column_config.NumberColumn("YTD %", format="%.1f%%"),
-                "Win %": st.column_config.NumberColumn("Win %", format="%.0f%%"),
-                "Prof.Mo %": st.column_config.NumberColumn("Prof.Mo %", format="%.0f%%"),
-            }
-        )
+        def color_value(val: float, suffix: str = "%") -> str:
+            """Return HTML span with green/red color based on value."""
+            if val > 0:
+                return f'<span style="color: #28a745;">{val:.1f}{suffix}</span>'
+            elif val < 0:
+                return f'<span style="color: #dc3545;">{val:.1f}{suffix}</span>'
+            else:
+                return f'{val:.1f}{suffix}'
+
+        # Build HTML table
+        html_rows = []
+        for row in comparison_data:
+            profile_url = row["Profile"]
+            investor_name = row["Investor"]
+            html_rows.append(f'''
+            <tr>
+                <td style="text-align: center;">{row["⭐"]}</td>
+                <td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none;">{investor_name}</a></td>
+                <td style="text-align: right;">{row["Copiers"]:,}</td>
+                <td style="text-align: right;">{color_value(row["MTD %"])}</td>
+                <td style="text-align: right;">{color_value(row["1Y %"])}</td>
+                <td style="text-align: right;">{color_value(row["2Y %"])}</td>
+                <td style="text-align: right;">{color_value(row["YTD %"])}</td>
+                <td style="text-align: right;">{row["Win %"]:.0f}%</td>
+                <td style="text-align: right;">{row["Prof.Mo %"]:.0f}%</td>
+            </tr>
+            ''')
+
+        html_table = f'''
+        <style>
+            .etoro-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+            .etoro-table th {{ text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; }}
+            .etoro-table th:first-child {{ text-align: center; }}
+            .etoro-table th:nth-child(2) {{ text-align: left; }}
+            .etoro-table td {{ padding: 8px 12px; border-bottom: 1px solid #eee; }}
+            .etoro-table tr:hover {{ background-color: #f5f5f5; }}
+            .etoro-table a:hover {{ text-decoration: underline; }}
+        </style>
+        <table class="etoro-table">
+            <thead>
+                <tr>
+                    <th style="text-align: center;">⭐</th>
+                    <th style="text-align: left;">Investor</th>
+                    <th style="text-align: right;">Copiers</th>
+                    <th style="text-align: right;">MTD %</th>
+                    <th style="text-align: right;">1Y %</th>
+                    <th style="text-align: right;">2Y %</th>
+                    <th style="text-align: right;">YTD %</th>
+                    <th style="text-align: right;">Win %</th>
+                    <th style="text-align: right;">Prof.Mo %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {"".join(html_rows)}
+            </tbody>
+        </table>
+        '''
+
+        st.markdown(html_table, unsafe_allow_html=True)
 
         # Add explanation
         st.caption("Win %: Percentage of profitable weeks | Prof.Mo %: Percentage of profitable months")
