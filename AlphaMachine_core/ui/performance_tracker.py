@@ -3112,9 +3112,11 @@ def _render_etoro_compare_tab():
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
             # Get MTD from current month's return in monthly_returns
             mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
+            profile_url = f"https://www.etoro.com/people/{inv.username}"
             comparison_data.append({
                 "⭐": "⭐" if is_me else "",
                 "Investor": f"{inv.full_name} (@{inv.username})",
+                "Profile": profile_url,
                 "Risk": inv.risk_score,
                 "Copiers": inv.copiers,
                 "MTD %": mtd,
@@ -3130,14 +3132,15 @@ def _render_etoro_compare_tab():
         # Display comparison table with sorting enabled
         st.markdown("#### Performance Comparison")
 
-        # Display sortable dataframe (NumberColumn auto right-aligns)
+        # Display sortable dataframe
         st.dataframe(
             df,
             use_container_width=True,
             hide_index=True,
             column_config={
                 "⭐": st.column_config.TextColumn("⭐", width="small"),
-                "Investor": st.column_config.TextColumn("Investor", width="large"),
+                "Investor": st.column_config.TextColumn("Investor", width="medium"),
+                "Profile": st.column_config.LinkColumn("Profile", display_text="Open"),
                 "Risk": st.column_config.NumberColumn("Risk", format="%d/10"),
                 "Copiers": st.column_config.NumberColumn("Copiers", format="%d"),
                 "MTD %": st.column_config.NumberColumn("MTD %", format="%.1f%%"),
