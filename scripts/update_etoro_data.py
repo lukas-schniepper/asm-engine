@@ -122,17 +122,17 @@ def scrape_monthly_returns(driver, username: str) -> dict:
             next_line = text_lines[i+1].strip() if i < len(text_lines)-1 else ""
             print(f"    DEBUG copiers: prev='{prev_line}' | curr='{line.strip()}' | next='{next_line}'")
 
-    # Pattern 1: "X Copiers" or "X,XXX Copiers"
-    copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
+    # Pattern 1: "Copiers (12M)\n{number}" - number on next line after label
+    copiers_match = re.search(r'[Cc]opiers\s*\(12M\)\s*\n\s*([\d,]+)', visible_text)
     if not copiers_match:
-        # Pattern 2: "Copiers X" or "Copiers: X"
+        # Pattern 2: "X Copiers" or "X,XXX Copiers"
+        copiers_match = re.search(r'([\d,]+)\s*[Cc]opiers', visible_text)
+    if not copiers_match:
+        # Pattern 3: "Copiers X" or "Copiers: X"
         copiers_match = re.search(r'[Cc]opiers[:\s]*([\d,]+)', visible_text)
     if not copiers_match:
-        # Pattern 3: Look in page source for data attributes
+        # Pattern 4: Look in page source for data attributes
         copiers_match = re.search(r'"copiers"[:\s]*(\d+)', page_source)
-    if not copiers_match:
-        # Pattern 4: "XXX\nCopiers" (number on line before "Copiers")
-        copiers_match = re.search(r'([\d,]+)\n\s*[Cc]opiers', visible_text)
     if copiers_match:
         result['copiers'] = int(copiers_match.group(1).replace(',', ''))
         print(f"    Copiers found: {result['copiers']}")
