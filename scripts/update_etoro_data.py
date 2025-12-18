@@ -261,7 +261,7 @@ def scrape_monthly_returns(driver, username: str) -> dict:
 
 
 def update_demo_data_file(scraped_data: list):
-    """Update the DEMO_DATA in etoro_scraper.py with scraped data."""
+    """Update the DEMO_DATA in etoro_scraper.py with ALL scraped data."""
     scraper_path = project_root / 'AlphaMachine_core' / 'data_sources' / 'etoro_scraper.py'
 
     print(f"\nUpdating {scraper_path}...")
@@ -269,7 +269,7 @@ def update_demo_data_file(scraped_data: list):
     # Read current file
     content = scraper_path.read_text(encoding='utf-8')
 
-    # For each scraped user, update their monthly_returns in the file
+    # For each scraped user, update ALL their data in the file
     for data in scraped_data:
         username = data['username'].lower()
         monthly_returns = data['monthly_returns']
@@ -277,6 +277,26 @@ def update_demo_data_file(scraped_data: list):
         if not monthly_returns:
             print(f"  Skipping {username} - no monthly returns scraped")
             continue
+
+        # Update numeric fields (risk_score, copiers, gain_1y, etc.)
+        numeric_fields = [
+            ('risk_score', data.get('risk_score', 5)),
+            ('copiers', data.get('copiers', 0)),
+            ('gain_1y', data.get('gain_1y', 0.0)),
+            ('gain_2y', data.get('gain_2y', 0.0)),
+            ('gain_ytd', data.get('gain_ytd', 0.0)),
+            ('win_ratio', data.get('win_ratio', 50.0)),
+            ('profitable_months_pct', data.get('profitable_months_pct', 50.0)),
+        ]
+
+        for field_name, field_value in numeric_fields:
+            # Pattern: 'field_name': old_value,  (within this user's block)
+            # We need to find the user block first, then update the field
+            pattern = rf"('{username}':\s*\{{[^}}]*'{field_name}':\s*)[\d.]+([,\s])"
+            replacement = rf"\g<1>{field_value}\2"
+            new_content = re.sub(pattern, replacement, content, flags=re.IGNORECASE | re.DOTALL)
+            if new_content != content:
+                content = new_content
 
         # Sort monthly returns by date
         sorted_months = sorted(monthly_returns.items())
@@ -304,7 +324,7 @@ def update_demo_data_file(scraped_data: list):
 
         if new_content != content:
             content = new_content
-            print(f"  Updated monthly_returns for {username}")
+            print(f"  Updated ALL data for {username}")
         else:
             print(f"  Could not find pattern for {username}")
 
