@@ -3105,13 +3105,25 @@ def _render_etoro_compare_tab():
         all_investors = [my_stats] + top_investors
 
         from datetime import datetime, timedelta
-        current_month_key = datetime.now().strftime('%Y-%m')
-        st.caption(f"MTD = {current_month_key} performance | Click investor name to view profile")
+        today = datetime.now()
+        current_month_key = today.strftime('%Y-%m')
+
+        # Calculate last completed month
+        if today.month == 1:
+            last_month_key = f"{today.year - 1}-12"
+            last_month_name = "Dec"
+        else:
+            last_month_key = f"{today.year}-{today.month - 1:02d}"
+            last_month_name = datetime(today.year, today.month - 1, 1).strftime("%b")
+
+        st.caption(f"MTD = {current_month_key} | {last_month_name} = last completed month | Click investor name to view profile")
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
             # Get MTD from current month's return in monthly_returns
             mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
+            # Get last completed month's return
+            last_month_return = inv.monthly_returns.get(last_month_key, 0.0) if inv.monthly_returns else 0.0
             profile_url = f"https://www.etoro.com/people/{inv.username}"
             comparison_data.append({
                 "⭐": "⭐" if is_me else "",
@@ -3119,9 +3131,10 @@ def _render_etoro_compare_tab():
                 "Profile": profile_url,
                 "Copiers": inv.copiers,
                 "MTD %": mtd,
+                "Last Month %": last_month_return,
+                "YTD %": inv.gain_ytd,
                 "1Y %": inv.gain_1y,
                 "2Y %": inv.gain_2y,
-                "YTD %": inv.gain_ytd,
                 "Win %": inv.win_ratio,
                 "Prof.Mo %": inv.profitable_months_pct,
             })
@@ -3149,9 +3162,10 @@ def _render_etoro_compare_tab():
                 f'<td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none;">{investor_name}</a></td>'
                 f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
                 f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
+                f'<td style="text-align: right;">{color_value(row["Last Month %"])}</td>'
+                f'<td style="text-align: right;">{color_value(row["YTD %"])}</td>'
                 f'<td style="text-align: right;">{color_value(row["1Y %"])}</td>'
                 f'<td style="text-align: right;">{color_value(row["2Y %"])}</td>'
-                f'<td style="text-align: right;">{color_value(row["YTD %"])}</td>'
                 f'<td style="text-align: right;">{row["Win %"]:.0f}%</td>'
                 f'<td style="text-align: right;">{row["Prof.Mo %"]:.0f}%</td>'
                 f'</tr>'
@@ -3173,9 +3187,10 @@ def _render_etoro_compare_tab():
             '<th style="text-align: left;">Investor</th>'
             '<th style="text-align: right;">Copiers</th>'
             '<th style="text-align: right;">MTD %</th>'
+            f'<th style="text-align: right;">{last_month_name} %</th>'
+            '<th style="text-align: right;">YTD %</th>'
             '<th style="text-align: right;">1Y %</th>'
             '<th style="text-align: right;">2Y %</th>'
-            '<th style="text-align: right;">YTD %</th>'
             '<th style="text-align: right;">Win %</th>'
             '<th style="text-align: right;">Prof.Mo %</th>'
             '</tr></thead>'
