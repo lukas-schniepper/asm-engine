@@ -3269,6 +3269,119 @@ def _render_etoro_compare_tab():
 
         st.caption(f"📌 {today.strftime('%B %Y')}: Day {days_elapsed} of ~{days_in_month}")
 
+        # Section 5: Daily Returns (reconstructed from daily MTD scrapes)
+        st.markdown("---")
+        st.markdown("### 📊 Daily Returns This Month")
+        st.caption("Calculated from daily MTD changes: Day N return = MTD(Day N) - MTD(Day N-1)")
+
+        # Fetch historical data for current month from Supabase
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _fetch_daily_mtd_history():
+            """Fetch all MTD values for current month from Supabase."""
+            try:
+                from AlphaMachine_core.db import get_session
+                from AlphaMachine_core.models import EToroStats
+                from sqlmodel import select
+                from datetime import date
+
+                today = date.today()
+                month_start = today.replace(day=1)
+
+                with get_session() as session:
+                    # Get all records for current month
+                    query = select(EToroStats).where(
+                        EToroStats.scraped_date >= month_start
+                    ).order_by(EToroStats.scraped_date)
+                    results = session.exec(query).all()
+
+                    # Organize by username -> date -> MTD
+                    history = {}
+                    for stat in results:
+                        if stat.username not in history:
+                            history[stat.username] = {}
+                        # Get current month's MTD from monthly_returns
+                        month_key = today.strftime('%Y-%m')
+                        mtd = stat.monthly_returns.get(month_key, 0.0) if stat.monthly_returns else 0.0
+                        history[stat.username][stat.scraped_date] = mtd
+
+                    return history
+            except Exception as e:
+                st.warning(f"Could not fetch daily history: {e}")
+                return {}
+
+        daily_history = _fetch_daily_mtd_history()
+
+        if daily_history:
+            # Get all dates and sort them
+            all_dates = set()
+            for username_data in daily_history.values():
+                all_dates.update(username_data.keys())
+            sorted_dates = sorted(all_dates)
+
+            if len(sorted_dates) >= 2:
+                # Calculate daily returns for each investor
+                daily_returns_data = {}
+                for inv in all_investors:
+                    username = inv.username.lower()
+                    if username in daily_history:
+                        user_history = daily_history[username]
+                        daily_returns_data[inv.username] = {}
+
+                        prev_mtd = None
+                        for d in sorted_dates:
+                            if d in user_history:
+                                current_mtd = user_history[d]
+                                if prev_mtd is not None:
+                                    # Daily return = today's MTD - yesterday's MTD
+                                    daily_return = current_mtd - prev_mtd
+                                    daily_returns_data[inv.username][d] = round(daily_return, 2)
+                                else:
+                                    # First day of data - use MTD as the return
+                                    daily_returns_data[inv.username][d] = round(current_mtd, 2)
+                                prev_mtd = current_mtd
+
+                # Build DataFrame with dates as rows, investors as columns
+                if daily_returns_data:
+                    # Get dates that have data
+                    data_dates = set()
+                    for inv_data in daily_returns_data.values():
+                        data_dates.update(inv_data.keys())
+                    data_dates = sorted(data_dates, reverse=True)  # Newest first
+
+                    rows = []
+                    for d in data_dates:
+                        row = {"Date": d.strftime("%a %d")}  # e.g., "Mon 16"
+                        for inv in all_investors:
+                            is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
+                            col_name = f"⭐ {inv.username}" if is_me else inv.username
+                            row[col_name] = daily_returns_data.get(inv.username, {}).get(d, None)
+                        rows.append(row)
+
+                    daily_df = pd.DataFrame(rows)
+
+                    # Style with colors
+                    def color_daily(val):
+                        if val is None or pd.isna(val):
+                            return ''
+                        color = '#28a745' if val > 0 else '#dc3545' if val < 0 else 'gray'
+                        return f'color: {color}'
+
+                    numeric_cols = [c for c in daily_df.columns if c != "Date"]
+                    styled_daily = daily_df.style.map(
+                        color_daily, subset=numeric_cols
+                    ).format(
+                        {col: "{:.2f}%" for col in numeric_cols},
+                        na_rep="-"
+                    ).set_properties(subset=numeric_cols, **{'text-align': 'right'})
+
+                    st.dataframe(styled_daily, use_container_width=True, hide_index=True, height=300)
+                else:
+                    st.info("No daily data available yet.")
+            else:
+                st.info("Need at least 2 days of data to calculate daily returns. Check back tomorrow!")
+        else:
+            st.info("No historical data available for this month.")
+
     else:
         st.info("Could not fetch top investors data.")
 
