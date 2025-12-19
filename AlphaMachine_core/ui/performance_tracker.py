@@ -3127,7 +3127,6 @@ def _render_etoro_compare_tab():
             profile_url = f"https://www.etoro.com/people/{inv.username}"
             comparison_data.append({
                 "⭐": "⭐" if is_me else "",
-                "Avatar": inv.avatar_url,
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Profile": profile_url,
                 "Copiers": inv.copiers,
@@ -3152,17 +3151,22 @@ def _render_etoro_compare_tab():
             else:
                 return f'{val:.1f}{suffix}'
 
+        # Color palette for initials avatars
+        avatar_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8']
+
         # Build HTML table rows
         html_rows = []
-        for row in comparison_data:
+        for idx, row in enumerate(comparison_data):
             profile_url = row["Profile"]
             investor_name = row["Investor"]
-            avatar_url = row["Avatar"]
+            # Get initials (first letter of first name)
+            initials = investor_name[0].upper() if investor_name else "?"
+            bg_color = avatar_colors[idx % len(avatar_colors)]
             html_rows.append(
                 f'<tr>'
                 f'<td style="text-align: center;">{row["⭐"]}</td>'
                 f'<td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none; display: flex; align-items: center; gap: 8px;">'
-                f'<img src="{avatar_url}" width="24" height="24" style="border-radius: 50%;" onerror="this.style.display=\'none\'">'
+                f'<span style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background-color: {bg_color}; color: white; font-size: 12px; font-weight: bold;">{initials}</span>'
                 f'{investor_name}</a></td>'
                 f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
                 f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
