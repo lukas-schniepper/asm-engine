@@ -3127,6 +3127,7 @@ def _render_etoro_compare_tab():
             profile_url = f"https://www.etoro.com/people/{inv.username}"
             comparison_data.append({
                 "⭐": "⭐" if is_me else "",
+                "Avatar": inv.avatar_url,
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Profile": profile_url,
                 "Copiers": inv.copiers,
@@ -3156,10 +3157,13 @@ def _render_etoro_compare_tab():
         for row in comparison_data:
             profile_url = row["Profile"]
             investor_name = row["Investor"]
+            avatar_url = row["Avatar"]
             html_rows.append(
                 f'<tr>'
                 f'<td style="text-align: center;">{row["⭐"]}</td>'
-                f'<td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none;">{investor_name}</a></td>'
+                f'<td style="text-align: left;"><a href="{profile_url}" target="_blank" style="color: #1f77b4; text-decoration: none; display: flex; align-items: center; gap: 8px;">'
+                f'<img src="{avatar_url}" width="24" height="24" style="border-radius: 50%;" onerror="this.style.display=\'none\'">'
+                f'{investor_name}</a></td>'
                 f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
                 f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
                 f'<td style="text-align: right;">{color_value(row["Last Month %"])}</td>'
