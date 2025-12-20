@@ -102,10 +102,23 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     if name_match:
         result['full_name'] = name_match.group(1).strip()
 
-    # Extract user ID from avatar URL
-    user_id_match = re.search(r'avatars/\d+X\d+/(\d+)/', page_source)
-    if user_id_match:
-        result['user_id'] = int(user_id_match.group(1))
+    # Extract user ID from avatar URL - try multiple patterns
+    user_id_patterns = [
+        r'avatars/\d+X\d+/(\d+)/',           # avatars/50X50/12345678/
+        r'avatars/\d+x\d+/(\d+)/',           # avatars/50x50/12345678/ (lowercase)
+        r'/avatars/[^/]+/(\d{5,})/',         # /avatars/*/12345678/
+        r'"cid":(\d{5,})',                   # "cid":12345678 (customer ID in JSON)
+        r'"userId":(\d{5,})',                # "userId":12345678
+        r'user[_-]?id["\s:=]+(\d{5,})',      # user_id: 12345678
+    ]
+    for pattern in user_id_patterns:
+        user_id_match = re.search(pattern, page_source, re.IGNORECASE)
+        if user_id_match:
+            result['user_id'] = int(user_id_match.group(1))
+            print(f"    Found user_id: {result['user_id']} (pattern: {pattern})")
+            break
+    else:
+        print(f"    WARNING: Could not extract user_id from page")
 
     # Extract risk score
     risk_match = re.search(r'Risk Score[^\d]*(\d+)', visible_text, re.IGNORECASE)

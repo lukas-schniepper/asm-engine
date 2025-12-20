@@ -119,8 +119,15 @@ class EToroScraper:
         return []
 
     def _get_avatar_url(self, user_id: int, size: int = 50) -> str:
-        """Get avatar URL for user"""
-        return f"{self.AVATAR_CDN}/{user_id}/{size}x{size}.jpg"
+        """Get avatar URL for user via image proxy (bypasses CORS).
+
+        eToro CDN format: avatars/{SIZE}X{SIZE}/{user_id}/3.jpg
+        We use images.weserv.nl as proxy to bypass CDN restrictions.
+        """
+        if not user_id or user_id == 0:
+            return ""
+        # Use weserv.nl image proxy - pass URL without https://
+        return f"https://images.weserv.nl/?url=etoro-cdn.etorostatic.com/avatars/{size}X{size}/{user_id}/3.jpg&w={size}&h={size}&fit=cover&default=1"
 
     def _get_live_stats(self, username: str) -> Optional[InvestorStats]:
         """Get stats from Supabase data."""
