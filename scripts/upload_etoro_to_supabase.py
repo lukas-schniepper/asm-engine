@@ -34,7 +34,6 @@ def get_last_trading_day(reference_date: date = None) -> date:
     Get the most recent trading day on or before the reference date.
 
     If reference_date is a weekend, returns the previous Friday.
-    This ensures eToro data scraped on Saturday is labeled with Friday's date.
     """
     if reference_date is None:
         reference_date = date.today()
@@ -49,6 +48,21 @@ def get_last_trading_day(reference_date: date = None) -> date:
 
     # Fallback - shouldn't happen
     return reference_date
+
+
+def get_previous_trading_day() -> date:
+    """
+    Get the most recent COMPLETED trading day.
+
+    The scraper runs at 07:00 UTC, before US market open (14:30 UTC).
+    So eToro shows the previous trading day's final data:
+    - Friday 07:00 UTC → Thursday's close
+    - Saturday 07:00 UTC → Friday's close
+    - Monday 07:00 UTC → Friday's close (weekend)
+    - Tuesday 07:00 UTC → Monday's close
+    """
+    yesterday = date.today() - timedelta(days=1)
+    return get_last_trading_day(yesterday)
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -83,10 +97,10 @@ def upload_to_supabase():
     from AlphaMachine_core.models import EToroStats
     from sqlmodel import select
 
-    # Use last trading day to avoid weekend date shifts
-    # (Saturday scrape should be labeled as Friday's data)
-    today = get_last_trading_day()
-    print(f"  Using trading date: {today} ({today.strftime('%A')})")
+    # Use the previous completed trading day
+    # (Scraper runs at 07:00 UTC, before market open, so shows yesterday's close)
+    trading_date = get_previous_trading_day()
+    print(f"  Using trading date: {trading_date} ({trading_date.strftime('%A')})")
     investors = data.get('investors', [])
 
     if not investors:
@@ -101,11 +115,11 @@ def upload_to_supabase():
 
             print(f"\nProcessing {username}...")
 
-            # Check if record already exists for today
+            # Check if record already exists for this trading date
             existing = session.exec(
                 select(EToroStats).where(
                     EToroStats.username == username,
-                    EToroStats.scraped_date == today
+                    EToroStats.scraped_date == trading_date
                 )
             ).first()
 
@@ -126,7 +140,7 @@ def upload_to_supabase():
             else:
                 # Create new record
                 stats = EToroStats(
-                    scraped_date=today,
+                    scraped_date=trading_date,
                     username=username,
                     full_name=inv.get('full_name', username),
                     user_id=inv.get('user_id'),
@@ -143,7 +157,7 @@ def upload_to_supabase():
                 print(f"  Created new record for {username}")
 
     print("\n" + "=" * 60)
-    print(f"Upload complete! Saved {len(investors)} investors for {today}")
+    print(f"Upload complete! Saved {len(investors)} investors for {trading_date}")
     print("=" * 60)
 
     return True
