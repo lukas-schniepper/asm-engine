@@ -3,7 +3,7 @@
 Upload eToro scraped data to Supabase
 
 Saves each investor's stats to the etoro_stats table with:
-- scraped_date: Today's date (one record per investor per day)
+- scraped_date: Last trading day (not the scrape date, to avoid weekend shifts)
 - All stats including monthly_returns as JSON
 
 This allows:
@@ -13,8 +13,42 @@ This allows:
 """
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
+
+
+def is_trading_day(check_date: date) -> bool:
+    """
+    Check if a given date is a US stock market trading day.
+
+    Returns False for weekends (Saturday, Sunday).
+    Note: Does not check for US market holidays.
+    """
+    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+        return False
+    return True
+
+
+def get_last_trading_day(reference_date: date = None) -> date:
+    """
+    Get the most recent trading day on or before the reference date.
+
+    If reference_date is a weekend, returns the previous Friday.
+    This ensures eToro data scraped on Saturday is labeled with Friday's date.
+    """
+    if reference_date is None:
+        reference_date = date.today()
+
+    check_date = reference_date
+    max_lookback = 10  # Don't look back more than 10 days
+
+    for _ in range(max_lookback):
+        if is_trading_day(check_date):
+            return check_date
+        check_date -= timedelta(days=1)
+
+    # Fallback - shouldn't happen
+    return reference_date
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -49,7 +83,10 @@ def upload_to_supabase():
     from AlphaMachine_core.models import EToroStats
     from sqlmodel import select
 
-    today = date.today()
+    # Use last trading day to avoid weekend date shifts
+    # (Saturday scrape should be labeled as Friday's data)
+    today = get_last_trading_day()
+    print(f"  Using trading date: {today} ({today.strftime('%A')})")
     investors = data.get('investors', [])
 
     if not investors:
