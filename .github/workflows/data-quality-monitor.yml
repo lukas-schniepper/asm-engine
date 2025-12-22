@@ -2,9 +2,9 @@ name: Data Quality Monitor
 
 on:
   schedule:
-    # Run daily at 4 AM Swiss time (3 AM UTC in winter, 2 AM UTC in summer)
-    # Using 3 AM UTC = 4 AM CET (winter) / 5 AM CEST (summer)
-    - cron: '0 3 * * *'
+    # Run Mon-Fri only at 4 AM Swiss time (3 AM UTC in winter, 2 AM UTC in summer)
+    # Skip weekends - no market data on Sat/Sun
+    - cron: '0 3 * * 1-5'
 
   # Allow manual trigger
   workflow_dispatch:

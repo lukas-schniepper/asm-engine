@@ -143,11 +143,14 @@ def check_nav_anomalies(
     - NAV near 100 (potential reset)
     - Missing data points
     - Stale data (same NAV for multiple days)
+
+    Note: Uses last trading day as reference to avoid false positives on weekends.
     """
     from AlphaMachine_core.tracking import Variants
 
     issues = []
-    end_date = date.today()
+    # Use last trading day to avoid false positives on weekends/holidays
+    end_date = get_last_trading_day()
     start_date = end_date - timedelta(days=days_back)
 
     for portfolio in portfolios:
@@ -232,11 +235,14 @@ def check_cross_portfolio_consistency(
     Detects:
     - Portfolios with very different returns on same day
     - Missing updates for some portfolios
+
+    Note: Uses last trading day as reference to avoid false positives on weekends.
     """
     from AlphaMachine_core.tracking import Variants
 
     issues = []
-    yesterday = date.today() - timedelta(days=1)
+    # Use last trading day instead of yesterday to handle weekends
+    yesterday = get_last_trading_day()
 
     # Collect yesterday's returns
     returns = {}
@@ -314,6 +320,8 @@ def reconcile_mtd_from_prices(
     - NAV calculation bugs
     - Price data issues
     - Holdings weight mismatches
+
+    Note: Uses last trading day as reference to avoid false positives on weekends.
     """
     import numpy as np
     import pandas as pd
@@ -321,7 +329,8 @@ def reconcile_mtd_from_prices(
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    today = date.today()
+    # Use last trading day to handle weekends/holidays
+    today = get_last_trading_day()
 
     # Get first day of current month
     mtd_start = today.replace(day=1)
@@ -495,6 +504,8 @@ def check_methodology_divergence(
 
     Returns:
         List of issues found
+
+    Note: Uses last trading day as reference to avoid false positives on weekends.
     """
     import pandas as pd
     from decimal import Decimal
@@ -502,7 +513,8 @@ def check_methodology_divergence(
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    today = date.today()
+    # Use last trading day to handle weekends/holidays
+    today = get_last_trading_day()
     start_date = today - timedelta(days=days_back)
 
     # Collect all tickers
@@ -657,6 +669,8 @@ def check_nav_baseline_accuracy(
 
     Returns:
         List of issues found
+
+    Note: Uses last trading day as reference to avoid false positives on weekends.
     """
     from decimal import Decimal
     from sqlmodel import Session, select
@@ -665,7 +679,8 @@ def check_nav_baseline_accuracy(
     from AlphaMachine_core.tracking.models import PortfolioDailyNAV, Variants
 
     issues = []
-    today = date.today()
+    # Use last trading day to handle weekends/holidays
+    today = get_last_trading_day()
 
     for portfolio in portfolios:
         try:
