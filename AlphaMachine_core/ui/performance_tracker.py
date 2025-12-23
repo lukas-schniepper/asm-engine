@@ -1666,6 +1666,10 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         st.session_state[session_key] = default_selection if default_selection else portfolios_with_data[:3]
     # Filter out any portfolios that no longer have data
     st.session_state[session_key] = [p for p in st.session_state[session_key] if p in portfolios_with_data]
+    # Add any new portfolios that have data but aren't in selection yet
+    for p in portfolios_with_data:
+        if p not in st.session_state[session_key]:
+            st.session_state[session_key].append(p)
     if not st.session_state[session_key]:
         st.session_state[session_key] = default_selection if default_selection else portfolios_with_data[:3]
 
@@ -2392,6 +2396,10 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         st.session_state[session_key] = default_selected
     # Filter out any portfolios that no longer have data
     st.session_state[session_key] = [p for p in st.session_state[session_key] if p in portfolios_with_data]
+    # Add any new portfolios that have data but aren't in selection yet
+    for p in portfolios_with_data:
+        if p not in st.session_state[session_key]:
+            st.session_state[session_key].append(p)
     if not st.session_state[session_key]:
         st.session_state[session_key] = default_selected if default_selected else portfolios_with_data[:3]
 
