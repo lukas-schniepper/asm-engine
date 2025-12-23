@@ -2345,6 +2345,9 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
             st.dataframe(pd.DataFrame(missing_data), use_container_width=True, hide_index=True)
             st.caption("To fix: Add sector data to the TickerInfo table for these tickers.")
 
+    # Add spacing at the bottom to prevent overlap with Streamlit UI elements
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+
 
 def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     """Render the Scraper View tab - pivot table of daily returns across all portfolios."""
