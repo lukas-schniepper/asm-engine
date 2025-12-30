@@ -3604,7 +3604,7 @@ def _render_etoro_compare_tab():
                     f'color: white; font-size: 12px; font-weight: bold;">{initials}</span>'
                 )
 
-                # For alphawizzard: add TWO rows - one since Nov 1, one all-time
+                # For alphawizzard: add TWO rows - one since Nov 1, one all-time (if different)
                 if is_me:
                     # Row 1: Since Nov 1, 2025 (official tracking start)
                     filtered_history = [h for h in user_history if h['date'] >= alphawizzard_start]
@@ -3613,8 +3613,8 @@ def _render_etoro_compare_tab():
                     if daily_returns and len(daily_returns) >= 5:
                         metrics = _calculate_metrics(daily_returns)
                         if metrics:
-                            # Label as "Since Nov 1, 2025" for clarity
-                            period_str = f"Since Nov 1, 2025 ({end_date.strftime('%b %d')})"
+                            # Just show dates: Nov 1, 2025 - end date
+                            period_str = f"Nov 1, 2025 - {end_date.strftime('%b %d, %Y')}"
                             metrics_rows.append({
                                 'star': '⭐',
                                 'avatar_html': avatar_html,
@@ -3625,13 +3625,14 @@ def _render_etoro_compare_tab():
                                 'metrics': metrics,
                             })
 
-                    # Row 2: All-time (from earliest data) - always show
+                    # Row 2: All-time - only show if we have data from before Nov 1
                     daily_returns_all, start_date_all, end_date_all = _calculate_daily_returns_series(user_history)
 
                     if daily_returns_all and len(daily_returns_all) >= 5:
                         metrics_all = _calculate_metrics(daily_returns_all)
-                        if metrics_all:
-                            period_str_all = f"All-time ({start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d')})"
+                        if metrics_all and start_date_all < alphawizzard_start:
+                            # Just show dates
+                            period_str_all = f"{start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d, %Y')}"
                             metrics_rows.append({
                                 'star': '⭐',
                                 'avatar_html': avatar_html,
