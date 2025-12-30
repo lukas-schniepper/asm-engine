@@ -3519,11 +3519,17 @@ def _render_etoro_compare_tab():
             sharpe = (mean_daily / std_daily * np.sqrt(252)) if std_daily > 0 else 0
 
             # Sortino Ratio (downside deviation)
+            # Use returns below 0 (target = 0) for downside deviation
             downside_returns = returns[returns < 0]
-            if len(downside_returns) > 0:
+            if len(downside_returns) >= 2:
                 downside_std = np.std(downside_returns, ddof=1)
                 sortino = (mean_daily / downside_std * np.sqrt(252)) if downside_std > 0 else 0
+            elif len(downside_returns) == 1:
+                # Only 1 negative day - use its absolute value as downside deviation
+                downside_std = abs(downside_returns[0])
+                sortino = (mean_daily / downside_std * np.sqrt(252)) if downside_std > 0 else 0
             else:
+                # No negative days - very high Sortino (capped at 99.9)
                 sortino = float('inf') if mean_daily > 0 else 0
 
             # Win Rate
@@ -3545,87 +3551,174 @@ def _render_etoro_compare_tab():
         if all_history:
             from datetime import date as date_type
 
-            # Define start date for alphawizzard (Nov 1, 2025)
+            # Define start date for alphawizzard metrics (Nov 1, 2025)
             alphawizzard_start = date_type(2025, 11, 1)
 
-            metrics_data = []
+            # Color helpers for HTML
+            def color_value(val: float, suffix: str = "%") -> str:
+                if val > 0:
+                    return f'<span style="color: #28a745;">{val:+.2f}{suffix}</span>'
+                elif val < 0:
+                    return f'<span style="color: #dc3545;">{val:.2f}{suffix}</span>'
+                else:
+                    return f'{val:.2f}{suffix}'
+
+            def color_ratio_html(val: float) -> str:
+                if val > 1:
+                    return f'<span style="color: #28a745;">{val:.2f}</span>'
+                elif val > 0:
+                    return f'<span style="color: #fd7e14;">{val:.2f}</span>'
+                else:
+                    return f'<span style="color: #dc3545;">{val:.2f}</span>'
+
+            def color_maxdd_html(val: float) -> str:
+                if val < -5:
+                    return f'<span style="color: #dc3545;">{val:.2f}%</span>'
+                elif val < -2:
+                    return f'<span style="color: #fd7e14;">{val:.2f}%</span>'
+                else:
+                    return f'<span style="color: #28a745;">{val:.2f}%</span>'
+
+            # Avatar colors
+            avatar_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8']
+
+            metrics_rows = []
+            row_idx = 0
+
             for inv in all_investors:
                 username = inv.username.lower()
                 if username not in all_history:
                     continue
 
                 user_history = all_history[username]
-
-                # For alphawizzard, filter to start from Nov 1, 2025
-                if username == MY_ETORO_USERNAME.lower():
-                    user_history = [h for h in user_history if h['date'] >= alphawizzard_start]
-
-                daily_returns, start_date, end_date = _calculate_daily_returns_series(user_history)
-
-                if not daily_returns or len(daily_returns) < 5:
-                    continue
-
-                metrics = _calculate_metrics(daily_returns)
-                if metrics is None:
-                    continue
-
                 is_me = username == MY_ETORO_USERNAME.lower()
-                period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+                profile_url = f"https://www.etoro.com/people/{inv.username}"
+                full_name = inv.full_name or inv.username
 
-                metrics_data.append({
-                    '⭐': '⭐' if is_me else '',
-                    'Investor': inv.username,
-                    'Period': period_str,
-                    'Return': metrics['total_return'],
-                    'MaxDD': metrics['max_dd'],
-                    'Sharpe': metrics['sharpe'],
-                    'Sortino': metrics['sortino'],
-                    'Vol': metrics['volatility'],
-                    'Win%': metrics['win_rate'],
-                    'Days': metrics['days']
-                })
+                # Create avatar HTML
+                initials = full_name[0].upper() if full_name else "?"
+                bg_color = avatar_colors[row_idx % len(avatar_colors)]
+                avatar_html = (
+                    f'<span style="display: inline-flex; align-items: center; justify-content: center; '
+                    f'width: 24px; height: 24px; border-radius: 50%; background-color: {bg_color}; '
+                    f'color: white; font-size: 12px; font-weight: bold;">{initials}</span>'
+                )
 
-            if metrics_data:
-                metrics_df = pd.DataFrame(metrics_data)
+                # For alphawizzard: add TWO rows - one since Nov 1, one all-time
+                if is_me:
+                    # Row 1: Since Nov 1, 2025
+                    filtered_history = [h for h in user_history if h['date'] >= alphawizzard_start]
+                    daily_returns, start_date, end_date = _calculate_daily_returns_series(filtered_history)
 
-                # Style the dataframe
-                def color_return(val):
-                    if isinstance(val, (int, float)):
-                        color = '#28a745' if val > 0 else '#dc3545' if val < 0 else 'gray'
-                        return f'color: {color}'
-                    return ''
+                    if daily_returns and len(daily_returns) >= 5:
+                        metrics = _calculate_metrics(daily_returns)
+                        if metrics:
+                            period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+                            metrics_rows.append({
+                                'star': '⭐',
+                                'avatar_html': avatar_html,
+                                'full_name': full_name,
+                                'username': inv.username,
+                                'profile_url': profile_url,
+                                'period': period_str,
+                                'metrics': metrics,
+                            })
 
-                def color_maxdd(val):
-                    if isinstance(val, (int, float)):
-                        # MaxDD is always negative, darker red = worse
-                        color = '#dc3545' if val < -5 else '#fd7e14' if val < -2 else '#28a745'
-                        return f'color: {color}'
-                    return ''
+                    # Row 2: All-time (from earliest data)
+                    daily_returns_all, start_date_all, end_date_all = _calculate_daily_returns_series(user_history)
 
-                def color_ratio(val):
-                    if isinstance(val, (int, float)):
-                        color = '#28a745' if val > 1 else '#fd7e14' if val > 0 else '#dc3545'
-                        return f'color: {color}'
-                    return ''
+                    if daily_returns_all and len(daily_returns_all) >= 5:
+                        metrics_all = _calculate_metrics(daily_returns_all)
+                        if metrics_all:
+                            period_str_all = f"{start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d, %Y')}"
+                            # Only add if different from filtered period
+                            if start_date_all != start_date:
+                                metrics_rows.append({
+                                    'star': '⭐',
+                                    'avatar_html': avatar_html,
+                                    'full_name': full_name,
+                                    'username': inv.username,
+                                    'profile_url': profile_url,
+                                    'period': period_str_all,
+                                    'metrics': metrics_all,
+                                })
+                else:
+                    # Other investors: single row from earliest data
+                    daily_returns, start_date, end_date = _calculate_daily_returns_series(user_history)
 
-                # Apply styling
-                styled_metrics = metrics_df.style.map(
-                    color_return, subset=['Return']
-                ).map(
-                    color_maxdd, subset=['MaxDD']
-                ).map(
-                    color_ratio, subset=['Sharpe', 'Sortino']
-                ).format({
-                    'Return': '{:+.2f}%',
-                    'MaxDD': '{:.2f}%',
-                    'Sharpe': '{:.2f}',
-                    'Sortino': '{:.2f}',
-                    'Vol': '{:.1f}%',
-                    'Win%': '{:.1f}%',
-                    'Days': '{:.0f}'
-                })
+                    if not daily_returns or len(daily_returns) < 5:
+                        continue
 
-                st.dataframe(styled_metrics, use_container_width=True, hide_index=True)
+                    metrics = _calculate_metrics(daily_returns)
+                    if metrics is None:
+                        continue
+
+                    period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+                    metrics_rows.append({
+                        'star': '',
+                        'avatar_html': avatar_html,
+                        'full_name': full_name,
+                        'username': inv.username,
+                        'profile_url': profile_url,
+                        'period': period_str,
+                        'metrics': metrics,
+                    })
+
+                row_idx += 1
+
+            if metrics_rows:
+                # Build HTML table rows
+                html_rows = []
+                for row in metrics_rows:
+                    m = row['metrics']
+                    html_rows.append(
+                        f'<tr>'
+                        f'<td style="text-align: center;">{row["star"]}</td>'
+                        f'<td style="text-align: left;"><a href="{row["profile_url"]}" target="_blank" style="color: #1f77b4; text-decoration: none; display: flex; align-items: center; gap: 8px;">'
+                        f'{row["avatar_html"]}'
+                        f'{row["full_name"]} (@{row["username"]})</a></td>'
+                        f'<td style="text-align: left; font-size: 12px; color: #666;">{row["period"]}</td>'
+                        f'<td style="text-align: right;">{color_value(m["total_return"])}</td>'
+                        f'<td style="text-align: right;">{color_maxdd_html(m["max_dd"])}</td>'
+                        f'<td style="text-align: right;">{color_ratio_html(m["sharpe"])}</td>'
+                        f'<td style="text-align: right;">{color_ratio_html(m["sortino"])}</td>'
+                        f'<td style="text-align: right;">{m["volatility"]:.1f}%</td>'
+                        f'<td style="text-align: right;">{m["win_rate"]:.1f}%</td>'
+                        f'<td style="text-align: right;">{m["days"]:.0f}</td>'
+                        f'</tr>'
+                    )
+
+                html_table = (
+                    '<style>'
+                    '.metrics-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
+                    '.metrics-table th { text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; }'
+                    '.metrics-table th:first-child { text-align: center; }'
+                    '.metrics-table th:nth-child(2), .metrics-table th:nth-child(3) { text-align: left; }'
+                    '.metrics-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }'
+                    '.metrics-table tr:hover { background-color: #f5f5f5; }'
+                    '.metrics-table a:hover { text-decoration: underline; }'
+                    '</style>'
+                    '<table class="metrics-table">'
+                    '<thead><tr>'
+                    '<th style="text-align: center;">⭐</th>'
+                    '<th style="text-align: left;">Investor</th>'
+                    '<th style="text-align: left;">Period</th>'
+                    '<th style="text-align: right;">Return</th>'
+                    '<th style="text-align: right;">MaxDD</th>'
+                    '<th style="text-align: right;">Sharpe</th>'
+                    '<th style="text-align: right;">Sortino</th>'
+                    '<th style="text-align: right;">Vol</th>'
+                    '<th style="text-align: right;">Win%</th>'
+                    '<th style="text-align: right;">Days</th>'
+                    '</tr></thead>'
+                    '<tbody>' + ''.join(html_rows) + '</tbody>'
+                    '</table>'
+                )
+
+                st.markdown(html_table, unsafe_allow_html=True)
+
+                # Add spacing at bottom to prevent overlap with Streamlit UI elements
+                st.markdown("<br><br><br>", unsafe_allow_html=True)
             else:
                 st.info("Not enough data to calculate performance metrics. Need at least 5 days of data.")
         else:
