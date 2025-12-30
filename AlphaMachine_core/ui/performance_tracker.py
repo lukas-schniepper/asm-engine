@@ -3100,22 +3100,41 @@ def _fetch_benchmark_data():
             # Calculate daily returns
             df['daily_return'] = df['price'].pct_change() * 100
 
-            # Calculate monthly returns
+            # Calculate monthly returns using end-of-month to end-of-month methodology
+            # This matches the Scraper View and GIPS standards
             df['year_month'] = df['trade_date'].apply(lambda x: x.strftime('%Y-%m'))
             monthly_returns = {}
-            for ym in df['year_month'].unique():
-                month_data = df[df['year_month'] == ym]
-                if len(month_data) >= 2:
-                    start_price = month_data.iloc[0]['price']
-                    end_price = month_data.iloc[-1]['price']
-                    monthly_returns[ym] = round((end_price / start_price - 1) * 100, 2)
 
-            # Current month MTD
+            # Get sorted unique months
+            sorted_months = sorted(df['year_month'].unique())
+            prev_month_end_price = None
+
+            for ym in sorted_months:
+                month_data = df[df['year_month'] == ym].sort_values('trade_date')
+                if len(month_data) >= 1:
+                    month_end_price = month_data.iloc[-1]['price']
+
+                    if prev_month_end_price is not None:
+                        # Monthly return = (end of this month / end of previous month) - 1
+                        monthly_returns[ym] = round((month_end_price / prev_month_end_price - 1) * 100, 2)
+
+                    prev_month_end_price = month_end_price
+
+            # Current month MTD (from end of previous month to now)
             current_month = end_date.strftime('%Y-%m')
             month_start = end_date.replace(day=1)
-            current_month_data = df[df['trade_date'] >= month_start]
-            if len(current_month_data) >= 1:
-                # Get price at start of month (or first available)
+
+            # Get last price of previous month
+            prev_month_data = df[df['trade_date'] < month_start].sort_values('trade_date')
+            current_month_data = df[df['trade_date'] >= month_start].sort_values('trade_date')
+
+            if len(prev_month_data) >= 1 and len(current_month_data) >= 1:
+                prev_month_end = prev_month_data.iloc[-1]['price']
+                current_price = current_month_data.iloc[-1]['price']
+                mtd = round((current_price / prev_month_end - 1) * 100, 2)
+                monthly_returns[current_month] = mtd
+            elif len(current_month_data) >= 2:
+                # Fallback if no previous month data
                 first_price = current_month_data.iloc[0]['price']
                 last_price = current_month_data.iloc[-1]['price']
                 mtd = round((last_price / first_price - 1) * 100, 2)
