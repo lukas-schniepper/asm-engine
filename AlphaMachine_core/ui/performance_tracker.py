@@ -3062,6 +3062,158 @@ def _fetch_etoro_data():
     return get_etoro_comparison_data("alphawizzard", top_count=5)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_benchmark_data():
+    """Fetch SPY and QQQ benchmark data for comparison."""
+    from datetime import date, timedelta
+    from dateutil.relativedelta import relativedelta
+    import numpy as np
+
+    try:
+        from AlphaMachine_core.data_manager import StockDataManager
+        dm = StockDataManager()
+
+        # Get 2 years of data for YTD, 1Y, 2Y calculations
+        end_date = date.today()
+        start_date = end_date - relativedelta(years=2, months=1)
+
+        benchmarks = {}
+        for ticker in ['SPY', 'QQQ']:
+            price_data = dm.get_price_data(
+                [ticker],
+                start_date.strftime('%Y-%m-%d'),
+                end_date.strftime('%Y-%m-%d')
+            )
+
+            if not price_data:
+                continue
+
+            import pandas as pd
+            df = pd.DataFrame(price_data)
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+            df = df.sort_values('trade_date')
+
+            # Use adjusted_close if available
+            price_col = 'adjusted_close' if 'adjusted_close' in df.columns and df['adjusted_close'].notna().any() else 'close'
+            df['price'] = df[price_col].fillna(df['close'])
+
+            # Calculate daily returns
+            df['daily_return'] = df['price'].pct_change() * 100
+
+            # Calculate monthly returns
+            df['year_month'] = df['trade_date'].apply(lambda x: x.strftime('%Y-%m'))
+            monthly_returns = {}
+            for ym in df['year_month'].unique():
+                month_data = df[df['year_month'] == ym]
+                if len(month_data) >= 2:
+                    start_price = month_data.iloc[0]['price']
+                    end_price = month_data.iloc[-1]['price']
+                    monthly_returns[ym] = round((end_price / start_price - 1) * 100, 2)
+
+            # Current month MTD
+            current_month = end_date.strftime('%Y-%m')
+            month_start = end_date.replace(day=1)
+            current_month_data = df[df['trade_date'] >= month_start]
+            if len(current_month_data) >= 1:
+                # Get price at start of month (or first available)
+                first_price = current_month_data.iloc[0]['price']
+                last_price = current_month_data.iloc[-1]['price']
+                mtd = round((last_price / first_price - 1) * 100, 2)
+                monthly_returns[current_month] = mtd
+            else:
+                mtd = 0.0
+
+            # YTD return
+            year_start = date(end_date.year, 1, 1)
+            ytd_data = df[df['trade_date'] >= year_start]
+            if len(ytd_data) >= 2:
+                ytd = round((ytd_data.iloc[-1]['price'] / ytd_data.iloc[0]['price'] - 1) * 100, 2)
+            else:
+                ytd = 0.0
+
+            # 1Y return
+            one_year_ago = end_date - relativedelta(years=1)
+            y1_data = df[df['trade_date'] >= one_year_ago]
+            if len(y1_data) >= 2:
+                gain_1y = round((y1_data.iloc[-1]['price'] / y1_data.iloc[0]['price'] - 1) * 100, 2)
+            else:
+                gain_1y = 0.0
+
+            # 2Y return
+            two_years_ago = end_date - relativedelta(years=2)
+            y2_data = df[df['trade_date'] >= two_years_ago]
+            if len(y2_data) >= 2:
+                gain_2y = round((y2_data.iloc[-1]['price'] / y2_data.iloc[0]['price'] - 1) * 100, 2)
+            else:
+                gain_2y = 0.0
+
+            # Daily returns for metrics calculation (last 60 days for consistency with eToro data)
+            recent_data = df.tail(60)
+            daily_returns_list = recent_data['daily_return'].dropna().tolist()
+
+            # Calculate performance metrics
+            metrics = None
+            if len(daily_returns_list) >= 5:
+                returns = np.array(daily_returns_list) / 100
+                total_return = (np.prod(1 + returns) - 1) * 100
+                cumulative = np.cumprod(1 + returns)
+                running_max = np.maximum.accumulate(cumulative)
+                drawdowns = (cumulative - running_max) / running_max
+                max_dd = np.min(drawdowns) * 100
+
+                mean_daily = np.mean(returns)
+                std_daily = np.std(returns, ddof=1) if len(returns) > 1 else 0
+                annualized_vol = std_daily * np.sqrt(252) * 100
+                sharpe = (mean_daily / std_daily * np.sqrt(252)) if std_daily > 0 else 0
+
+                downside_returns = returns[returns < 0]
+                if len(downside_returns) >= 2:
+                    downside_std = np.std(downside_returns, ddof=1)
+                    sortino = (mean_daily / downside_std * np.sqrt(252)) if downside_std > 0 else 0
+                elif len(downside_returns) == 1:
+                    downside_std = abs(downside_returns[0])
+                    sortino = (mean_daily / downside_std * np.sqrt(252)) if downside_std > 0 else 0
+                else:
+                    sortino = 99.9 if mean_daily > 0 else 0
+
+                win_rate = (np.sum(returns > 0) / len(returns)) * 100
+
+                metrics = {
+                    'total_return': total_return,
+                    'max_dd': max_dd,
+                    'sharpe': sharpe,
+                    'sortino': min(sortino, 99.9),
+                    'volatility': annualized_vol,
+                    'win_rate': win_rate,
+                    'days': len(daily_returns_list)
+                }
+
+            # Get daily data for current month (for daily returns table)
+            daily_by_date = {}
+            for _, row in current_month_data.iterrows():
+                if pd.notna(row['daily_return']):
+                    daily_by_date[row['trade_date']] = round(row['daily_return'], 2)
+
+            benchmarks[ticker] = {
+                'ticker': ticker,
+                'monthly_returns': monthly_returns,
+                'mtd': mtd,
+                'ytd': ytd,
+                'gain_1y': gain_1y,
+                'gain_2y': gain_2y,
+                'daily_returns': daily_by_date,
+                'metrics': metrics,
+                'start_date': df['trade_date'].min() if not df.empty else None,
+                'end_date': df['trade_date'].max() if not df.empty else None,
+            }
+
+        return benchmarks
+    except Exception as e:
+        import logging
+        logging.warning(f"Could not fetch benchmark data: {e}")
+        return {}
+
+
 def _render_etoro_compare_tab():
     """Render the eToro Compare tab - compare portfolio against top popular investors."""
     import pandas as pd
@@ -3084,6 +3236,9 @@ def _render_etoro_compare_tab():
     if not my_stats:
         st.warning(f"Could not fetch stats for {MY_ETORO_USERNAME}")
         return
+
+    # Fetch benchmark data (SPY, QQQ)
+    benchmarks = _fetch_benchmark_data()
 
     # Section 1: My Portfolio Stats
     st.markdown("---")
@@ -3195,6 +3350,33 @@ def _render_etoro_compare_tab():
                 f'</tr>'
             )
 
+        # Add benchmark rows (SPY, QQQ)
+        for ticker in ['SPY', 'QQQ']:
+            if ticker in benchmarks:
+                bm = benchmarks[ticker]
+                # Gray background for benchmark rows
+                bm_avatar = (
+                    f'<span style="display: inline-flex; align-items: center; justify-content: center; '
+                    f'width: 24px; height: 24px; border-radius: 50%; background-color: #6c757d; '
+                    f'color: white; font-size: 10px; font-weight: bold;">IDX</span>'
+                )
+                last_month_return = bm['monthly_returns'].get(last_month_key, 0.0)
+                html_rows.append(
+                    f'<tr style="background-color: #f8f9fa;">'
+                    f'<td style="text-align: center;">📊</td>'
+                    f'<td style="text-align: left; display: flex; align-items: center; gap: 8px;">'
+                    f'{bm_avatar}{ticker} (Benchmark)</td>'
+                    f'<td style="text-align: right; color: #6c757d;">-</td>'
+                    f'<td style="text-align: right;">{color_value(bm["mtd"])}</td>'
+                    f'<td style="text-align: right;">{color_value(last_month_return)}</td>'
+                    f'<td style="text-align: right;">{color_value(bm["ytd"])}</td>'
+                    f'<td style="text-align: right;">{color_value(bm["gain_1y"])}</td>'
+                    f'<td style="text-align: right;">{color_value(bm["gain_2y"])}</td>'
+                    f'<td style="text-align: right; color: #6c757d;">-</td>'
+                    f'<td style="text-align: right; color: #6c757d;">-</td>'
+                    f'</tr>'
+                )
+
         html_table = (
             '<style>'
             '.etoro-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
@@ -3238,6 +3420,11 @@ def _render_etoro_compare_tab():
                 is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
                 label = f"{inv.username} (You)" if is_me else inv.username
                 monthly_data[label] = inv.monthly_returns
+
+        # Add benchmark monthly returns
+        for ticker in ['SPY', 'QQQ']:
+            if ticker in benchmarks and benchmarks[ticker].get('monthly_returns'):
+                monthly_data[ticker] = benchmarks[ticker]['monthly_returns']
 
         if monthly_data:
             # Create DataFrame for monthly returns
@@ -3284,6 +3471,21 @@ def _render_etoro_compare_tab():
                 "Avg Daily %": round(avg_daily, 3),
                 "Projected Month %": round(projected, 2),
             })
+
+        # Add benchmarks to MTD table
+        for ticker in ['SPY', 'QQQ']:
+            if ticker in benchmarks:
+                bm = benchmarks[ticker]
+                bm_mtd = bm.get('mtd', 0.0)
+                avg_daily = bm_mtd / days_elapsed if days_elapsed > 0 else 0
+                projected = avg_daily * days_in_month
+                mtd_data.append({
+                    "Investor": f"📊 {ticker}",
+                    "MTD %": bm_mtd,
+                    "Days": days_elapsed,
+                    "Avg Daily %": round(avg_daily, 3),
+                    "Projected Month %": round(projected, 2),
+                })
 
         # Sort by MTD descending
         mtd_data.sort(key=lambda x: x["MTD %"], reverse=True)
@@ -3394,6 +3596,11 @@ def _render_etoro_compare_tab():
                             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
                             col_name = f"⭐ {inv.username}" if is_me else inv.username
                             row[col_name] = daily_returns_data.get(inv.username, {}).get(d, None)
+                        # Add benchmark daily returns
+                        for ticker in ['SPY', 'QQQ']:
+                            if ticker in benchmarks:
+                                bm_daily = benchmarks[ticker].get('daily_returns', {})
+                                row[f"📊 {ticker}"] = bm_daily.get(d, None)
                         rows.append(row)
 
                     daily_df = pd.DataFrame(rows)
@@ -3648,27 +3855,68 @@ def _render_etoro_compare_tab():
 
                 row_idx += 1
 
+            # Add benchmark rows (SPY, QQQ)
+            for ticker in ['SPY', 'QQQ']:
+                if ticker in benchmarks and benchmarks[ticker].get('metrics'):
+                    bm = benchmarks[ticker]
+                    bm_metrics = bm['metrics']
+                    bm_avatar = (
+                        f'<span style="display: inline-flex; align-items: center; justify-content: center; '
+                        f'width: 24px; height: 24px; border-radius: 50%; background-color: #6c757d; '
+                        f'color: white; font-size: 10px; font-weight: bold;">IDX</span>'
+                    )
+                    period_str = f"{bm['start_date'].strftime('%b %d, %Y')} - {bm['end_date'].strftime('%b %d, %Y')}" if bm.get('start_date') and bm.get('end_date') else "Last 60 days"
+                    metrics_rows.append({
+                        'star': '📊',
+                        'avatar_html': bm_avatar,
+                        'full_name': ticker,
+                        'username': 'Benchmark',
+                        'profile_url': '#',
+                        'period': period_str,
+                        'metrics': bm_metrics,
+                        'is_benchmark': True,
+                    })
+
             if metrics_rows:
                 # Build HTML table rows
                 html_rows = []
                 for row in metrics_rows:
                     m = row['metrics']
-                    html_rows.append(
-                        f'<tr>'
-                        f'<td style="text-align: center;">{row["star"]}</td>'
-                        f'<td style="text-align: left;"><a href="{row["profile_url"]}" target="_blank" style="color: #1f77b4; text-decoration: none; display: flex; align-items: center; gap: 8px;">'
-                        f'{row["avatar_html"]}'
-                        f'{row["full_name"]} (@{row["username"]})</a></td>'
-                        f'<td style="text-align: left; font-size: 12px; color: #666;">{row["period"]}</td>'
-                        f'<td style="text-align: right;">{color_value(m["total_return"])}</td>'
-                        f'<td style="text-align: right;">{color_maxdd_html(m["max_dd"])}</td>'
-                        f'<td style="text-align: right;">{color_ratio_html(m["sharpe"])}</td>'
-                        f'<td style="text-align: right;">{color_ratio_html(m["sortino"])}</td>'
-                        f'<td style="text-align: right;">{m["volatility"]:.1f}%</td>'
-                        f'<td style="text-align: right;">{m["win_rate"]:.1f}%</td>'
-                        f'<td style="text-align: right;">{m["days"]:.0f}</td>'
-                        f'</tr>'
-                    )
+                    is_benchmark = row.get('is_benchmark', False)
+                    if is_benchmark:
+                        # Benchmark row (no link, gray background)
+                        html_rows.append(
+                            f'<tr style="background-color: #f8f9fa;">'
+                            f'<td style="text-align: center;">{row["star"]}</td>'
+                            f'<td style="text-align: left; display: flex; align-items: center; gap: 8px;">'
+                            f'{row["avatar_html"]}{row["full_name"]} (Benchmark)</td>'
+                            f'<td style="text-align: left; font-size: 12px; color: #666;">{row["period"]}</td>'
+                            f'<td style="text-align: right;">{color_value(m["total_return"])}</td>'
+                            f'<td style="text-align: right;">{color_maxdd_html(m["max_dd"])}</td>'
+                            f'<td style="text-align: right;">{color_ratio_html(m["sharpe"])}</td>'
+                            f'<td style="text-align: right;">{color_ratio_html(m["sortino"])}</td>'
+                            f'<td style="text-align: right;">{m["volatility"]:.1f}%</td>'
+                            f'<td style="text-align: right;">{m["win_rate"]:.1f}%</td>'
+                            f'<td style="text-align: right;">{m["days"]:.0f}</td>'
+                            f'</tr>'
+                        )
+                    else:
+                        html_rows.append(
+                            f'<tr>'
+                            f'<td style="text-align: center;">{row["star"]}</td>'
+                            f'<td style="text-align: left;"><a href="{row["profile_url"]}" target="_blank" style="color: #1f77b4; text-decoration: none; display: flex; align-items: center; gap: 8px;">'
+                            f'{row["avatar_html"]}'
+                            f'{row["full_name"]} (@{row["username"]})</a></td>'
+                            f'<td style="text-align: left; font-size: 12px; color: #666;">{row["period"]}</td>'
+                            f'<td style="text-align: right;">{color_value(m["total_return"])}</td>'
+                            f'<td style="text-align: right;">{color_maxdd_html(m["max_dd"])}</td>'
+                            f'<td style="text-align: right;">{color_ratio_html(m["sharpe"])}</td>'
+                            f'<td style="text-align: right;">{color_ratio_html(m["sortino"])}</td>'
+                            f'<td style="text-align: right;">{m["volatility"]:.1f}%</td>'
+                            f'<td style="text-align: right;">{m["win_rate"]:.1f}%</td>'
+                            f'<td style="text-align: right;">{m["days"]:.0f}</td>'
+                            f'</tr>'
+                        )
 
                 html_table = (
                     '<style>'
