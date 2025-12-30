@@ -3604,17 +3604,17 @@ def _render_etoro_compare_tab():
                     f'color: white; font-size: 12px; font-weight: bold;">{initials}</span>'
                 )
 
-                # For alphawizzard: add TWO rows - one since Nov 1, one all-time (if different)
+                # For alphawizzard: show actual data period (no misleading dates)
                 if is_me:
-                    # Row 1: Since Nov 1, 2025 (official tracking start)
+                    # Filter to data from Nov 1, 2025 onwards (official tracking start)
                     filtered_history = [h for h in user_history if h['date'] >= alphawizzard_start]
                     daily_returns, start_date, end_date = _calculate_daily_returns_series(filtered_history)
 
                     if daily_returns and len(daily_returns) >= 5:
                         metrics = _calculate_metrics(daily_returns)
                         if metrics:
-                            # Just show dates: Nov 1, 2025 - end date
-                            period_str = f"Nov 1, 2025 - {end_date.strftime('%b %d, %Y')}"
+                            # Show actual data range
+                            period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
                             metrics_rows.append({
                                 'star': '⭐',
                                 'avatar_html': avatar_html,
@@ -3623,24 +3623,6 @@ def _render_etoro_compare_tab():
                                 'profile_url': profile_url,
                                 'period': period_str,
                                 'metrics': metrics,
-                            })
-
-                    # Row 2: All-time - only show if we have data from before Nov 1
-                    daily_returns_all, start_date_all, end_date_all = _calculate_daily_returns_series(user_history)
-
-                    if daily_returns_all and len(daily_returns_all) >= 5:
-                        metrics_all = _calculate_metrics(daily_returns_all)
-                        if metrics_all and start_date_all < alphawizzard_start:
-                            # Just show dates
-                            period_str_all = f"{start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d, %Y')}"
-                            metrics_rows.append({
-                                'star': '⭐',
-                                'avatar_html': avatar_html,
-                                'full_name': full_name,
-                                'username': inv.username,
-                                'profile_url': profile_url,
-                                'period': period_str_all,
-                                'metrics': metrics_all,
                             })
                 else:
                     # Other investors: single row from earliest data
