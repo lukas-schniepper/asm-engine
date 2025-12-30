@@ -3421,6 +3421,216 @@ def _render_etoro_compare_tab():
         else:
             st.info("No historical data available for this month.")
 
+        # Section 6: Performance Metrics (Sharpe, Sortino, MaxDD, etc.)
+        st.markdown("---")
+        st.markdown("### 📈 Performance Metrics")
+        st.caption("Annualized metrics calculated from daily returns. Interpret with caution for periods < 1 year.")
+
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _fetch_all_historical_data():
+            """Fetch all historical MTD values from Supabase."""
+            try:
+                from AlphaMachine_core.db import get_session
+                from AlphaMachine_core.models import EToroStats
+                from sqlmodel import select
+
+                with get_session() as session:
+                    query = select(EToroStats).order_by(EToroStats.scraped_date)
+                    results = session.exec(query).all()
+
+                    # Organize by username -> list of (date, monthly_returns)
+                    history = {}
+                    for stat in results:
+                        if stat.username not in history:
+                            history[stat.username] = []
+                        history[stat.username].append({
+                            'date': stat.scraped_date,
+                            'monthly_returns': stat.monthly_returns or {}
+                        })
+
+                    return history
+            except Exception as e:
+                st.warning(f"Could not fetch historical data: {e}")
+                return {}
+
+        def _calculate_daily_returns_series(user_history: list) -> tuple:
+            """
+            Calculate daily returns from MTD changes.
+            Returns: (daily_returns list, start_date, end_date)
+            """
+            if len(user_history) < 2:
+                return [], None, None
+
+            daily_returns = []
+            prev_mtd = None
+            start_date = None
+            end_date = None
+
+            for record in sorted(user_history, key=lambda x: x['date']):
+                d = record['date']
+                month_key = d.strftime('%Y-%m')
+                current_mtd = record['monthly_returns'].get(month_key, 0.0)
+
+                if prev_mtd is not None:
+                    # Check if same month - if different month, reset
+                    prev_month_key = prev_date.strftime('%Y-%m') if prev_date else None
+                    if prev_month_key and prev_month_key != month_key:
+                        # New month - first day return is the MTD itself
+                        daily_return = current_mtd
+                    else:
+                        daily_return = current_mtd - prev_mtd
+                    daily_returns.append(daily_return)
+                    if start_date is None:
+                        start_date = d
+                    end_date = d
+
+                prev_mtd = current_mtd
+                prev_date = d
+
+            return daily_returns, start_date, end_date
+
+        def _calculate_metrics(daily_returns: list) -> dict:
+            """Calculate performance metrics from daily returns."""
+            import numpy as np
+
+            if len(daily_returns) < 5:
+                return None
+
+            returns = np.array(daily_returns) / 100  # Convert from % to decimal
+
+            # Total return (compounded)
+            total_return = (np.prod(1 + returns) - 1) * 100
+
+            # Max Drawdown
+            cumulative = np.cumprod(1 + returns)
+            running_max = np.maximum.accumulate(cumulative)
+            drawdowns = (cumulative - running_max) / running_max
+            max_dd = np.min(drawdowns) * 100
+
+            # Daily stats
+            mean_daily = np.mean(returns)
+            std_daily = np.std(returns, ddof=1) if len(returns) > 1 else 0
+
+            # Annualized metrics (252 trading days)
+            annualized_return = mean_daily * 252
+            annualized_vol = std_daily * np.sqrt(252) * 100
+
+            # Sharpe Ratio (assuming 0 risk-free rate for simplicity)
+            sharpe = (mean_daily / std_daily * np.sqrt(252)) if std_daily > 0 else 0
+
+            # Sortino Ratio (downside deviation)
+            downside_returns = returns[returns < 0]
+            if len(downside_returns) > 0:
+                downside_std = np.std(downside_returns, ddof=1)
+                sortino = (mean_daily / downside_std * np.sqrt(252)) if downside_std > 0 else 0
+            else:
+                sortino = float('inf') if mean_daily > 0 else 0
+
+            # Win Rate
+            win_rate = (np.sum(returns > 0) / len(returns)) * 100
+
+            return {
+                'total_return': total_return,
+                'max_dd': max_dd,
+                'sharpe': sharpe,
+                'sortino': sortino if sortino != float('inf') else 99.9,
+                'volatility': annualized_vol,
+                'win_rate': win_rate,
+                'days': len(daily_returns)
+            }
+
+        # Fetch all historical data
+        all_history = _fetch_all_historical_data()
+
+        if all_history:
+            from datetime import date as date_type
+
+            # Define start date for alphawizzard (Nov 1, 2025)
+            alphawizzard_start = date_type(2025, 11, 1)
+
+            metrics_data = []
+            for inv in all_investors:
+                username = inv.username.lower()
+                if username not in all_history:
+                    continue
+
+                user_history = all_history[username]
+
+                # For alphawizzard, filter to start from Nov 1, 2025
+                if username == MY_ETORO_USERNAME.lower():
+                    user_history = [h for h in user_history if h['date'] >= alphawizzard_start]
+
+                daily_returns, start_date, end_date = _calculate_daily_returns_series(user_history)
+
+                if not daily_returns or len(daily_returns) < 5:
+                    continue
+
+                metrics = _calculate_metrics(daily_returns)
+                if metrics is None:
+                    continue
+
+                is_me = username == MY_ETORO_USERNAME.lower()
+                period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+
+                metrics_data.append({
+                    '⭐': '⭐' if is_me else '',
+                    'Investor': inv.username,
+                    'Period': period_str,
+                    'Return': metrics['total_return'],
+                    'MaxDD': metrics['max_dd'],
+                    'Sharpe': metrics['sharpe'],
+                    'Sortino': metrics['sortino'],
+                    'Vol': metrics['volatility'],
+                    'Win%': metrics['win_rate'],
+                    'Days': metrics['days']
+                })
+
+            if metrics_data:
+                metrics_df = pd.DataFrame(metrics_data)
+
+                # Style the dataframe
+                def color_return(val):
+                    if isinstance(val, (int, float)):
+                        color = '#28a745' if val > 0 else '#dc3545' if val < 0 else 'gray'
+                        return f'color: {color}'
+                    return ''
+
+                def color_maxdd(val):
+                    if isinstance(val, (int, float)):
+                        # MaxDD is always negative, darker red = worse
+                        color = '#dc3545' if val < -5 else '#fd7e14' if val < -2 else '#28a745'
+                        return f'color: {color}'
+                    return ''
+
+                def color_ratio(val):
+                    if isinstance(val, (int, float)):
+                        color = '#28a745' if val > 1 else '#fd7e14' if val > 0 else '#dc3545'
+                        return f'color: {color}'
+                    return ''
+
+                # Apply styling
+                styled_metrics = metrics_df.style.map(
+                    color_return, subset=['Return']
+                ).map(
+                    color_maxdd, subset=['MaxDD']
+                ).map(
+                    color_ratio, subset=['Sharpe', 'Sortino']
+                ).format({
+                    'Return': '{:+.2f}%',
+                    'MaxDD': '{:.2f}%',
+                    'Sharpe': '{:.2f}',
+                    'Sortino': '{:.2f}',
+                    'Vol': '{:.1f}%',
+                    'Win%': '{:.1f}%',
+                    'Days': '{:.0f}'
+                })
+
+                st.dataframe(styled_metrics, use_container_width=True, hide_index=True)
+            else:
+                st.info("Not enough data to calculate performance metrics. Need at least 5 days of data.")
+        else:
+            st.info("No historical data available for performance metrics.")
+
     else:
         st.info("Could not fetch top investors data.")
 
