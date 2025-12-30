@@ -3606,14 +3606,15 @@ def _render_etoro_compare_tab():
 
                 # For alphawizzard: add TWO rows - one since Nov 1, one all-time
                 if is_me:
-                    # Row 1: Since Nov 1, 2025
+                    # Row 1: Since Nov 1, 2025 (official tracking start)
                     filtered_history = [h for h in user_history if h['date'] >= alphawizzard_start]
                     daily_returns, start_date, end_date = _calculate_daily_returns_series(filtered_history)
 
                     if daily_returns and len(daily_returns) >= 5:
                         metrics = _calculate_metrics(daily_returns)
                         if metrics:
-                            period_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+                            # Label as "Since Nov 1, 2025" for clarity
+                            period_str = f"Since Nov 1, 2025 ({end_date.strftime('%b %d')})"
                             metrics_rows.append({
                                 'star': '⭐',
                                 'avatar_html': avatar_html,
@@ -3624,24 +3625,22 @@ def _render_etoro_compare_tab():
                                 'metrics': metrics,
                             })
 
-                    # Row 2: All-time (from earliest data)
+                    # Row 2: All-time (from earliest data) - always show
                     daily_returns_all, start_date_all, end_date_all = _calculate_daily_returns_series(user_history)
 
                     if daily_returns_all and len(daily_returns_all) >= 5:
                         metrics_all = _calculate_metrics(daily_returns_all)
                         if metrics_all:
-                            period_str_all = f"{start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d, %Y')}"
-                            # Only add if different from filtered period
-                            if start_date_all != start_date:
-                                metrics_rows.append({
-                                    'star': '⭐',
-                                    'avatar_html': avatar_html,
-                                    'full_name': full_name,
-                                    'username': inv.username,
-                                    'profile_url': profile_url,
-                                    'period': period_str_all,
-                                    'metrics': metrics_all,
-                                })
+                            period_str_all = f"All-time ({start_date_all.strftime('%b %d, %Y')} - {end_date_all.strftime('%b %d')})"
+                            metrics_rows.append({
+                                'star': '⭐',
+                                'avatar_html': avatar_html,
+                                'full_name': full_name,
+                                'username': inv.username,
+                                'profile_url': profile_url,
+                                'period': period_str_all,
+                                'metrics': metrics_all,
+                            })
                 else:
                     # Other investors: single row from earliest data
                     daily_returns, start_date, end_date = _calculate_daily_returns_series(user_history)
