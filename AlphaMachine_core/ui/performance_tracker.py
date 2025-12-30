@@ -3100,47 +3100,30 @@ def _fetch_benchmark_data():
             # Calculate daily returns
             df['daily_return'] = df['price'].pct_change() * 100
 
-            # Calculate monthly returns using end-of-month to end-of-month methodology
-            # This matches the Scraper View and GIPS standards
+            # Calculate monthly returns using GIPS-compliant compound daily returns
+            # This matches the Scraper View methodology exactly
             df['year_month'] = df['trade_date'].apply(lambda x: x.strftime('%Y-%m'))
             monthly_returns = {}
 
+            # Calculate daily returns as decimal for compounding
+            df['daily_return_decimal'] = df['price'].pct_change()
+
             # Get sorted unique months
             sorted_months = sorted(df['year_month'].unique())
-            prev_month_end_price = None
 
             for ym in sorted_months:
                 month_data = df[df['year_month'] == ym].sort_values('trade_date')
-                if len(month_data) >= 1:
-                    month_end_price = month_data.iloc[-1]['price']
+                # Get daily returns for this month (skip first NaN)
+                month_daily_returns = month_data['daily_return_decimal'].dropna()
 
-                    if prev_month_end_price is not None:
-                        # Monthly return = (end of this month / end of previous month) - 1
-                        monthly_returns[ym] = round((month_end_price / prev_month_end_price - 1) * 100, 2)
+                if len(month_daily_returns) > 0:
+                    # GIPS compound: (1 + r1) * (1 + r2) * ... * (1 + rN) - 1
+                    compounded = (1 + month_daily_returns).prod() - 1
+                    monthly_returns[ym] = round(compounded * 100, 2)
 
-                    prev_month_end_price = month_end_price
-
-            # Current month MTD (from end of previous month to now)
+            # Current month MTD
             current_month = end_date.strftime('%Y-%m')
-            month_start = end_date.replace(day=1)
-
-            # Get last price of previous month
-            prev_month_data = df[df['trade_date'] < month_start].sort_values('trade_date')
-            current_month_data = df[df['trade_date'] >= month_start].sort_values('trade_date')
-
-            if len(prev_month_data) >= 1 and len(current_month_data) >= 1:
-                prev_month_end = prev_month_data.iloc[-1]['price']
-                current_price = current_month_data.iloc[-1]['price']
-                mtd = round((current_price / prev_month_end - 1) * 100, 2)
-                monthly_returns[current_month] = mtd
-            elif len(current_month_data) >= 2:
-                # Fallback if no previous month data
-                first_price = current_month_data.iloc[0]['price']
-                last_price = current_month_data.iloc[-1]['price']
-                mtd = round((last_price / first_price - 1) * 100, 2)
-                monthly_returns[current_month] = mtd
-            else:
-                mtd = 0.0
+            mtd = monthly_returns.get(current_month, 0.0)
 
             # YTD return
             year_start = date(end_date.year, 1, 1)
