@@ -133,6 +133,7 @@ def upload_to_supabase():
     from AlphaMachine_core.db import get_session
     from AlphaMachine_core.models import EToroStats
     from sqlmodel import select
+    from sqlalchemy.orm.attributes import flag_modified
 
     # Use the previous completed trading day
     # (Scraper runs at 07:00 UTC, before market open, so shows yesterday's close)
@@ -169,31 +170,33 @@ def upload_to_supabase():
                 .limit(1)
             ).first()
 
-            # Handle monthly_returns - preserve previous December value during year transition
-            # (eToro shows 0% for Dec in January before historical data is finalized)
+            # Handle monthly_returns - preserve previous year's values during year transition
+            # (eToro resets ALL previous year's monthly values in January)
             new_monthly = inv.get('monthly_returns', {})
             today = date.today()
 
             # Year transition: today is January but trading_date is still December
-            # eToro shows 2026 data (YTD reset, Dec 2025 = 0%) even when querying Dec 31
+            # eToro shows 2026 data (YTD reset, all 2025 months = 0%) even when querying Dec 31
             is_year_transition = (today.month == 1 and trading_date.month == 12)
 
             if is_year_transition and prev_record:
-                # During year transition, preserve the previous December value
-                prev_dec_key = f"{trading_date.year}-12"  # e.g., "2025-12" when trading_date is Dec 31, 2025
                 old_monthly = prev_record.monthly_returns or {}
+                prev_year = trading_date.year  # e.g., 2025
 
-                # Check if December appears reset in new data (close to 0 or very different from stored)
-                # eToro sometimes shows small values like 0.07% instead of exactly 0%
-                if (prev_dec_key in new_monthly and
-                    prev_dec_key in old_monthly and
-                    old_monthly[prev_dec_key] != 0.0):
-                    scraped_dec = new_monthly[prev_dec_key]
-                    stored_dec = old_monthly[prev_dec_key]
-                    # Preserve if scraped value is near zero OR significantly different (>50% relative change)
-                    if abs(scraped_dec) < 0.5 or abs(scraped_dec - stored_dec) > abs(stored_dec) * 0.5:
-                        print(f"    Year transition fix: preserving Dec {trading_date.year} = {stored_dec}% (scraped {scraped_dec}%)")
-                        new_monthly[prev_dec_key] = stored_dec
+                # Preserve ALL months from the previous year (Jan-Dec)
+                preserved_months = []
+                for month in range(1, 13):
+                    month_key = f"{prev_year}-{month:02d}"  # e.g., "2025-01", "2025-12"
+                    if month_key in old_monthly and old_monthly[month_key] != 0.0:
+                        scraped_val = new_monthly.get(month_key, 0.0)
+                        stored_val = old_monthly[month_key]
+                        # Preserve if scraped value is near zero OR significantly different
+                        if abs(scraped_val) < 0.5 or abs(scraped_val - stored_val) > abs(stored_val) * 0.5:
+                            new_monthly[month_key] = stored_val
+                            preserved_months.append(f"{month_key}={stored_val}%")
+
+                if preserved_months:
+                    print(f"    Year transition fix: preserving {len(preserved_months)} months from {prev_year}")
 
                 # Also preserve YTD if existing record has it (eToro resets YTD in January)
                 if existing and existing.gain_ytd != 0.0:
@@ -211,7 +214,8 @@ def upload_to_supabase():
                 existing.gain_ytd = inv.get('gain_ytd', 0.0)
                 existing.win_ratio = inv.get('win_ratio', 50.0)
                 existing.profitable_months_pct = inv.get('profitable_months_pct', 50.0)
-                existing.monthly_returns = new_monthly
+                existing.monthly_returns = dict(new_monthly)  # Create new dict to trigger change detection
+                flag_modified(existing, 'monthly_returns')  # Force SQLAlchemy to detect JSON change
                 session.add(existing)
                 print(f"  Updated existing record for {username}")
             else:
