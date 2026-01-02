@@ -172,17 +172,29 @@ def upload_to_supabase():
             # Handle monthly_returns - preserve previous December value during year transition
             # (eToro shows 0% for Dec in January before historical data is finalized)
             new_monthly = inv.get('monthly_returns', {})
-            prev_dec_key = f"{trading_date.year - 1}-12"
+            today = date.today()
 
-            if trading_date.month == 1 and prev_record:
+            # Year transition: today is January but trading_date is still December
+            # eToro shows 2026 data (YTD reset, Dec 2025 = 0%) even when querying Dec 31
+            is_year_transition = (today.month == 1 and trading_date.month == 12)
+
+            if is_year_transition and prev_record:
+                # During year transition, preserve the previous December value
+                prev_dec_key = f"{trading_date.year}-12"  # e.g., "2025-12" when trading_date is Dec 31, 2025
                 old_monthly = prev_record.monthly_returns or {}
+
                 # Check if December shows 0% in new data but had a real value before
                 if (prev_dec_key in new_monthly and
                     new_monthly[prev_dec_key] == 0.0 and
                     prev_dec_key in old_monthly and
                     old_monthly[prev_dec_key] != 0.0):
-                    print(f"    Year transition fix: preserving Dec {trading_date.year - 1} = {old_monthly[prev_dec_key]}% (scraped 0%)")
+                    print(f"    Year transition fix: preserving Dec {trading_date.year} = {old_monthly[prev_dec_key]}% (scraped 0%)")
                     new_monthly[prev_dec_key] = old_monthly[prev_dec_key]
+
+                # Also preserve YTD if existing record has it (eToro resets YTD in January)
+                if existing and existing.gain_ytd != 0.0:
+                    print(f"    Year transition fix: preserving YTD = {existing.gain_ytd}% (scraped {inv.get('gain_ytd', 0.0)}%)")
+                    inv['gain_ytd'] = existing.gain_ytd
 
             if existing:
                 # Update existing record
