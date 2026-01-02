@@ -183,13 +183,17 @@ def upload_to_supabase():
                 prev_dec_key = f"{trading_date.year}-12"  # e.g., "2025-12" when trading_date is Dec 31, 2025
                 old_monthly = prev_record.monthly_returns or {}
 
-                # Check if December shows 0% in new data but had a real value before
+                # Check if December appears reset in new data (close to 0 or very different from stored)
+                # eToro sometimes shows small values like 0.07% instead of exactly 0%
                 if (prev_dec_key in new_monthly and
-                    new_monthly[prev_dec_key] == 0.0 and
                     prev_dec_key in old_monthly and
                     old_monthly[prev_dec_key] != 0.0):
-                    print(f"    Year transition fix: preserving Dec {trading_date.year} = {old_monthly[prev_dec_key]}% (scraped 0%)")
-                    new_monthly[prev_dec_key] = old_monthly[prev_dec_key]
+                    scraped_dec = new_monthly[prev_dec_key]
+                    stored_dec = old_monthly[prev_dec_key]
+                    # Preserve if scraped value is near zero OR significantly different (>50% relative change)
+                    if abs(scraped_dec) < 0.5 or abs(scraped_dec - stored_dec) > abs(stored_dec) * 0.5:
+                        print(f"    Year transition fix: preserving Dec {trading_date.year} = {stored_dec}% (scraped {scraped_dec}%)")
+                        new_monthly[prev_dec_key] = stored_dec
 
                 # Also preserve YTD if existing record has it (eToro resets YTD in January)
                 if existing and existing.gain_ytd != 0.0:
