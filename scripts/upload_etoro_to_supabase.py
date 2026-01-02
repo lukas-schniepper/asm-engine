@@ -21,11 +21,48 @@ def is_trading_day(check_date: date) -> bool:
     """
     Check if a given date is a US stock market trading day.
 
-    Returns False for weekends (Saturday, Sunday).
-    Note: Does not check for US market holidays.
+    Returns False for weekends and major US market holidays.
     """
+    # Check weekends
     if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
         return False
+
+    # Check major US market holidays (fixed dates)
+    # Note: Some holidays are observed on different days if they fall on weekend
+    month, day = check_date.month, check_date.day
+    year = check_date.year
+
+    # New Year's Day (Jan 1, or observed on Jan 2 if Jan 1 is Sunday)
+    if month == 1 and day == 1:
+        return False
+    if month == 1 and day == 2 and date(year, 1, 1).weekday() == 6:  # Sunday
+        return False
+
+    # Independence Day (July 4, or observed on July 3/5)
+    if month == 7 and day == 4:
+        return False
+    if month == 7 and day == 3 and date(year, 7, 4).weekday() == 5:  # Saturday
+        return False
+    if month == 7 and day == 5 and date(year, 7, 4).weekday() == 6:  # Sunday
+        return False
+
+    # Christmas (Dec 25, or observed on Dec 24/26)
+    if month == 12 and day == 25:
+        return False
+    if month == 12 and day == 24 and date(year, 12, 25).weekday() == 5:  # Saturday
+        return False
+    if month == 12 and day == 26 and date(year, 12, 25).weekday() == 6:  # Sunday
+        return False
+
+    # Thanksgiving (4th Thursday of November)
+    if month == 11:
+        # Find 4th Thursday
+        first_day = date(year, 11, 1)
+        first_thursday = (3 - first_day.weekday()) % 7 + 1
+        thanksgiving = first_thursday + 21  # 4th Thursday
+        if day == thanksgiving:
+            return False
+
     return True
 
 
@@ -123,6 +160,30 @@ def upload_to_supabase():
                 )
             ).first()
 
+            # Get previous record to preserve December during year transition
+            prev_record = session.exec(
+                select(EToroStats)
+                .where(EToroStats.username == username)
+                .where(EToroStats.scraped_date < trading_date)
+                .order_by(EToroStats.scraped_date.desc())
+                .limit(1)
+            ).first()
+
+            # Handle monthly_returns - preserve previous December value during year transition
+            # (eToro shows 0% for Dec in January before historical data is finalized)
+            new_monthly = inv.get('monthly_returns', {})
+            prev_dec_key = f"{trading_date.year - 1}-12"
+
+            if trading_date.month == 1 and prev_record:
+                old_monthly = prev_record.monthly_returns or {}
+                # Check if December shows 0% in new data but had a real value before
+                if (prev_dec_key in new_monthly and
+                    new_monthly[prev_dec_key] == 0.0 and
+                    prev_dec_key in old_monthly and
+                    old_monthly[prev_dec_key] != 0.0):
+                    print(f"    Year transition fix: preserving Dec {trading_date.year - 1} = {old_monthly[prev_dec_key]}% (scraped 0%)")
+                    new_monthly[prev_dec_key] = old_monthly[prev_dec_key]
+
             if existing:
                 # Update existing record
                 existing.full_name = inv.get('full_name', username)
@@ -134,7 +195,7 @@ def upload_to_supabase():
                 existing.gain_ytd = inv.get('gain_ytd', 0.0)
                 existing.win_ratio = inv.get('win_ratio', 50.0)
                 existing.profitable_months_pct = inv.get('profitable_months_pct', 50.0)
-                existing.monthly_returns = inv.get('monthly_returns', {})
+                existing.monthly_returns = new_monthly
                 session.add(existing)
                 print(f"  Updated existing record for {username}")
             else:
@@ -151,7 +212,7 @@ def upload_to_supabase():
                     gain_ytd=inv.get('gain_ytd', 0.0),
                     win_ratio=inv.get('win_ratio', 50.0),
                     profitable_months_pct=inv.get('profitable_months_pct', 50.0),
-                    monthly_returns=inv.get('monthly_returns', {}),
+                    monthly_returns=new_monthly,
                 )
                 session.add(stats)
                 print(f"  Created new record for {username}")
