@@ -460,7 +460,8 @@ def update_portfolio_nav(
 
         # PRE-FLIGHT CHECK: Compare share-based vs weight-based NAV
         # This catches data corruption where shares/weights are inconsistent
-        if prev_price_data and previous_raw_nav > 0:
+        # SKIP on first day - baseline assumptions differ (entry_price vs prev_prices)
+        if prev_price_data and previous_raw_nav > 0 and not is_first_day:
             weight_based_nav = _calculate_weight_based_nav(
                 holdings, price_data, prev_price_data, previous_raw_nav
             )
