@@ -375,7 +375,7 @@ class NAVAuditLog:
 
         try:
             with Session(engine) as session:
-                session.exec(text(create_sql))
+                session.execute(text(create_sql))
                 session.commit()
         except Exception as e:
             logger.debug(f"Audit table creation (may already exist): {e}")
@@ -411,7 +411,7 @@ class NAVAuditLog:
         try:
             with Session(engine) as session:
                 import json
-                session.exec(insert_sql, {
+                session.execute(insert_sql, {
                     "portfolio_id": portfolio_id,
                     "portfolio_name": portfolio_name,
                     "trade_date": trade_date,
