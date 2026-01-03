@@ -112,8 +112,19 @@ def register_portfolio_from_backtest(
                 }
                 holdings_with_weights.append(holding)
 
-            # Get current NAV (last value from backtest) and prices
-            current_nav = Decimal(str(nav_history.iloc[-1])) if not nav_history.empty else Decimal("100")
+            # CRITICAL: Always use INCEPTION_NAV (100) for initial share calculation
+            #
+            # The backtest's ending NAV (e.g., 150 after 50% returns) represents
+            # historical cumulative returns, NOT the starting point for live tracking.
+            #
+            # For live tracking, we normalize to NAV=100 at inception.
+            # Using the backtest NAV creates a mismatch:
+            # - Shares calculated for NAV=150 when tracking starts at NAV=100
+            # - Result: Immediate phantom NAV drop on first update!
+            #
+            # The backtest NAV history is still backfilled separately for reference,
+            # but share sizing MUST use the inception value (100).
+            INCEPTION_NAV = Decimal("100")
             effective_date = date.today()
 
             # Get prices for holdings
@@ -121,13 +132,15 @@ def register_portfolio_from_backtest(
             prices = _get_prices_for_tickers(tickers, effective_date)
 
             if prices:
-                # Calculate shares from weights using current NAV and prices
+                # Calculate shares from weights using INCEPTION NAV (always 100)
                 holdings_list = calculate_shares_from_weights(
-                    holdings_with_weights, current_nav, prices
+                    holdings_with_weights, INCEPTION_NAV, prices
                 )
+                backtest_ending_nav = nav_history.iloc[-1] if not nav_history.empty else 100
                 logger.info(
                     f"Calculated shares for {len(holdings_list)} holdings "
-                    f"with NAV={current_nav:.2f}"
+                    f"using inception NAV={INCEPTION_NAV} "
+                    f"(backtest ended at {backtest_ending_nav:.2f})"
                 )
             else:
                 # Fallback: record weights only (backward compatible)

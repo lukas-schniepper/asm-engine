@@ -105,20 +105,40 @@ def _ensure_holdings_have_shares(
     previous_nav: float,
     price_data: dict[str, float],
     trade_date: date,
+    previous_holdings: list = None,
 ) -> bool:
     """
     Ensure all holdings have shares populated.
 
     If any holdings are missing shares (from legacy data or new rebalance),
-    calculate them using previous NAV and current prices, then update in DB.
+    calculate them using MARK-TO-MARKET value of previous holdings
+    (NOT the stale previous_nav from database).
 
-    This enables proper buy-and-hold NAV calculation going forward.
+    NAV CONTINUITY PRINCIPLE:
+    =========================
+    When rebalancing, new shares must be sized to preserve the portfolio's
+    current market value. The previous_nav from database is STALE - it was
+    calculated at yesterday's prices. Today, old holdings may be worth more
+    or less due to market movements.
+
+    CORRECT FLOW:
+    1. Mark old holdings to market: old_value = sum(old_shares × today_prices)
+    2. Calculate new shares: new_shares = (weight × old_value) / today_price
+    3. Result: sum(new_shares × today_prices) = old_value (NAV preserved!)
+
+    Args:
+        tracker: PortfolioTracker instance
+        holdings: Current holdings (may have shares=None)
+        previous_nav: Previous day's NAV from database (STALE - use as fallback only)
+        price_data: Today's prices {ticker: price}
+        trade_date: Current trade date
+        previous_holdings: Previous day's holdings for mark-to-market calculation
 
     Returns:
         True if shares were calculated/updated, False if already populated
     """
     from decimal import Decimal
-    from AlphaMachine_core.tracking import calculate_shares_from_weights
+    from AlphaMachine_core.tracking import calculate_shares_from_weights, mark_to_market
 
     # Check if any holdings are missing shares
     holdings_missing_shares = [h for h in holdings if h.shares is None]
@@ -126,9 +146,60 @@ def _ensure_holdings_have_shares(
     if not holdings_missing_shares:
         return False  # All holdings have shares
 
+    # CRITICAL: Determine the correct NAV to use for share calculation
+    #
+    # Case 1: Rebalance with existing portfolio (previous_holdings has shares)
+    #         Use mark_to_market() to get today's actual value
+    #
+    # Case 2: Legacy data migration (previous holdings exist but no shares)
+    #         Fall back to previous_nav from database
+    #
+    # Case 3: First day of tracking (no previous holdings)
+    #         Use inception NAV of 100
+
+    nav_for_sizing = previous_nav  # Default fallback
+
+    if previous_holdings:
+        # Check if previous holdings have shares (can be marked to market)
+        prev_has_shares = any(h.shares is not None for h in previous_holdings)
+
+        if prev_has_shares:
+            # MARK TO MARKET: Calculate what old portfolio is worth TODAY
+            mtm_value = mark_to_market(previous_holdings, price_data)
+
+            if mtm_value > 0:
+                nav_for_sizing = mtm_value
+                # Log the difference - this is the "stale NAV" bug we're fixing!
+                if abs(mtm_value - previous_nav) > 0.01:
+                    pct_diff = ((mtm_value / previous_nav) - 1) * 100 if previous_nav > 0 else 0
+                    logger.info(
+                        f"NAV CONTINUITY FIX: stale previous_nav={previous_nav:.2f}, "
+                        f"mark_to_market={mtm_value:.2f} (diff: {pct_diff:+.2f}%). "
+                        f"Using MTM for share sizing."
+                    )
+            else:
+                # Could not mark to market (missing prices?) - fall back
+                logger.warning(
+                    f"Could not mark previous holdings to market (value=0). "
+                    f"Falling back to previous_nav={previous_nav:.2f}"
+                )
+        else:
+            # Previous holdings exist but have no shares (legacy)
+            logger.info(
+                f"Previous holdings have no shares (legacy data). "
+                f"Using previous_nav={previous_nav:.2f}"
+            )
+    else:
+        # No previous holdings - first day or data issue
+        if previous_nav <= 0:
+            nav_for_sizing = 100.0  # Inception NAV
+        logger.info(
+            f"No previous holdings found. Using NAV={nav_for_sizing:.2f}"
+        )
+
     logger.info(
         f"Found {len(holdings_missing_shares)} holdings without shares, "
-        f"calculating from weights using NAV={previous_nav:.2f}"
+        f"calculating from weights using NAV={nav_for_sizing:.2f}"
     )
 
     # Build weight-based holdings list
@@ -144,10 +215,10 @@ def _ensure_holdings_have_shares(
         if price is not None
     }
 
-    # Calculate shares
+    # Calculate shares using the correct NAV (mark-to-market value)
     holdings_with_shares = calculate_shares_from_weights(
         holdings_with_weights,
-        Decimal(str(previous_nav)),
+        Decimal(str(nav_for_sizing)),
         prices_decimal,
     )
 
@@ -374,9 +445,22 @@ def update_portfolio_nav(
             previous_raw_nav = prev_nav_df["nav"].iloc[-1]
             initial_nav = prev_nav_df["nav"].iloc[0]
 
+        # =====================================================================
+        # DETERMINE IF FIRST DAY (needed for several downstream decisions)
+        # =====================================================================
+        is_first_day = prev_nav_df.empty and all_nav_df.empty if 'all_nav_df' in dir() else prev_nav_df.empty
+
+        # Get previous holdings for mark-to-market calculation during rebalances
+        # This MUST happen BEFORE _ensure_holdings_have_shares() to support NAV continuity
+        prev_holdings = None
+        if not is_first_day:
+            prev_holdings = tracker.get_holdings(portfolio.id, trade_date - timedelta(days=1))
+
         # Ensure holdings have shares (for proper buy-and-hold NAV calculation)
+        # Pass previous_holdings so we can mark-to-market during rebalances
         shares_updated = _ensure_holdings_have_shares(
-            tracker, holdings, previous_raw_nav, price_data, trade_date
+            tracker, holdings, previous_raw_nav, price_data, trade_date,
+            previous_holdings=prev_holdings,
         )
 
         # If shares were just populated, reload holdings to get updated data
@@ -394,7 +478,6 @@ def update_portfolio_nav(
         #    This reflects ONLY price changes, not portfolio restructuring.
 
         daily_return_override = None
-        is_first_day = prev_nav_df.empty and all_nav_df.empty if 'all_nav_df' in dir() else prev_nav_df.empty
 
         # FIRST DAY: No previous NAV, so daily return must be 0
         if is_first_day:
@@ -402,8 +485,8 @@ def update_portfolio_nav(
             logger.info(f"FIRST DAY for {portfolio.name} - setting daily_return=0%")
 
         # REBALANCE DETECTION (only if not first day)
+        # Note: prev_holdings already fetched above for mark-to-market
         if not is_first_day:
-            prev_holdings = tracker.get_holdings(portfolio.id, trade_date - timedelta(days=1))
             is_rebalance, rebalance_reason = _detect_rebalance(holdings, prev_holdings)
 
             if is_rebalance:

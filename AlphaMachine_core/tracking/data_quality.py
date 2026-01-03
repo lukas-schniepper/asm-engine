@@ -250,6 +250,73 @@ class DataQualityValidator:
         self.alerts.extend(alerts)
         return is_valid, alerts
 
+    def validate_rebalance_nav_continuity(
+        self,
+        portfolio_name: str,
+        trade_date: date,
+        pre_rebalance_mtm: float,
+        post_rebalance_nav: float,
+        tolerance_pct: float = 0.5,
+    ) -> Tuple[bool, List[DataQualityAlert]]:
+        """
+        Validate that NAV is preserved across a rebalance.
+
+        After a rebalance, the new portfolio (valued at current prices)
+        should equal the old portfolio's mark-to-market value.
+
+        Any significant difference indicates a calculation error in
+        share sizing (the bug this validation catches).
+
+        Args:
+            portfolio_name: Name of portfolio
+            trade_date: Rebalance date
+            pre_rebalance_mtm: Old portfolio's mark-to-market value
+            post_rebalance_nav: New portfolio's NAV (sum of new_shares × prices)
+            tolerance_pct: Maximum allowed difference (default 0.5% for rounding)
+
+        Returns:
+            Tuple of (is_valid, alerts)
+        """
+        alerts = []
+        is_valid = True
+
+        if pre_rebalance_mtm <= 0:
+            return True, []  # Can't validate without pre-rebalance value
+
+        diff_pct = abs((post_rebalance_nav / pre_rebalance_mtm) - 1) * 100
+
+        if diff_pct > tolerance_pct:
+            # Determine severity based on magnitude
+            if diff_pct > 5.0:
+                severity = AlertSeverity.CRITICAL
+            elif diff_pct > 2.0:
+                severity = AlertSeverity.ERROR
+            else:
+                severity = AlertSeverity.WARNING
+
+            alerts.append(DataQualityAlert(
+                timestamp=datetime.now(),
+                severity=severity,
+                portfolio_name=portfolio_name,
+                trade_date=trade_date,
+                alert_type="REBALANCE_NAV_DISCONTINUITY",
+                message=(
+                    f"NAV discontinuity at rebalance: pre-rebalance MTM={pre_rebalance_mtm:.2f}, "
+                    f"post-rebalance NAV={post_rebalance_nav:.2f}, "
+                    f"difference={diff_pct:.2f}%"
+                ),
+                details={
+                    "pre_rebalance_mtm": pre_rebalance_mtm,
+                    "post_rebalance_nav": post_rebalance_nav,
+                    "difference_pct": diff_pct,
+                    "tolerance_pct": tolerance_pct,
+                },
+            ))
+            is_valid = False
+
+        self.alerts.extend(alerts)
+        return is_valid, alerts
+
     def validate_holdings_prices(
         self,
         portfolio_name: str,

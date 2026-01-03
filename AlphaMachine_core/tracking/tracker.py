@@ -106,6 +106,67 @@ def calculate_shares_from_weights(
     return result
 
 
+def mark_to_market(
+    holdings: list,
+    prices: dict[str, float],
+) -> float:
+    """
+    Calculate current market value of existing holdings.
+
+    CRITICAL for NAV continuity during rebalances:
+    - previous_raw_nav: Yesterday's NAV stored in database (STALE after market moves)
+    - mark_to_market(): TODAY's value at TODAY's prices (CURRENT)
+
+    When rebalancing, new shares must be sized using mark_to_market value,
+    NOT the stale previous_raw_nav. Otherwise:
+    - Day T-1: NAV=100 stored in DB
+    - Day T: Market +2%, old holdings worth 102
+    - BUG: Calculate new shares for NAV=100, not 102
+    - RESULT: Phantom -2% NAV drop!
+
+    Args:
+        holdings: List with 'shares' and 'ticker' attributes/keys
+                  (supports both PortfolioHolding objects and dicts)
+        prices: Current prices {ticker: price}
+
+    Returns:
+        Total market value, or 0.0 if no valid holdings
+
+    Example:
+        >>> old_holdings = [{"ticker": "AAPL", "shares": 10}, {"ticker": "MSFT", "shares": 5}]
+        >>> today_prices = {"AAPL": 153.0, "MSFT": 306.0}
+        >>> mtm = mark_to_market(old_holdings, today_prices)
+        >>> # mtm = 10*153 + 5*306 = 3060 (use this for new share sizing!)
+    """
+    if not holdings:
+        return 0.0
+
+    total_value = 0.0
+    holdings_valued = 0
+
+    for h in holdings:
+        # Support both PortfolioHolding objects and dicts
+        if hasattr(h, 'shares'):
+            shares = h.shares
+            ticker = h.ticker
+        else:
+            shares = h.get('shares')
+            ticker = h.get('ticker')
+
+        if shares is not None and ticker:
+            price = prices.get(ticker)
+            if price is not None and price > 0:
+                total_value += float(shares) * float(price)
+                holdings_valued += 1
+
+    if holdings_valued > 0:
+        logger.debug(
+            f"mark_to_market: valued {holdings_valued} holdings, total={total_value:.2f}"
+        )
+
+    return total_value
+
+
 class PortfolioTracker:
     """
     Main portfolio tracking engine.
