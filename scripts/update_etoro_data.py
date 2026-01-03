@@ -171,78 +171,134 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     pct_pattern = re.compile(r'^-?\d+\.?\d*%?$')
 
     # Look for consecutive month names (Dec Nov Oct ... Jan pattern)
+    # This is the header row in the Performance table
     if len(month_indices) >= 12:
-        # Find a sequence of months - they should appear consecutively or near each other
-        # eToro shows: Dec Nov Oct Sep Aug Jul Jun May Apr Mar Feb Jan
         expected_order = ['Dec', 'Nov', 'Oct', 'Sep', 'Aug', 'Jul', 'Jun', 'May', 'Apr', 'Mar', 'Feb', 'Jan']
 
-        # Find where the months start
         for start_idx, (line_idx, month_name) in enumerate(month_indices):
             if month_name == 'Dec':
-                # Found December, check if we have a full sequence
                 sequence_months = [m for _, m in month_indices[start_idx:start_idx+12]]
                 if sequence_months == expected_order:
-                    # Found the month sequence!
-                    # Now find the percentage values that follow
                     last_month_idx = month_indices[start_idx + 11][0]
 
-                    # Look for percentage values after the month headers
-                    # eToro often shows year totals (2025, 2024) before monthly values
-                    # We need to skip those and find exactly 12 monthly values
-                    pct_values = []
-                    for i in range(last_month_idx + 1, min(last_month_idx + 50, len(lines))):
+                    # NEW APPROACH: Group values by year label
+                    # eToro 2026 layout - year labels come AFTER the values for that year!
+                    #   [month headers: Dec Nov ... Jan]
+                    #   1.58% 1.58%          <- 2026 values (appear BEFORE "2026" label)
+                    #   2026                 <- year label marks END of 2026's row
+                    #   4.98% 1.49% 6.63% .. <- 2025 values (appear BEFORE "2025" label)
+                    #   2025                 <- year label marks END of 2025's row
+                    #   ...
+                    #
+                    # Within each year row: YTD first, then Dec, Nov, Oct, ..., Jan
+                    # (YTD on left in visual table, months right-to-left visually = Dec to Jan in text)
+
+                    # Collect segments: values between year labels
+                    segments = []  # [(year_label, [values])]
+                    current_values = []
+                    last_year_seen = None
+
+                    for i in range(last_month_idx + 1, min(last_month_idx + 100, len(lines))):
                         line = lines[i]
 
-                        # Skip year labels like "2025", "2024"
+                        # Detect year labels (4-digit years like 2026, 2025)
                         if line.isdigit() and len(line) == 4:
-                            continue
+                            year_int = int(line)
+                            if 2020 <= year_int <= 2030:
+                                # Save the segment that just ended
+                                if current_values:
+                                    segments.append((year_int, current_values))
+                                current_values = []
+                                last_year_seen = year_int
+                                continue
 
+                        # Stop if we hit another month header section
+                        if line in month_to_num:
+                            break
+
+                        # Collect percentage values
                         if pct_pattern.match(line):
                             val_str = line.replace('%', '')
                             try:
-                                pct_values.append(float(val_str))
-                                if len(pct_values) >= 14:  # Get extra to handle year totals
-                                    break
+                                val = float(val_str)
+                                current_values.append(val)
                             except ValueError:
                                 pass
-                        elif line in month_to_num:
-                            # Hit another month header, stop
+
+                    # Handle any remaining values
+                    if current_values and last_year_seen:
+                        segments.append((last_year_seen - 1, current_values))
+
+                    print(f"    Segments: {segments}")
+
+                    # Map values to year-month keys
+                    # Order within each year row: YTD, Dec, Nov, Oct, ..., Jan
+                    # So skip first value (YTD), then map Dec-first
+
+                    for year_label, values in segments:
+                        if not values:
+                            continue
+
+                        # Skip current year's segment - it's handled by pre-year values logic below
+                        # (In January 2026, the "2026" segment only has partial data)
+                        if year_label == current_year:
+                            print(f"    Skipping current year segment ({year_label}) - handled by pre-year logic")
+                            continue
+
+                        # Skip values that are clearly not monthly returns (like 100%)
+                        if len(values) == 1 and (values[0] > 50 or values[0] < -50):
+                            print(f"    Skipping segment for {year_label}: {values} (not monthly data)")
+                            continue
+
+                        # First value is YTD, rest are monthly in Dec, Nov, ..., Jan order
+                        if len(values) > 1:
+                            ytd = values[0]
+                            monthly_dec_first = values[1:]  # Skip YTD
+                            print(f"    Year {year_label}: YTD={ytd}, monthly={monthly_dec_first}")
+
+                            # Map to Dec, Nov, Oct, ..., Jan
+                            for i, month_name in enumerate(expected_order):
+                                if i < len(monthly_dec_first):
+                                    month_num = month_to_num[month_name]
+                                    month_key = f"{year_label}-{month_num}"
+                                    result['monthly_returns'][month_key] = monthly_dec_first[i]
+                        else:
+                            # Single value - might be partial year with just YTD
+                            print(f"    Year {year_label}: single value {values[0]} (YTD only?)")
+
+                    # Handle values before first year label (current year's partial data)
+                    # Re-scan to find values before first year label
+                    pre_year_values = []
+                    for i in range(last_month_idx + 1, min(last_month_idx + 100, len(lines))):
+                        line = lines[i]
+                        if line.isdigit() and len(line) == 4 and 2020 <= int(line) <= 2030:
+                            break  # Hit first year label
+                        if line in month_to_num:
                             break
+                        if pct_pattern.match(line):
+                            val_str = line.replace('%', '')
+                            try:
+                                pre_year_values.append(float(val_str))
+                            except ValueError:
+                                pass
 
-                    # Debug: print what we found
-                    print(f"    Found {len(pct_values)} percentage values: {pct_values[:14]}")
+                    if pre_year_values:
+                        print(f"    Pre-year values (current year {current_year}): {pre_year_values}")
+                        # These are the current year's values
+                        # Format: Jan value(s), then YTD (for partial year)
+                        # In January 2026: [1.58, 1.58] = [Jan, YTD]
+                        if len(pre_year_values) >= 1:
+                            # First value is Jan (current month)
+                            for i in range(min(current_month, len(pre_year_values) - 1)):
+                                month_num = f"{i + 1:02d}"
+                                month_key = f"{current_year}-{month_num}"
+                                result['monthly_returns'][month_key] = pre_year_values[i]
+                                month_name = list(month_to_num.keys())[list(month_to_num.values()).index(month_num)]
+                                print(f"      Mapped {current_year}-{month_name} ({month_key}): {pre_year_values[i]}")
 
-                    # eToro shows: [2025 YTD, Dec, Nov, Oct, ..., Jan, 2024 YTD, ...]
-                    # We need exactly 12 months: Dec through Jan
-                    # If we have 14 values: skip first (2025 YTD) and take next 12
-                    # If we have 13 values: skip first (2025 YTD) and take next 12
-                    if len(pct_values) > 12:
-                        print(f"    Skipping first value: {pct_values[0]} (likely year total)")
-                        pct_values = pct_values[1:13]  # Take elements 1-12 (Dec through Jan)
-                        print(f"    Using 12 monthly values: {pct_values}")
-
-                    if len(pct_values) >= 12:
-                        # Map percentages to months
-                        for i, month_name in enumerate(expected_order):
-                            if i < len(pct_values):
-                                month_num = month_to_num[month_name]
-                                # Determine year: if we're in Dec and month is Jan-Nov, it's current year
-                                # Dec is from the rolling 12-month view
-                                if month_name == 'Dec':
-                                    # December: if current month is Dec, it's current year; else last year
-                                    year = current_year if current_month == 12 else current_year - 1
-                                else:
-                                    # For Jan-Nov: if month is <= current month, it's current year
-                                    # Otherwise it's from last year
-                                    month_int = int(month_num)
-                                    if month_int <= current_month:
-                                        year = current_year
-                                    else:
-                                        year = current_year - 1
-
-                                month_key = f"{year}-{month_num}"
-                                result['monthly_returns'][month_key] = pct_values[i]
-                        break
+                    if result['monthly_returns']:
+                        print(f"    Successfully parsed {len(result['monthly_returns'])} monthly returns")
+                    break
 
     # Fallback: if Strategy 1 didn't work, try simpler approach
     if not result['monthly_returns']:
