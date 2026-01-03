@@ -223,9 +223,10 @@ def _ensure_holdings_have_shares(
     )
 
     # Update holdings in database with calculated shares
-    from sqlmodel import Session
+    from sqlmodel import Session, select
     from AlphaMachine_core.db import engine
     from AlphaMachine_core.tracking.models import PortfolioHolding
+    from AlphaMachine_core.models import PriceData
 
     with Session(engine) as session:
         for h_orig, h_new in zip(holdings_missing_shares, holdings_with_shares):
@@ -234,10 +235,42 @@ def _ensure_holdings_have_shares(
                 db_holding = session.get(PortfolioHolding, h_orig.id)
                 if db_holding:
                     db_holding.shares = h_new["shares"]
-                    db_holding.entry_price = h_new.get("entry_price")
+
+                    # CRITICAL FIX: Use effective_date prices for entry_price, not today's!
+                    # Holdings registered on a non-trading day (e.g., Jan 1) should have
+                    # entry_price set to the PREVIOUS trading day's close (e.g., Dec 31),
+                    # not the next trading day's prices (which would be the current trade_date).
+                    #
+                    # This ensures GIPS-compliant returns: close-to-close of trading days.
+                    if h_orig.effective_date == trade_date:
+                        # Same-day registration: use today's prices (correct)
+                        db_holding.entry_price = h_new.get("entry_price")
+                    else:
+                        # Legacy/previous date registration: fetch prices from effective_date
+                        # (or previous trading day if effective_date is a non-trading day)
+                        stmt = (
+                            select(PriceData)
+                            .where(PriceData.ticker == h_orig.ticker)
+                            .where(PriceData.trade_date <= h_orig.effective_date)
+                            .order_by(PriceData.trade_date.desc())
+                            .limit(1)
+                        )
+                        eff_date_price = session.exec(stmt).first()
+                        if eff_date_price:
+                            db_holding.entry_price = Decimal(str(
+                                eff_date_price.adjusted_close or eff_date_price.close
+                            ))
+                            logger.debug(
+                                f"Using effective_date ({h_orig.effective_date}) price "
+                                f"for {h_orig.ticker} entry_price: {db_holding.entry_price}"
+                            )
+                        else:
+                            # Fallback to today's prices if no historical price found
+                            db_holding.entry_price = h_new.get("entry_price")
+
                     logger.debug(
                         f"Updated {h_orig.ticker}: shares={h_new['shares']:.6f}, "
-                        f"entry_price={h_new.get('entry_price')}"
+                        f"entry_price={db_holding.entry_price}"
                     )
         session.commit()
 
