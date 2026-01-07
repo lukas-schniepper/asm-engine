@@ -185,7 +185,9 @@ class StockDataManager:
             last_date = last_dates.get(ticker)
             start_date = (last_date + dt.timedelta(days=1)) if last_date else history_dt
 
-            if start_date > today:
+            if start_date >= today:
+                # Skip if start_date is today or future - data won't be available yet
+                # (EODHD only provides end-of-day data after market close)
                 ticker_details[ticker] = {'status': 'skipped', 'reason': 'Already up-to-date'}
                 self.skipped_tickers.append(ticker)
             else:

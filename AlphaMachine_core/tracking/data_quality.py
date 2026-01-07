@@ -761,3 +761,123 @@ def get_audit_log() -> NAVAuditLog:
     if _audit_log is None:
         _audit_log = NAVAuditLog()
     return _audit_log
+
+
+def get_portfolio_critical_tickers() -> Dict[int, Dict[str, any]]:
+    """
+    Get all tickers currently held in active portfolios.
+
+    These are "critical" tickers because NAV calculation will fail
+    if any of them are missing price data.
+
+    Returns:
+        Dict mapping portfolio_id -> {
+            "name": portfolio name,
+            "tickers": list of ticker symbols
+        }
+    """
+    from .models import PortfolioDefinition, PortfolioHolding
+
+    result = {}
+
+    with Session(engine) as session:
+        # Get active portfolios
+        portfolios = session.exec(
+            select(PortfolioDefinition)
+            .where(PortfolioDefinition.is_active == True)
+        ).all()
+
+        for portfolio in portfolios:
+            # Get current holdings for this portfolio (most recent effective_date)
+            holdings = session.exec(
+                select(PortfolioHolding)
+                .where(PortfolioHolding.portfolio_id == portfolio.id)
+                .order_by(PortfolioHolding.effective_date.desc())
+            ).all()
+
+            if holdings:
+                # Get unique tickers from current holdings
+                # (all holdings with the same most recent effective_date)
+                current_date = holdings[0].effective_date
+                current_tickers = list(set(
+                    h.ticker for h in holdings
+                    if h.effective_date == current_date
+                ))
+
+                if current_tickers:
+                    result[portfolio.id] = {
+                        "name": portfolio.name,
+                        "tickers": sorted(current_tickers),
+                    }
+
+    return result
+
+
+def validate_portfolio_prices(trade_date: date) -> Dict[str, any]:
+    """
+    Validate that all portfolio-critical tickers have prices for the given date.
+
+    This is a pre-flight check to ensure NAV calculation won't fail due
+    to missing price data.
+
+    Args:
+        trade_date: The trading day to validate prices for
+
+    Returns:
+        {
+            "all_valid": bool - True if all critical tickers have prices,
+            "missing": [
+                {"portfolio_id": int, "portfolio_name": str, "ticker": str}
+            ],
+            "total_portfolios": int,
+            "total_tickers": int,
+            "validated_date": str
+        }
+    """
+    from ..models import PriceData
+
+    critical_tickers = get_portfolio_critical_tickers()
+
+    if not critical_tickers:
+        return {
+            "all_valid": True,
+            "missing": [],
+            "total_portfolios": 0,
+            "total_tickers": 0,
+            "validated_date": str(trade_date),
+        }
+
+    # Collect all unique tickers across portfolios
+    all_tickers = set()
+    for info in critical_tickers.values():
+        all_tickers.update(info["tickers"])
+
+    # Query for prices on trade_date
+    with Session(engine) as session:
+        prices_on_date = session.exec(
+            select(PriceData.ticker)
+            .where(PriceData.trade_date == trade_date)
+            .where(PriceData.ticker.in_(list(all_tickers)))
+        ).all()
+
+    tickers_with_prices = set(prices_on_date)
+    tickers_missing = all_tickers - tickers_with_prices
+
+    # Build missing list with portfolio context
+    missing_list = []
+    for portfolio_id, info in critical_tickers.items():
+        for ticker in info["tickers"]:
+            if ticker in tickers_missing:
+                missing_list.append({
+                    "portfolio_id": portfolio_id,
+                    "portfolio_name": info["name"],
+                    "ticker": ticker,
+                })
+
+    return {
+        "all_valid": len(missing_list) == 0,
+        "missing": missing_list,
+        "total_portfolios": len(critical_tickers),
+        "total_tickers": len(all_tickers),
+        "validated_date": str(trade_date),
+    }

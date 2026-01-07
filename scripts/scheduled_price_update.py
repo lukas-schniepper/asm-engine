@@ -6,16 +6,20 @@ Updates all ticker prices in the database automatically
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 # Add parent directory to path to import AlphaMachine modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from AlphaMachine_core.data_manager import StockDataManager
-from AlphaMachine_core.models import TickerPeriod
+from AlphaMachine_core.models import TickerPeriod, PriceData
 from AlphaMachine_core.db import get_session
-from sqlmodel import select
+from AlphaMachine_core.tracking.data_quality import (
+    get_portfolio_critical_tickers,
+    validate_portfolio_prices,
+)
+from sqlmodel import select, func
 
 
 def main():
@@ -94,6 +98,66 @@ def main():
                 detail = result.get('details', {}).get(ticker, {})
                 reason = detail.get('reason', 'Unknown reason')
                 print(f"  ⏭️  {ticker}: {reason}")
+
+        # =====================================================================
+        # PORTFOLIO-CRITICAL PRICE VALIDATION
+        # =====================================================================
+        # Validate that all tickers held in active portfolios have prices
+        # for the most recent trading day. This prevents NAV calculation failures.
+        print(f"\n{'='*80}")
+        print("🔍 Validating Portfolio-Critical Prices")
+        print(f"{'='*80}")
+
+        # Determine the most recent trading day with price data
+        # (This is the date we should validate, not "yesterday" which might be a weekend)
+        with get_session() as session:
+            latest_date = session.exec(
+                select(func.max(PriceData.trade_date))
+            ).first()
+
+        if latest_date:
+            print(f"📅 Latest price date in database: {latest_date}")
+
+            # Get portfolio-critical tickers info
+            critical_info = get_portfolio_critical_tickers()
+            total_portfolios = len(critical_info)
+            total_tickers = sum(len(info["tickers"]) for info in critical_info.values())
+
+            print(f"📊 Active portfolios: {total_portfolios}")
+            print(f"🎯 Portfolio-critical tickers: {total_tickers}")
+
+            # Validate prices for the latest date
+            validation = validate_portfolio_prices(latest_date)
+
+            if validation["all_valid"]:
+                print(f"✅ All {total_tickers} portfolio-critical tickers have prices for {latest_date}")
+            else:
+                print(f"\n{'='*80}")
+                print("❌ CRITICAL: Missing prices for portfolio holdings!")
+                print(f"{'='*80}")
+
+                # Group missing by portfolio for cleaner output
+                missing_by_portfolio = {}
+                for m in validation["missing"]:
+                    pname = m["portfolio_name"]
+                    if pname not in missing_by_portfolio:
+                        missing_by_portfolio[pname] = []
+                    missing_by_portfolio[pname].append(m["ticker"])
+
+                for pname, tickers in missing_by_portfolio.items():
+                    print(f"\n  📁 {pname}:")
+                    for ticker in tickers:
+                        print(f"      ❌ {ticker}")
+
+                print(f"\n{'='*80}")
+                print(f"⚠️  {len(validation['missing'])} portfolio-critical tickers are missing prices!")
+                print("These portfolios will fail NAV calculation until prices are available.")
+                print(f"{'='*80}\n")
+
+                # Exit with error to fail the workflow
+                sys.exit(1)
+        else:
+            print("⚠️  No price data in database - skipping validation")
 
         print(f"\n{'='*80}")
         print(f"✅ Scheduled update completed successfully!")
