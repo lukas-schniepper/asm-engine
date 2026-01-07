@@ -462,9 +462,13 @@ class NAVAuditLog:
         """Log a NAV change to the audit trail."""
         from sqlalchemy import text
 
+        # Convert numpy types to native Python floats for database compatibility
+        prev_nav_float = float(previous_nav) if previous_nav is not None else None
+        new_nav_float = float(new_nav)
+
         change_pct = None
-        if previous_nav and previous_nav > 0:
-            change_pct = ((new_nav / previous_nav) - 1) * 100
+        if prev_nav_float and prev_nav_float > 0:
+            change_pct = ((new_nav_float / prev_nav_float) - 1) * 100
 
         insert_sql = text("""
             INSERT INTO nav_audit_log
@@ -483,8 +487,8 @@ class NAVAuditLog:
                     "portfolio_name": portfolio_name,
                     "trade_date": trade_date,
                     "variant": variant,
-                    "previous_nav": previous_nav,
-                    "new_nav": new_nav,
+                    "previous_nav": prev_nav_float,
+                    "new_nav": new_nav_float,
                     "change_pct": change_pct,
                     "source": source,
                     "reason": reason,

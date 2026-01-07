@@ -871,8 +871,17 @@ class PortfolioTracker:
                 .where(PortfolioMetric.period_start == period_start)
             ).first()
 
-            def to_decimal(val):
-                return Decimal(str(val)) if val is not None else None
+            def to_decimal(val, max_abs=9999.999999):
+                """Convert to Decimal, capping at database column limit (10,6)."""
+                if val is None:
+                    return None
+                # Cap to avoid numeric overflow (column is DECIMAL(10,6))
+                val_float = float(val)
+                if val_float > max_abs:
+                    val_float = max_abs
+                elif val_float < -max_abs:
+                    val_float = -max_abs
+                return Decimal(str(val_float))
 
             if existing:
                 existing.period_end = period_end
