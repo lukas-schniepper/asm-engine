@@ -21,6 +21,44 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Cached Data Fetching Functions
+# =============================================================================
+# These functions wrap tracker methods with Streamlit caching for performance.
+# TTL of 300 seconds (5 minutes) balances freshness with performance.
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_nav_series(portfolio_id: int, variant: str, start_date, end_date):
+    """Cached wrapper for _cached_get_nav_series()."""
+    from ..tracking import get_tracker
+    tracker = get_tracker()
+    return _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_nav_date_range(portfolio_id: int, variant: str):
+    """Cached wrapper for tracker.get_nav_date_range()."""
+    from ..tracking import get_tracker
+    tracker = get_tracker()
+    return tracker.get_nav_date_range(portfolio_id, variant)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_holdings(portfolio_id: int, query_date):
+    """Cached wrapper for tracker.get_holdings()."""
+    from ..tracking import get_tracker
+    tracker = get_tracker()
+    return tracker.get_holdings(portfolio_id, query_date)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_list_portfolios_with_nav_data(active_only: bool = True):
+    """Cached wrapper for tracker.list_portfolios_with_nav_data()."""
+    from ..tracking import get_tracker
+    tracker = get_tracker()
+    return tracker.list_portfolios_with_nav_data(active_only=active_only)
+
+
 def show_performance_tracker_ui():
     """
     Main entry point for the Performance Tracker page.
@@ -118,13 +156,11 @@ def _render_performance_tracker():
     def clean_display_name(name: str) -> str:
         return name.replace("_EqualWeight", "").replace("_", " ")
 
-    # Filter to only portfolios with NAV data
-    sorted_portfolios = sorted(portfolios, key=lambda x: x.name)
-    portfolios_with_data = []
-    for p in sorted_portfolios:
-        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
-        if not nav_df.empty:
-            portfolios_with_data.append(p)
+    # Filter to only portfolios with NAV data (single efficient query)
+    portfolios_with_data = sorted(
+        _cached_list_portfolios_with_nav_data(active_only=True),
+        key=lambda x: x.name
+    )
 
     if not portfolios_with_data:
         st.warning(
@@ -155,14 +191,11 @@ def _render_performance_tracker():
     st.sidebar.markdown("---")
     st.sidebar.subheader("Date Range")
 
-    # Get available date range from NAV data
-    raw_nav_df = tracker.get_nav_series(selected_portfolio_id, Variants.RAW)
-    if raw_nav_df.empty:
+    # Get available date range from NAV data (efficient - single aggregate query)
+    min_date, max_date = _cached_get_nav_date_range(selected_portfolio_id, Variants.RAW)
+    if min_date is None or max_date is None:
         st.warning(f"No NAV data found for portfolio '{selected_portfolio_name}'.")
         return
-
-    min_date = raw_nav_df.index.min().date()
-    max_date = raw_nav_df.index.max().date()
 
     col1, col2 = st.sidebar.columns(2)
     start_date = col1.date_input(
@@ -197,7 +230,7 @@ def _render_performance_tracker():
     # Load NAV data for selected variants
     nav_data = {}
     for variant in selected_variants:
-        nav_df = tracker.get_nav_series(
+        nav_df = _cached_get_nav_series(
             selected_portfolio_id, variant, start_date, end_date
         )
         if not nav_df.empty:
@@ -454,7 +487,7 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
             institutional_data = []
 
             for variant in variants:
-                nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+                nav_df = _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
                 if nav_df.empty or "nav" not in nav_df.columns:
                     continue
 
@@ -722,7 +755,7 @@ def _render_benchmark_comparison_tab(
     )
 
     # Get portfolio NAV data
-    nav_df = tracker.get_nav_series(
+    nav_df = _cached_get_nav_series(
         portfolio_id, variant_for_comparison, start_date, end_date
     )
 
@@ -1118,7 +1151,7 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
         return
 
     for variant in overlay_variants:
-        nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+        nav_df = _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
 
         if nav_df.empty or "equity_allocation" not in nav_df.columns:
             continue
@@ -1634,23 +1667,17 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     st.markdown("### Multi-Portfolio Returns Comparison")
     st.markdown("Compare returns across multiple portfolios with expandable month/day details.")
 
-    # Get all portfolios
-    all_portfolios = tracker.list_portfolios(active_only=True)
+    # Get portfolios with NAV data (single efficient query with caching)
+    portfolios_with_nav = _cached_list_portfolios_with_nav_data(active_only=True)
 
-    if not all_portfolios:
-        st.warning("No portfolios available.")
+    if not portfolios_with_nav:
+        st.warning("No portfolios with NAV data available.")
         return
 
     # Sort portfolios alphabetically
-    all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
+    all_portfolios_sorted = sorted(portfolios_with_nav, key=lambda x: x.name)
     portfolio_options = {p.name: p.id for p in all_portfolios_sorted}
-
-    # Filter to only portfolios with NAV data
-    portfolios_with_data = []
-    for p in all_portfolios_sorted:
-        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
-        if not nav_df.empty:
-            portfolios_with_data.append(p.name)
+    portfolios_with_data = [p.name for p in all_portfolios_sorted]
 
     # Function to clean portfolio names for display (remove _EqualWeight suffix)
     def clean_portfolio_name(name: str) -> str:
@@ -1715,7 +1742,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     for portfolio_name in selected_portfolio_names:
         portfolio_id = portfolio_options[portfolio_name]
         for variant in selected_variants:
-            nav_df = tracker.get_nav_series(portfolio_id, variant)
+            nav_df = _cached_get_nav_series(portfolio_id, variant)
             if not nav_df.empty:
                 all_min_dates.append(nav_df.index.min().date())
                 all_max_dates.append(nav_df.index.max().date())
@@ -1772,7 +1799,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         portfolio_data[portfolio_name] = {}
 
         for variant in selected_variants:
-            nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+            nav_df = _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
 
             if nav_df.empty:
                 continue
@@ -2007,7 +2034,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
         for variant in selected_variants:
             col_name = f"{clean_pname} {variant_abbrev.get(variant, variant)}"
-            nav_df = tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
+            nav_df = _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
 
             if nav_df.empty:
                 corr_diagnostics.append({
@@ -2215,7 +2242,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 
         for month_label, holdings_date in sector_months:
             # Get holdings for this month using a date within the selected range
-            holdings = tracker.get_holdings(portfolio_id, holdings_date)
+            holdings = _cached_get_holdings(portfolio_id, holdings_date)
 
             if holdings:
                 # Calculate sector weights
@@ -2360,26 +2387,20 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     st.markdown("### Daily Returns - Scraper View")
     st.markdown("Daily performance percentage for all portfolios (similar to Google Sheets view).")
 
-    # Get all portfolios
-    all_portfolios = tracker.list_portfolios(active_only=True)
+    # Get portfolios with NAV data (single efficient query with caching)
+    portfolios_with_nav = _cached_list_portfolios_with_nav_data(active_only=True)
 
-    if not all_portfolios:
-        st.warning("No portfolios available.")
+    if not portfolios_with_nav:
+        st.warning("No portfolios with NAV data available.")
         return
 
     # Sort portfolios alphabetically
-    all_portfolios_sorted = sorted(all_portfolios, key=lambda x: x.name)
+    all_portfolios_sorted = sorted(portfolios_with_nav, key=lambda x: x.name)
+    portfolios_with_data = [p.name for p in all_portfolios_sorted]
 
     # Helper to clean portfolio name
     def clean_name(name: str) -> str:
         return name.replace("_EqualWeight", "").replace("_", " ")
-
-    # Filter to only portfolios with NAV data
-    portfolios_with_data = []
-    for p in all_portfolios_sorted:
-        nav_df = tracker.get_nav_series(p.id, Variants.RAW)
-        if not nav_df.empty:
-            portfolios_with_data.append(p.name)
 
     if not portfolios_with_data:
         st.warning("No portfolios with NAV data available.")
@@ -2453,7 +2474,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     returns_data = {}
 
     for portfolio in filtered_portfolios:
-        nav_df = tracker.get_nav_series(portfolio.id, selected_variant, start_date, end_date)
+        nav_df = _cached_get_nav_series(portfolio.id, selected_variant, start_date, end_date)
 
         if nav_df.empty:
             continue
@@ -2729,7 +2750,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
             # which may be after the 1st, so querying for day 1 could return previous month)
             for month_start in month_dates:
                 query_date = min(month_start.replace(day=15), end_date)
-                month_holdings = tracker.get_holdings(portfolio_obj.id, query_date)
+                month_holdings = _cached_get_holdings(portfolio_obj.id, query_date)
                 if month_holdings:
                     month_tickers = set(h.ticker for h in month_holdings)
                     all_tickers.update(month_tickers)
@@ -2743,7 +2764,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     }
 
             # Also get end_date holdings in case of recent rebalance
-            end_holdings = tracker.get_holdings(portfolio_obj.id, end_date)
+            end_holdings = _cached_get_holdings(portfolio_obj.id, end_date)
             if end_holdings:
                 all_tickers.update(h.ticker for h in end_holdings)
                 eff_date = end_holdings[0].effective_date
@@ -3005,11 +3026,20 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                     col_weights = get_weights_for_date(col_date)  # Same as drift!
                                     active_tickers = get_active_tickers_for_date(col_date)  # Same as drift!
 
+                                    # NORMALIZE weights to sum to 100% (just like drift code does)
+                                    # This is needed because ticker_df may include tickers from other months
+                                    # that aren't in current holdings (e.g., CDE, HBM showing 0% weight)
+                                    total_weight = sum(col_weights.get(t, 0) for t in ticker_df.index if t in active_tickers)
+                                    if total_weight > 0:
+                                        normalized_weights = {t: col_weights.get(t, 0) / total_weight for t in ticker_df.index}
+                                    else:
+                                        normalized_weights = col_weights
+
                                     weighted_return = 0.0
                                     for ticker in ticker_df.index:
                                         ret = ticker_df.loc[ticker, col]
                                         if pd.notna(ret) and ticker in active_tickers:
-                                            weighted_return += col_weights.get(ticker, 0) * ret
+                                            weighted_return += normalized_weights.get(ticker, 0) * ret
 
                                     daily_portfolio_returns[col] = weighted_return
                                     portfolio_total[col] = weighted_return
