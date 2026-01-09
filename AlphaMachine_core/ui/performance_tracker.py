@@ -2988,39 +2988,27 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                         portfolio_total[month_col] = 0.0
 
                             else:
-                                # FIXED WEIGHTS CALCULATION (simplified)
-                                # Build monthly_weights directly from month_dates - avoids complex effective_date lookup
+                                # FIXED WEIGHTS CALCULATION
+                                # Use SAME weight source as drift (get_weights_for_date) for consistency
                                 # Key insight: compound(A+B) ≠ compound(A) + compound(B)
                                 # So we must compound daily portfolio returns, not weight monthly ticker returns
-
-                                # Build monthly_weights: map each month to its holdings weights
-                                monthly_weights = {}
-                                for month_start in month_dates:
-                                    query_date = min(month_start.replace(day=15), end_date)
-                                    mh = tracker.get_holdings(portfolio_obj.id, query_date)
-                                    if mh:
-                                        month_key = month_start.strftime("%Y-%m")
-                                        monthly_weights[month_key] = {
-                                            h.ticker: float(h.weight) if h.weight else 0
-                                            for h in mh
-                                        }
 
                                 # Separate daily and monthly total columns
                                 daily_cols = [c for c in ticker_df.columns if "Total" not in c]
                                 monthly_cols = [c for c in ticker_df.columns if "Total" in c]
                                 daily_cols_sorted = sorted(daily_cols, key=lambda x: datetime.strptime(x, "%Y-%m-%d"))
 
-                                # Calculate daily portfolio returns using month-appropriate weights
+                                # Calculate daily portfolio returns using SAME helpers as drift
                                 daily_portfolio_returns = {}
                                 for col in daily_cols_sorted:
                                     col_date = datetime.strptime(col, "%Y-%m-%d").date()
-                                    month_key = col_date.strftime("%Y-%m")
-                                    col_weights = monthly_weights.get(month_key, {})
+                                    col_weights = get_weights_for_date(col_date)  # Same as drift!
+                                    active_tickers = get_active_tickers_for_date(col_date)  # Same as drift!
 
                                     weighted_return = 0.0
                                     for ticker in ticker_df.index:
                                         ret = ticker_df.loc[ticker, col]
-                                        if pd.notna(ret) and ticker in col_weights:
+                                        if pd.notna(ret) and ticker in active_tickers:
                                             weighted_return += col_weights.get(ticker, 0) * ret
 
                                     daily_portfolio_returns[col] = weighted_return
