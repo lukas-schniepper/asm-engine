@@ -2694,6 +2694,15 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
         key="scraper_view_ticker_portfolio",
     )
 
+    # Drift toggle - controls how Portfolio Total is calculated
+    include_drift = st.checkbox(
+        "Include weight drift in Portfolio Total",
+        value=False,
+        help="When enabled, weights adjust daily based on price changes (matches NAV calculation). "
+             "When disabled, uses fixed start-of-period weights for simpler analysis.",
+        key="ticker_view_include_drift",
+    )
+
     if ticker_portfolio:
         # Get portfolio object
         portfolio_obj = next((p for p in all_portfolios_sorted if p.name == ticker_portfolio), None)
@@ -2702,6 +2711,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
             # This ensures we show the correct tickers for each period (handles rebalances)
             all_tickers = set()
             holdings_by_date = {}  # date -> set of tickers active on that date
+            weights_by_date = {}   # date -> dict of {ticker: weight} for that period
 
             # Get first day of each month in the range
             current = start_date.replace(day=1)
@@ -2723,6 +2733,11 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     # Get effective_date to know when these holdings are valid
                     eff_date = month_holdings[0].effective_date
                     holdings_by_date[eff_date] = month_tickers
+                    # Store weights for this period (used for Portfolio Total calculation)
+                    weights_by_date[eff_date] = {
+                        h.ticker: float(h.weight) if h.weight else 0
+                        for h in month_holdings
+                    }
 
             # Also get end_date holdings in case of recent rebalance
             end_holdings = tracker.get_holdings(portfolio_obj.id, end_date)
@@ -2730,6 +2745,10 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                 all_tickers.update(h.ticker for h in end_holdings)
                 eff_date = end_holdings[0].effective_date
                 holdings_by_date[eff_date] = set(h.ticker for h in end_holdings)
+                weights_by_date[eff_date] = {
+                    h.ticker: float(h.weight) if h.weight else 0
+                    for h in end_holdings
+                }
 
             # Convert to sorted lists
             tickers = sorted(all_tickers)
@@ -2751,6 +2770,17 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                     else:
                         break
                 return holdings_by_date.get(active_eff, set()) if active_eff else set()
+
+            def get_weights_for_date(trade_date):
+                """Get the weights that were active on a given date."""
+                # Find the most recent effective_date <= trade_date
+                active_eff = None
+                for eff in effective_dates_sorted:
+                    if eff <= trade_date:
+                        active_eff = eff
+                    else:
+                        break
+                return weights_by_date.get(active_eff, {}) if active_eff else {}
 
             if tickers:
 
@@ -2864,14 +2894,128 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                             ticker_df.columns = [ticker_date_to_field.get(c, str(c)) for c in ticker_df.columns]
 
                             # Add Portfolio Total row (weighted sum of returns)
+                            # Use date-appropriate weights for each column
+                            import re
                             portfolio_total = {}
-                            for col in ticker_df.columns:
-                                weighted_sum = 0.0
-                                for ticker in ticker_df.index:
-                                    ret = ticker_df.loc[ticker, col]
-                                    if pd.notna(ret):
-                                        weighted_sum += weights.get(ticker, 0) * ret
-                                portfolio_total[col] = weighted_sum
+
+                            if include_drift:
+                                # DRIFT-ADJUSTED CALCULATION
+                                # Weights update daily based on price changes (matches NAV calculation)
+                                # This simulates buy-and-hold where shares are fixed but weights drift
+
+                                # Separate daily and monthly total columns
+                                daily_cols = []
+                                monthly_cols = []
+                                for col in ticker_df.columns:
+                                    if "Total" in col:
+                                        monthly_cols.append(col)
+                                    else:
+                                        daily_cols.append(col)
+
+                                # Sort daily columns chronologically
+                                daily_cols_sorted = sorted(daily_cols, key=lambda x: datetime.strptime(x, "%Y-%m-%d"))
+
+                                # Track "value" for each ticker (simulates shares × price)
+                                # Reset at each rebalance period
+                                current_eff_date = None
+                                values = {}  # ticker -> current value (starts at weight)
+                                daily_portfolio_returns = {}  # col -> portfolio return
+
+                                for col in daily_cols_sorted:
+                                    col_date = datetime.strptime(col, "%Y-%m-%d").date()
+
+                                    # Check if we need to reset values for new rebalance period
+                                    active_tickers = get_active_tickers_for_date(col_date)
+                                    period_weights = get_weights_for_date(col_date)
+
+                                    # Find the effective date for this period
+                                    eff_for_date = None
+                                    for eff in effective_dates_sorted:
+                                        if eff <= col_date:
+                                            eff_for_date = eff
+                                        else:
+                                            break
+
+                                    # Reset values if entering new rebalance period
+                                    if eff_for_date != current_eff_date:
+                                        current_eff_date = eff_for_date
+                                        values = {t: period_weights.get(t, 0) for t in ticker_df.index}
+
+                                    # Calculate portfolio return using current weights
+                                    total_value = sum(values.values())
+                                    if total_value > 0:
+                                        current_weights = {t: v / total_value for t, v in values.items()}
+                                    else:
+                                        current_weights = period_weights
+
+                                    weighted_return = 0.0
+                                    for ticker in ticker_df.index:
+                                        ret = ticker_df.loc[ticker, col]
+                                        if pd.notna(ret) and ticker in active_tickers:
+                                            weighted_return += current_weights.get(ticker, 0) * ret
+                                            # Update value for next day
+                                            values[ticker] = values.get(ticker, 0) * (1 + ret)
+
+                                    daily_portfolio_returns[col] = weighted_return
+                                    portfolio_total[col] = weighted_return
+
+                                # Calculate monthly totals by compounding daily drift-adjusted returns
+                                for month_col in monthly_cols:
+                                    month_match = re.match(r'(\w+)\s+(\d+)\s+Total', month_col)
+                                    if month_match:
+                                        month_name, year = month_match.groups()
+                                        month_key = pd.Timestamp(f"{month_name} 1, {year}").strftime("%Y-%m")
+
+                                        # Get daily returns for this month
+                                        month_daily_returns = []
+                                        for col in daily_cols_sorted:
+                                            if col.startswith(month_key):
+                                                if col in daily_portfolio_returns:
+                                                    month_daily_returns.append(daily_portfolio_returns[col])
+
+                                        if month_daily_returns:
+                                            # Compound the daily returns
+                                            compounded = 1.0
+                                            for r in month_daily_returns:
+                                                compounded *= (1 + r)
+                                            portfolio_total[month_col] = compounded - 1
+                                        else:
+                                            portfolio_total[month_col] = 0.0
+                                    else:
+                                        portfolio_total[month_col] = 0.0
+
+                            else:
+                                # FIXED WEIGHTS CALCULATION (default)
+                                # Use period-appropriate weights but no drift within period
+                                for col in ticker_df.columns:
+                                    weighted_sum = 0.0
+
+                                    # Determine which weights to use based on column type
+                                    if "Total" in col:
+                                        # Monthly total columns: "Dec 2025 Total" → get weights for Dec 1, 2025
+                                        month_match = re.match(r'(\w+)\s+(\d+)\s+Total', col)
+                                        if month_match:
+                                            month_name, year = month_match.groups()
+                                            try:
+                                                col_date = pd.Timestamp(f"{month_name} 1, {year}").date()
+                                                col_weights = get_weights_for_date(col_date)
+                                            except Exception:
+                                                col_weights = weights  # fallback to end_date weights
+                                        else:
+                                            col_weights = weights
+                                    else:
+                                        # Daily columns: "2025-12-15" → parse the date
+                                        try:
+                                            col_date = datetime.strptime(col, "%Y-%m-%d").date()
+                                            col_weights = get_weights_for_date(col_date)
+                                        except ValueError:
+                                            col_weights = weights  # fallback
+
+                                    for ticker in ticker_df.index:
+                                        ret = ticker_df.loc[ticker, col]
+                                        if pd.notna(ret):
+                                            weighted_sum += col_weights.get(ticker, 0) * ret
+                                    portfolio_total[col] = weighted_sum
 
                             # Add total row to dataframe
                             ticker_df.loc["Portfolio Total"] = portfolio_total
