@@ -2986,36 +2986,62 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
                             else:
                                 # FIXED WEIGHTS CALCULATION (default)
-                                # Use period-appropriate weights but no drift within period
+                                # Use period-appropriate weights, compound daily returns for monthly totals
+                                # Key insight: compound(A+B) ≠ compound(A) + compound(B)
+                                # So we must compound daily portfolio returns, not weight monthly ticker returns
+
+                                # Separate daily and monthly total columns
+                                daily_cols = []
+                                monthly_cols = []
                                 for col in ticker_df.columns:
-                                    weighted_sum = 0.0
-
-                                    # Determine which weights to use based on column type
                                     if "Total" in col:
-                                        # Monthly total columns: "Dec 2025 Total" → get weights for Dec 1, 2025
-                                        month_match = re.match(r'(\w+)\s+(\d+)\s+Total', col)
-                                        if month_match:
-                                            month_name, year = month_match.groups()
-                                            try:
-                                                col_date = pd.Timestamp(f"{month_name} 1, {year}").date()
-                                                col_weights = get_weights_for_date(col_date)
-                                            except Exception:
-                                                col_weights = weights  # fallback to end_date weights
-                                        else:
-                                            col_weights = weights
+                                        monthly_cols.append(col)
                                     else:
-                                        # Daily columns: "2025-12-15" → parse the date
-                                        try:
-                                            col_date = datetime.strptime(col, "%Y-%m-%d").date()
-                                            col_weights = get_weights_for_date(col_date)
-                                        except ValueError:
-                                            col_weights = weights  # fallback
+                                        daily_cols.append(col)
 
+                                # Sort daily columns chronologically
+                                daily_cols_sorted = sorted(daily_cols, key=lambda x: datetime.strptime(x, "%Y-%m-%d"))
+
+                                # Calculate daily portfolio returns with fixed weights per period
+                                daily_portfolio_returns = {}
+                                for col in daily_cols_sorted:
+                                    col_date = datetime.strptime(col, "%Y-%m-%d").date()
+                                    col_weights = get_weights_for_date(col_date)
+                                    active_tickers = get_active_tickers_for_date(col_date)
+
+                                    weighted_return = 0.0
                                     for ticker in ticker_df.index:
                                         ret = ticker_df.loc[ticker, col]
-                                        if pd.notna(ret):
-                                            weighted_sum += col_weights.get(ticker, 0) * ret
-                                    portfolio_total[col] = weighted_sum
+                                        if pd.notna(ret) and ticker in active_tickers:
+                                            weighted_return += col_weights.get(ticker, 0) * ret
+
+                                    daily_portfolio_returns[col] = weighted_return
+                                    portfolio_total[col] = weighted_return
+
+                                # Calculate monthly totals by compounding daily portfolio returns
+                                for month_col in monthly_cols:
+                                    month_match = re.match(r'(\w+)\s+(\d+)\s+Total', month_col)
+                                    if month_match:
+                                        month_name, year = month_match.groups()
+                                        month_key = pd.Timestamp(f"{month_name} 1, {year}").strftime("%Y-%m")
+
+                                        # Get daily returns for this month
+                                        month_daily_returns = []
+                                        for col in daily_cols_sorted:
+                                            if col.startswith(month_key):
+                                                if col in daily_portfolio_returns:
+                                                    month_daily_returns.append(daily_portfolio_returns[col])
+
+                                        if month_daily_returns:
+                                            # Compound the daily returns
+                                            compounded = 1.0
+                                            for r in month_daily_returns:
+                                                compounded *= (1 + r)
+                                            portfolio_total[month_col] = compounded - 1
+                                        else:
+                                            portfolio_total[month_col] = 0.0
+                                    else:
+                                        portfolio_total[month_col] = 0.0
 
                             # Add total row to dataframe
                             ticker_df.loc["Portfolio Total"] = portfolio_total
