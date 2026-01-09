@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Optional
 
 import pandas as pd
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
 from ..db import engine
@@ -276,6 +277,26 @@ class PortfolioTracker:
             query = select(PortfolioDefinition)
             if active_only:
                 query = query.where(PortfolioDefinition.is_active == True)
+            return list(session.exec(query).all())
+
+    def list_portfolios_with_nav_data(self, active_only: bool = True) -> list[PortfolioDefinition]:
+        """
+        Get portfolios that have NAV data using a single efficient query.
+
+        Uses EXISTS subquery instead of fetching full NAV data for each portfolio,
+        reducing N queries to 1 query for significant performance improvement.
+        """
+        with Session(engine) as session:
+            # Build subquery to check for NAV data existence
+            nav_exists = exists(
+                select(PortfolioDailyNAV.id)
+                .where(PortfolioDailyNAV.portfolio_id == PortfolioDefinition.id)
+            )
+
+            query = select(PortfolioDefinition).where(nav_exists)
+            if active_only:
+                query = query.where(PortfolioDefinition.is_active == True)
+
             return list(session.exec(query).all())
 
     # =========================================================================
@@ -709,6 +730,32 @@ class PortfolioTracker:
             df["trade_date"] = pd.to_datetime(df["trade_date"])
             df = df.set_index("trade_date")
             return df
+
+    def get_nav_date_range(
+        self,
+        portfolio_id: int,
+        variant: str,
+    ) -> tuple[Optional[date], Optional[date]]:
+        """
+        Get min/max dates for NAV data - much faster than fetching full series.
+
+        Returns:
+            Tuple of (min_date, max_date) or (None, None) if no data exists.
+        """
+        with Session(engine) as session:
+            result = session.exec(
+                select(
+                    func.min(PortfolioDailyNAV.trade_date),
+                    func.max(PortfolioDailyNAV.trade_date)
+                ).where(
+                    PortfolioDailyNAV.portfolio_id == portfolio_id,
+                    PortfolioDailyNAV.variant == variant
+                )
+            ).first()
+
+            if result and result[0] is not None:
+                return result[0], result[1]
+            return None, None
 
     def get_portfolio_performance(
         self,
