@@ -99,8 +99,10 @@ def check_nav_anomalies(
     from AlphaMachine_core.tracking import Variants
 
     issues = []
-    # Use last trading day to avoid false positives on weekends/holidays
-    end_date = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most) to avoid checking
+    # for today's NAV before market closes and NAV is calculated
+    yesterday = date.today() - timedelta(days=1)
+    end_date = get_last_trading_day(yesterday)
     start_date = end_date - timedelta(days=days_back)
 
     for portfolio in portfolios:
@@ -207,8 +209,8 @@ def check_cross_portfolio_consistency(
     from AlphaMachine_core.tracking import Variants
 
     issues = []
-    # Use last trading day instead of yesterday to handle weekends
-    yesterday = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most)
+    yesterday = get_last_trading_day(date.today() - timedelta(days=1))
 
     # Collect yesterday's returns
     returns = {}
@@ -295,8 +297,8 @@ def reconcile_mtd_from_prices(
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    # Use last trading day to handle weekends/holidays
-    today = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most)
+    today = get_last_trading_day(date.today() - timedelta(days=1))
 
     # Get first day of current month
     mtd_start = today.replace(day=1)
@@ -479,8 +481,8 @@ def check_methodology_divergence(
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    # Use last trading day to handle weekends/holidays
-    today = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most)
+    today = get_last_trading_day(date.today() - timedelta(days=1))
     start_date = today - timedelta(days=days_back)
 
     # Collect all tickers
@@ -645,8 +647,8 @@ def check_nav_baseline_accuracy(
     from AlphaMachine_core.tracking.models import PortfolioDailyNAV, Variants
 
     issues = []
-    # Use last trading day to handle weekends/holidays
-    today = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most)
+    today = get_last_trading_day(date.today() - timedelta(days=1))
 
     for portfolio in portfolios:
         try:
@@ -757,8 +759,8 @@ def check_missing_ticker_data(
     from AlphaMachine_core.data_manager import StockDataManager
 
     issues = []
-    # Use last trading day instead of today (handles weekends/holidays)
-    today = get_last_trading_day()
+    # Use last COMPLETED trading day (yesterday at most)
+    today = get_last_trading_day(date.today() - timedelta(days=1))
     cutoff_date = today - timedelta(days=days_back)
 
     logger.debug(f"Using reference date: {today} (last trading day)")
