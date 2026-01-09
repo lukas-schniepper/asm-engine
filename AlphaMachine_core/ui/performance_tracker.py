@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # TTL of 300 seconds (5 minutes) balances freshness with performance.
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _cached_get_nav_series(portfolio_id: int, variant: str, start_date, end_date):
+def _cached_get_nav_series(portfolio_id: int, variant: str, start_date=None, end_date=None):
     """Cached wrapper for tracker.get_nav_series()."""
     from ..tracking import get_tracker
     tracker = get_tracker()
