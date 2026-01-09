@@ -2988,34 +2988,39 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                         portfolio_total[month_col] = 0.0
 
                             else:
-                                # FIXED WEIGHTS CALCULATION (default)
-                                # Use period-appropriate weights, compound daily returns for monthly totals
+                                # FIXED WEIGHTS CALCULATION (simplified)
+                                # Build monthly_weights directly from month_dates - avoids complex effective_date lookup
                                 # Key insight: compound(A+B) ≠ compound(A) + compound(B)
                                 # So we must compound daily portfolio returns, not weight monthly ticker returns
 
-                                # Separate daily and monthly total columns
-                                daily_cols = []
-                                monthly_cols = []
-                                for col in ticker_df.columns:
-                                    if "Total" in col:
-                                        monthly_cols.append(col)
-                                    else:
-                                        daily_cols.append(col)
+                                # Build monthly_weights: map each month to its holdings weights
+                                monthly_weights = {}
+                                for month_start in month_dates:
+                                    query_date = min(month_start.replace(day=15), end_date)
+                                    mh = tracker.get_holdings(portfolio_obj.id, query_date)
+                                    if mh:
+                                        month_key = month_start.strftime("%Y-%m")
+                                        monthly_weights[month_key] = {
+                                            h.ticker: float(h.weight) if h.weight else 0
+                                            for h in mh
+                                        }
 
-                                # Sort daily columns chronologically
+                                # Separate daily and monthly total columns
+                                daily_cols = [c for c in ticker_df.columns if "Total" not in c]
+                                monthly_cols = [c for c in ticker_df.columns if "Total" in c]
                                 daily_cols_sorted = sorted(daily_cols, key=lambda x: datetime.strptime(x, "%Y-%m-%d"))
 
-                                # Calculate daily portfolio returns with fixed weights per period
+                                # Calculate daily portfolio returns using month-appropriate weights
                                 daily_portfolio_returns = {}
                                 for col in daily_cols_sorted:
                                     col_date = datetime.strptime(col, "%Y-%m-%d").date()
-                                    col_weights = get_weights_for_date(col_date)
-                                    active_tickers = get_active_tickers_for_date(col_date)
+                                    month_key = col_date.strftime("%Y-%m")
+                                    col_weights = monthly_weights.get(month_key, {})
 
                                     weighted_return = 0.0
                                     for ticker in ticker_df.index:
                                         ret = ticker_df.loc[ticker, col]
-                                        if pd.notna(ret) and ticker in active_tickers:
+                                        if pd.notna(ret) and ticker in col_weights:
                                             weighted_return += col_weights.get(ticker, 0) * ret
 
                                     daily_portfolio_returns[col] = weighted_return
@@ -3029,11 +3034,10 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                                         month_key = pd.Timestamp(f"{month_name} 1, {year}").strftime("%Y-%m")
 
                                         # Get daily returns for this month
-                                        month_daily_returns = []
-                                        for col in daily_cols_sorted:
-                                            if col.startswith(month_key):
-                                                if col in daily_portfolio_returns:
-                                                    month_daily_returns.append(daily_portfolio_returns[col])
+                                        month_daily_returns = [
+                                            daily_portfolio_returns[c] for c in daily_cols_sorted
+                                            if c.startswith(month_key) and c in daily_portfolio_returns
+                                        ]
 
                                         if month_daily_returns:
                                             # Compound the daily returns
