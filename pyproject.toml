@@ -9,4 +9,4 @@ description = "ASM Engine core library"
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
-include = ["AlphaMachine_core*"]
+include = ["AlphaMachine_core*", "utils*"]
