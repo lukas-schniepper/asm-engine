@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_get_nav_series(portfolio_id: int, variant: str, start_date, end_date):
-    """Cached wrapper for _cached_get_nav_series()."""
+    """Cached wrapper for tracker.get_nav_series()."""
     from ..tracking import get_tracker
     tracker = get_tracker()
-    return _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
+    return tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
