@@ -58,19 +58,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def get_last_trading_day(reference_date: date = None) -> date:
-    """Get the most recent trading day on or before reference_date."""
-    if reference_date is None:
-        reference_date = date.today()
-
-    check_date = reference_date
-    for _ in range(10):
-        if check_date.weekday() < 5:  # Mon-Fri
-            return check_date
-        check_date -= timedelta(days=1)
-
-    return reference_date
+# Import shared trading calendar utilities (now includes proper US holiday handling)
+from utils.trading_calendar import get_last_trading_day
 
 
 def get_current_nav(portfolio_id: int) -> tuple[Optional[Decimal], Optional[date]]:

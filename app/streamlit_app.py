@@ -2004,14 +2004,8 @@ def _show_ticker_analysis_ui():
                     st.error(f"Error loading holdings: {e}")
 
 
-def _get_trading_days(start_date, end_date):
-    """Get list of trading days between start and end dates."""
-    from pandas.tseries.holiday import USFederalHolidayCalendar
-    from pandas.tseries.offsets import CustomBusinessDay
-
-    us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-    trading_days = pd.date_range(start=start_date, end=end_date, freq=us_bd)
-    return [d.date() for d in trading_days]
+# Import shared trading calendar utilities
+from utils.trading_calendar import get_trading_days as _get_trading_days
 
 
 def _update_portfolio_nav(tracker, portfolio, trade_date, price_data, prev_price_data=None):

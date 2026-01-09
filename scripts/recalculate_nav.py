@@ -65,16 +65,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def get_trading_days(start_date: date, end_date: date) -> list[date]:
-    """Get list of trading days between start and end dates."""
-    import pandas as pd
-    from pandas.tseries.holiday import USFederalHolidayCalendar
-    from pandas.tseries.offsets import CustomBusinessDay
-
-    us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-    trading_days = pd.date_range(start=start_date, end=end_date, freq=us_bd)
-    return [d.date() for d in trading_days]
+# Import shared trading calendar utilities
+from utils.trading_calendar import get_trading_days
 
 
 def delete_nav_records(

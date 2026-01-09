@@ -303,12 +303,13 @@ def fetch_overlay_signals(supabase, start_date: str, end_date: str):
     return response.data
 
 
-def fetch_current_overlay(supabase):
-    """Fetch most recent overlay signal"""
-    print(f"  Fetching current overlay status...")
+def fetch_current_overlay(supabase, model: str = "conservative"):
+    """Fetch most recent overlay signal for a specific model"""
+    print(f"  Fetching current overlay status for model '{model}'...")
 
     response = supabase.table('overlay_signals') \
         .select('*') \
+        .eq('model', model) \
         .order('trade_date', desc=True) \
         .limit(1) \
         .execute()

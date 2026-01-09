@@ -71,63 +71,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def is_trading_day(check_date: date) -> bool:
-    """
-    Check if a given date is a US stock market trading day.
-
-    Returns False for:
-    - Weekends (Saturday, Sunday)
-    - Major US holidays (approximate)
-    """
-    # Check weekend
-    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
-        return False
-
-    # Major US market holidays (approximate - doesn't handle all edge cases)
-    # These are fixed dates; actual holidays may shift if they fall on weekends
-    year = check_date.year
-    us_holidays = [
-        date(year, 1, 1),   # New Year's Day
-        date(year, 7, 4),   # Independence Day
-        date(year, 12, 25), # Christmas
-    ]
-
-    # Variable holidays (approximate)
-    # MLK Day: 3rd Monday of January
-    # Presidents Day: 3rd Monday of February
-    # Memorial Day: Last Monday of May
-    # Labor Day: 1st Monday of September
-    # Thanksgiving: 4th Thursday of November
-
-    # For simplicity, just check weekends and fixed holidays
-    # A more robust solution would use a library like `pandas_market_calendars`
-
-    if check_date in us_holidays:
-        return False
-
-    return True
-
-
-def get_last_trading_day(reference_date: date = None) -> date:
-    """
-    Get the most recent trading day on or before the reference date.
-
-    If reference_date is a weekend or holiday, returns the previous trading day.
-    """
-    if reference_date is None:
-        reference_date = date.today()
-
-    check_date = reference_date
-    max_lookback = 10  # Don't look back more than 10 days
-
-    for _ in range(max_lookback):
-        if is_trading_day(check_date):
-            return check_date
-        check_date -= timedelta(days=1)
-
-    # Fallback - shouldn't happen
-    return reference_date
+# Import shared trading calendar utilities
+from utils.trading_calendar import (
+    is_trading_day,
+    get_trading_days,
+    get_last_trading_day,
+    get_last_n_trading_days,
+)
 
 
 def check_nav_anomalies(
@@ -212,14 +162,30 @@ def check_nav_anomalies(
                     })
                     break  # Only report once
 
-        # Check for missing trading days
-        expected_days = len(nav_df)  # Simplified check
-        if expected_days < days_back * 0.6:  # Less than 60% of days have data
+        # Check for missing trading days (using proper trading calendar)
+        # Get the expected trading days for the lookback period
+        expected_trading_days = get_last_n_trading_days(5, end_date)
+        expected_count = len(expected_trading_days)
+
+        # Count how many of those trading days have NAV data
+        nav_dates = set()
+        for idx in nav_df.index:
+            nav_date = idx.date() if hasattr(idx, 'date') else idx
+            nav_dates.add(nav_date)
+
+        actual_count = sum(1 for td in expected_trading_days if td in nav_dates)
+        missing_count = expected_count - actual_count
+
+        if missing_count > 0:
+            # Determine severity based on missing days
+            # 1 missing = warning, 2+ missing = error
+            severity = "error" if missing_count >= 2 else "warning"
             issues.append({
                 "portfolio": portfolio.name,
                 "type": "SPARSE_DATA",
-                "severity": "warning",
-                "message": f"Only {expected_days} data points in {days_back} days",
+                "severity": severity,
+                "message": f"Missing {missing_count} of {expected_count} trading days",
+                "missing_days": [d.isoformat() for d in expected_trading_days if d not in nav_dates],
             })
 
     return issues

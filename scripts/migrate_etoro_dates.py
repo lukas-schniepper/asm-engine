@@ -20,25 +20,8 @@ from collections import defaultdict
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-
-def is_trading_day(check_date: date) -> bool:
-    """Check if a given date is a US stock market trading day."""
-    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
-        return False
-    return True
-
-
-def get_previous_trading_day(reference_date: date) -> date:
-    """Get the trading day before the reference date."""
-    check_date = reference_date - timedelta(days=1)
-    max_lookback = 10
-
-    for _ in range(max_lookback):
-        if is_trading_day(check_date):
-            return check_date
-        check_date -= timedelta(days=1)
-
-    return reference_date - timedelta(days=1)
+# Import shared trading calendar utilities (now includes proper US holiday handling)
+from utils.trading_calendar import is_trading_day, get_previous_trading_day
 
 
 def migrate_etoro_dates(dry_run: bool = True):

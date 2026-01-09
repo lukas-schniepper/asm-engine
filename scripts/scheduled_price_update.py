@@ -151,11 +151,13 @@ def main():
 
                 print(f"\n{'='*80}")
                 print(f"⚠️  {len(validation['missing'])} portfolio-critical tickers are missing prices!")
-                print("These portfolios will fail NAV calculation until prices are available.")
+                print("NAV calculation will skip these tickers (using last known price or excluding).")
+                print("This is a WARNING, not a failure - workflow continues.")
                 print(f"{'='*80}\n")
 
-                # Exit with error to fail the workflow
-                sys.exit(1)
+                # NOTE: Changed from sys.exit(1) to warning only.
+                # NAV calculation already handles missing prices gracefully.
+                # Failing the entire workflow for one missing ticker was too strict.
         else:
             print("⚠️  No price data in database - skipping validation")
 

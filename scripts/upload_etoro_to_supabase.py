@@ -16,94 +16,16 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-
-def is_trading_day(check_date: date) -> bool:
-    """
-    Check if a given date is a US stock market trading day.
-
-    Returns False for weekends and major US market holidays.
-    """
-    # Check weekends
-    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
-        return False
-
-    # Check major US market holidays (fixed dates)
-    # Note: Some holidays are observed on different days if they fall on weekend
-    month, day = check_date.month, check_date.day
-    year = check_date.year
-
-    # New Year's Day (Jan 1, or observed on Jan 2 if Jan 1 is Sunday)
-    if month == 1 and day == 1:
-        return False
-    if month == 1 and day == 2 and date(year, 1, 1).weekday() == 6:  # Sunday
-        return False
-
-    # Independence Day (July 4, or observed on July 3/5)
-    if month == 7 and day == 4:
-        return False
-    if month == 7 and day == 3 and date(year, 7, 4).weekday() == 5:  # Saturday
-        return False
-    if month == 7 and day == 5 and date(year, 7, 4).weekday() == 6:  # Sunday
-        return False
-
-    # Christmas (Dec 25, or observed on Dec 24/26)
-    if month == 12 and day == 25:
-        return False
-    if month == 12 and day == 24 and date(year, 12, 25).weekday() == 5:  # Saturday
-        return False
-    if month == 12 and day == 26 and date(year, 12, 25).weekday() == 6:  # Sunday
-        return False
-
-    # Thanksgiving (4th Thursday of November)
-    if month == 11:
-        # Find 4th Thursday
-        first_day = date(year, 11, 1)
-        first_thursday = (3 - first_day.weekday()) % 7 + 1
-        thanksgiving = first_thursday + 21  # 4th Thursday
-        if day == thanksgiving:
-            return False
-
-    return True
-
-
-def get_last_trading_day(reference_date: date = None) -> date:
-    """
-    Get the most recent trading day on or before the reference date.
-
-    If reference_date is a weekend, returns the previous Friday.
-    """
-    if reference_date is None:
-        reference_date = date.today()
-
-    check_date = reference_date
-    max_lookback = 10  # Don't look back more than 10 days
-
-    for _ in range(max_lookback):
-        if is_trading_day(check_date):
-            return check_date
-        check_date -= timedelta(days=1)
-
-    # Fallback - shouldn't happen
-    return reference_date
-
-
-def get_previous_trading_day() -> date:
-    """
-    Get the most recent COMPLETED trading day.
-
-    The scraper runs at 07:00 UTC, before US market open (14:30 UTC).
-    So eToro shows the previous trading day's final data:
-    - Friday 07:00 UTC → Thursday's close
-    - Saturday 07:00 UTC → Friday's close
-    - Monday 07:00 UTC → Friday's close (weekend)
-    - Tuesday 07:00 UTC → Monday's close
-    """
-    yesterday = date.today() - timedelta(days=1)
-    return get_last_trading_day(yesterday)
-
-# Add project root to path
+# Add project root to path first (needed for shared module import)
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Import shared trading calendar utilities
+from utils.trading_calendar import (
+    is_trading_day,
+    get_last_trading_day,
+    get_previous_trading_day,
+)
 
 # Local data file (created by update_etoro_data.py)
 DATA_FILE = project_root / "data" / "etoro_scraped_data.json"

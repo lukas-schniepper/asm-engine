@@ -73,30 +73,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def is_trading_day(d: date) -> bool:
-    """Check if a date is a US trading day (weekday, not holiday)."""
-    import pandas as pd
-    from pandas.tseries.holiday import USFederalHolidayCalendar
-
-    if d.weekday() >= 5:  # Weekend
-        return False
-
-    # Check for US federal holidays
-    cal = USFederalHolidayCalendar()
-    holidays = cal.holidays(start=str(d.year), end=str(d.year + 1))
-    return d not in holidays.date
-
-
-def get_trading_days(start_date: date, end_date: date) -> list[date]:
-    """Get list of trading days between start and end dates."""
-    import pandas as pd
-    from pandas.tseries.holiday import USFederalHolidayCalendar
-    from pandas.tseries.offsets import CustomBusinessDay
-
-    us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
-    trading_days = pd.date_range(start=start_date, end=end_date, freq=us_bd)
-    return [d.date() for d in trading_days]
+# Import shared trading calendar utilities
+from utils.trading_calendar import is_trading_day, get_trading_days
 
 
 def _ensure_holdings_have_shares(

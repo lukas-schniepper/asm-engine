@@ -1,0 +1,58 @@
+name: Run Tests
+
+on:
+  push:
+    paths:
+      - 'utils/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'AlphaMachine_core/**'
+      - 'requirements.txt'
+  pull_request:
+    paths:
+      - 'utils/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'AlphaMachine_core/**'
+      - 'requirements.txt'
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run Trading Calendar Tests
+        run: |
+          python -m pytest tests/test_trading_calendar.py -v
+
+      - name: Run All Tests
+        run: |
+          # Run the custom test suite
+          python tests/test_trading_calendar.py
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            *.log
+            test-*.xml
+          retention-days: 7
