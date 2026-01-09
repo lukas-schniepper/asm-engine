@@ -2863,15 +2863,15 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                             # Add monthly totals
                             ticker_new_columns = []
                             for month_key in sorted(ticker_month_groups.keys()):
-                                month_dates = ticker_month_groups[month_key]
-                                month_name = pd.Timestamp(month_dates[0]).strftime("%b %Y")
+                                month_trading_dates = ticker_month_groups[month_key]  # Renamed to avoid shadowing outer month_dates
+                                month_name = pd.Timestamp(month_trading_dates[0]).strftime("%b %Y")
                                 total_col_name = f"{month_name} Total"
                                 ticker_month_totals[month_key] = total_col_name
 
                                 # Calculate compounded monthly return (GIPS standard)
                                 monthly_returns = []
                                 for ticker in ticker_df.index:
-                                    month_data = ticker_df.loc[ticker, month_dates].dropna()
+                                    month_data = ticker_df.loc[ticker, month_trading_dates].dropna()
                                     if len(month_data) > 0:
                                         compounded = (1 + month_data).prod() - 1
                                         monthly_returns.append(compounded)
@@ -2880,7 +2880,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 
                                 ticker_df[total_col_name] = monthly_returns
                                 ticker_new_columns.append(total_col_name)
-                                ticker_new_columns.extend(month_dates)
+                                ticker_new_columns.extend(month_trading_dates)
 
                             ticker_df = ticker_df[ticker_new_columns]
 
