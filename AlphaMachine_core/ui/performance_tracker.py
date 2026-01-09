@@ -2724,9 +2724,12 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
                 else:
                     current = current.replace(month=current.month + 1)
 
-            # Get holdings for each month-start date
+            # Get holdings for each month - use mid-month date to ensure we capture
+            # that month's holdings (holdings effective_date is first trading day,
+            # which may be after the 1st, so querying for day 1 could return previous month)
             for month_start in month_dates:
-                month_holdings = tracker.get_holdings(portfolio_obj.id, month_start)
+                query_date = min(month_start.replace(day=15), end_date)
+                month_holdings = tracker.get_holdings(portfolio_obj.id, query_date)
                 if month_holdings:
                     month_tickers = set(h.ticker for h in month_holdings)
                     all_tickers.update(month_tickers)
