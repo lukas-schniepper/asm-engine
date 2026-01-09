@@ -12,7 +12,7 @@ the main Streamlit app remains functional even if this page has issues.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
