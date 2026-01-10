@@ -468,11 +468,19 @@ def update_portfolio_nav(
             prev_holdings = tracker.get_holdings(portfolio.id, trade_date - timedelta(days=1))
 
         # Ensure holdings have shares (for proper buy-and-hold NAV calculation)
-        # Pass previous_holdings so we can mark-to-market during rebalances
-        shares_updated = _ensure_holdings_have_shares(
-            tracker, holdings, previous_raw_nav, price_data, trade_date,
-            previous_holdings=prev_holdings,
-        )
+        # Skip for EqualWeight portfolios - they use weight-based NAV calculation
+        # which is handled correctly by calculate_raw_nav() when shares are None
+        is_equalweight = "_EqualWeight" in portfolio.name
+        if is_equalweight:
+            # EqualWeight portfolios use weight-based NAV (more accurate than shares)
+            # The calculate_raw_nav() function already handles weight-based calculation
+            shares_updated = False
+        else:
+            # Pass previous_holdings so we can mark-to-market during rebalances
+            shares_updated = _ensure_holdings_have_shares(
+                tracker, holdings, previous_raw_nav, price_data, trade_date,
+                previous_holdings=prev_holdings,
+            )
 
         # If shares were just populated, reload holdings to get updated data
         if shares_updated:
@@ -555,7 +563,8 @@ def update_portfolio_nav(
         # PRE-FLIGHT CHECK: Compare share-based vs weight-based NAV
         # This catches data corruption where shares/weights are inconsistent
         # SKIP on first day - baseline assumptions differ (entry_price vs prev_prices)
-        if prev_price_data and previous_raw_nav > 0 and not is_first_day:
+        # SKIP for EqualWeight portfolios - they only use weights, no shares to validate
+        if prev_price_data and previous_raw_nav > 0 and not is_first_day and not is_equalweight:
             weight_based_nav = _calculate_weight_based_nav(
                 holdings, price_data, prev_price_data, previous_raw_nav
             )
@@ -799,7 +808,13 @@ def run_daily_update(
             price_data = dict(zip(date_prices["ticker"], date_prices["close"]))
 
         if not price_data:
-            logger.warning(f"No price data for {process_date}")
+            logger.error(
+                f"CRITICAL: No price data for {process_date}. "
+                f"All {len(portfolios)} portfolios will be SKIPPED for this date. "
+                "Check the price update workflow or run: python scripts/scheduled_price_update.py"
+            )
+            stats["dates_without_prices"] = stats.get("dates_without_prices", [])
+            stats["dates_without_prices"].append(str(process_date))
             continue
 
         # Get previous day's prices
@@ -846,6 +861,13 @@ def run_daily_update(
     logger.info(f"Successful updates: {stats['successful_updates']}")
     logger.info(f"Skipped (no holdings): {stats['skipped_updates']}")
     logger.info(f"Failed updates: {stats['failed_updates']}")
+
+    # Alert if any dates had no price data
+    if stats.get("dates_without_prices"):
+        logger.error(
+            f"ALERT: {len(stats['dates_without_prices'])} date(s) had NO price data: "
+            f"{stats['dates_without_prices']}. Run price update workflow to fix."
+        )
 
     return stats
 
