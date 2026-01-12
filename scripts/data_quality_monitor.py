@@ -166,7 +166,8 @@ def check_nav_anomalies(
 
         # Check for missing trading days (using proper trading calendar)
         # Get the expected trading days for the lookback period
-        expected_trading_days = get_last_n_trading_days(5, end_date)
+        # Use min(5, days_back) to avoid false positives when checking fewer days
+        expected_trading_days = get_last_n_trading_days(min(5, days_back), end_date)
         expected_count = len(expected_trading_days)
 
         # Count how many of those trading days have NAV data
@@ -931,6 +932,57 @@ def generate_report(issues: List[Dict]) -> str:
     return "\n".join(lines)
 
 
+def get_issue_key(issue: Dict) -> str:
+    """
+    Generate unique key for an issue to enable deduplication.
+
+    Key format: portfolio_name|alert_type|date
+    For issues without a date, uses empty string.
+    """
+    portfolio = issue.get("portfolio", "unknown")
+    alert_type = issue.get("type", "unknown")
+    issue_date = issue.get("date", "")
+    return f"{portfolio}|{alert_type}|{issue_date}"
+
+
+def filter_alertable_issues(issues: List[Dict], throttle_hours: int = 24) -> List[Dict]:
+    """
+    Filter issues to only those that should trigger alerts.
+
+    Uses AlertHistory to deduplicate and throttle alerts.
+    Returns only issues that haven't been alerted within throttle_hours.
+    """
+    from AlphaMachine_core.tracking.data_quality import get_alert_history
+
+    alert_history = get_alert_history()
+    alertable = []
+
+    for issue in issues:
+        issue_key = get_issue_key(issue)
+        should_alert = alert_history.should_send_alert(
+            issue_key=issue_key,
+            portfolio_name=issue.get("portfolio", "unknown"),
+            alert_type=issue.get("type", "unknown"),
+            severity=issue.get("severity", "warning"),
+            message=issue.get("message", ""),
+            throttle_hours=throttle_hours,
+        )
+        if should_alert:
+            alertable.append(issue)
+
+    return alertable
+
+
+def mark_issues_as_sent(issues: List[Dict]):
+    """Mark all issues as sent in the alert history."""
+    from AlphaMachine_core.tracking.data_quality import get_alert_history
+
+    alert_history = get_alert_history()
+    for issue in issues:
+        issue_key = get_issue_key(issue)
+        alert_history.mark_alert_sent(issue_key)
+
+
 def send_email_alert(
     recipient: str,
     subject: str,
@@ -1197,31 +1249,58 @@ def run_monitor(
 
     # Send email alert if issues found and email configured
     if email_recipient and all_issues:
-        has_critical_or_error = (
-            result["critical_count"] > 0 or result["error_count"] > 0
-        )
+        # Filter to only issues that haven't been alerted recently (24h throttle)
+        alertable_issues = filter_alertable_issues(all_issues, throttle_hours=24)
 
-        # Determine subject based on severity
-        if result["critical_count"] > 0:
-            subject = f"🚨 [CRITICAL] ASM Data Quality Alert - {result['critical_count']} critical issues"
-        elif result["error_count"] > 0:
-            subject = f"❌ [ERROR] ASM Data Quality Alert - {result['error_count']} errors detected"
+        if alertable_issues:
+            # Count alertable issues by severity
+            alertable_critical = len([i for i in alertable_issues if i.get("severity") == "critical"])
+            alertable_errors = len([i for i in alertable_issues if i.get("severity") == "error"])
+            alertable_warnings = len([i for i in alertable_issues if i.get("severity") == "warning"])
+
+            # Determine subject based on severity of alertable issues
+            if alertable_critical > 0:
+                subject = f"🚨 [CRITICAL] ASM Data Quality Alert - {alertable_critical} critical issues"
+            elif alertable_errors > 0:
+                subject = f"❌ [ERROR] ASM Data Quality Alert - {alertable_errors} errors detected"
+            else:
+                subject = f"⚠️ [WARNING] ASM Data Quality Alert - {alertable_warnings} warnings"
+
+            # Create result dict for alertable issues only (for accurate email content)
+            alertable_result = {
+                **result,
+                "critical_count": alertable_critical,
+                "error_count": alertable_errors,
+                "warning_count": alertable_warnings,
+                "total_issues": len(alertable_issues),
+            }
+
+            # Generate email content for alertable issues only
+            html_body = generate_html_report(alertable_issues, alertable_result)
+            alert_report = generate_report(alertable_issues)
+
+            # Send email
+            email_sent = send_email_alert(
+                recipient=email_recipient,
+                subject=subject,
+                body=alert_report,
+                html_body=html_body,
+            )
+
+            if email_sent:
+                # Mark all alertable issues as sent
+                mark_issues_as_sent(alertable_issues)
+                logger.info(f"Sent alert for {len(alertable_issues)} issues (throttled {len(all_issues) - len(alertable_issues)} already-alerted issues)")
+
+            result["email_sent"] = email_sent
+            result["email_recipient"] = email_recipient
+            result["alertable_issues"] = len(alertable_issues)
+            result["throttled_issues"] = len(all_issues) - len(alertable_issues)
         else:
-            subject = f"⚠️ [WARNING] ASM Data Quality Alert - {result['warning_count']} warnings"
-
-        # Generate email content
-        html_body = generate_html_report(all_issues, result)
-
-        # Send email
-        email_sent = send_email_alert(
-            recipient=email_recipient,
-            subject=subject,
-            body=report,
-            html_body=html_body,
-        )
-
-        result["email_sent"] = email_sent
-        result["email_recipient"] = email_recipient
+            logger.info(f"All {len(all_issues)} issues were throttled (already alerted within 24h)")
+            result["email_sent"] = False
+            result["alertable_issues"] = 0
+            result["throttled_issues"] = len(all_issues)
 
     return result
 

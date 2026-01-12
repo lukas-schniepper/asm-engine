@@ -568,6 +568,187 @@ class NAVAuditLog:
         return pd.DataFrame()
 
 
+class AlertHistory:
+    """
+    Track sent alerts to enable deduplication and throttling.
+
+    Prevents alert spam by:
+    - Recording when each unique issue was first detected
+    - Tracking when alerts were last sent
+    - Allowing throttle window checks (e.g., 24h cooldown)
+    """
+
+    def __init__(self):
+        self._ensure_table_exists()
+
+    def _ensure_table_exists(self):
+        """Create alert history table if it doesn't exist."""
+        from sqlalchemy import text
+
+        create_sql = """
+        CREATE TABLE IF NOT EXISTS alert_history (
+            id SERIAL PRIMARY KEY,
+            issue_key VARCHAR(255) UNIQUE NOT NULL,
+            portfolio_name VARCHAR(255) NOT NULL,
+            alert_type VARCHAR(50) NOT NULL,
+            severity VARCHAR(20) NOT NULL,
+            message TEXT,
+            first_detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_sent_at TIMESTAMP,
+            send_count INTEGER DEFAULT 0,
+            is_open BOOLEAN DEFAULT TRUE,
+            resolved_at TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_alert_history_open
+        ON alert_history(is_open, last_sent_at);
+
+        CREATE INDEX IF NOT EXISTS idx_alert_history_portfolio
+        ON alert_history(portfolio_name, alert_type);
+        """
+
+        try:
+            with Session(engine) as session:
+                session.execute(text(create_sql))
+                session.commit()
+        except Exception as e:
+            logger.debug(f"Alert history table creation (may already exist): {e}")
+
+    def should_send_alert(
+        self,
+        issue_key: str,
+        portfolio_name: str,
+        alert_type: str,
+        severity: str,
+        message: str,
+        throttle_hours: int = 24,
+    ) -> bool:
+        """
+        Check if alert should be sent (not sent within throttle window).
+
+        Also updates last_detected_at and creates record if new.
+
+        Returns:
+            True if alert should be sent, False if throttled
+        """
+        from sqlalchemy import text
+
+        now = datetime.now()
+        cutoff = now - timedelta(hours=throttle_hours)
+
+        # Check if alert exists and when it was last sent
+        select_sql = text("""
+            SELECT id, last_sent_at FROM alert_history
+            WHERE issue_key = :issue_key
+        """)
+
+        try:
+            with Session(engine) as session:
+                result = session.execute(select_sql, {"issue_key": issue_key})
+                row = result.fetchone()
+
+                if row:
+                    # Update last_detected_at and reopen if was resolved
+                    update_sql = text("""
+                        UPDATE alert_history
+                        SET last_detected_at = :now,
+                            is_open = TRUE,
+                            resolved_at = NULL,
+                            severity = :severity,
+                            message = :message
+                        WHERE issue_key = :issue_key
+                    """)
+                    session.execute(update_sql, {
+                        "now": now,
+                        "issue_key": issue_key,
+                        "severity": severity,
+                        "message": message,
+                    })
+                    session.commit()
+
+                    # Check throttle window
+                    last_sent = row[1]  # last_sent_at
+                    if last_sent and last_sent > cutoff:
+                        return False  # Throttled
+                else:
+                    # New issue - create record
+                    insert_sql = text("""
+                        INSERT INTO alert_history
+                        (issue_key, portfolio_name, alert_type, severity, message,
+                         first_detected_at, last_detected_at)
+                        VALUES
+                        (:issue_key, :portfolio_name, :alert_type, :severity, :message,
+                         :now, :now)
+                    """)
+                    session.execute(insert_sql, {
+                        "issue_key": issue_key,
+                        "portfolio_name": portfolio_name,
+                        "alert_type": alert_type,
+                        "severity": severity,
+                        "message": message,
+                        "now": now,
+                    })
+                    session.commit()
+
+                return True
+        except Exception as e:
+            logger.error(f"Failed to check alert throttle: {e}")
+            return True  # Send alert on error to be safe
+
+    def mark_alert_sent(self, issue_key: str):
+        """Mark alert as sent and increment send count."""
+        from sqlalchemy import text
+
+        update_sql = text("""
+            UPDATE alert_history
+            SET last_sent_at = :now,
+                send_count = send_count + 1
+            WHERE issue_key = :issue_key
+        """)
+
+        try:
+            with Session(engine) as session:
+                session.execute(update_sql, {
+                    "now": datetime.now(),
+                    "issue_key": issue_key,
+                })
+                session.commit()
+        except Exception as e:
+            logger.error(f"Failed to mark alert sent: {e}")
+
+    def get_open_alerts(self, portfolio_name: Optional[str] = None) -> pd.DataFrame:
+        """Get all open (unresolved) alerts."""
+        from sqlalchemy import text
+
+        if portfolio_name:
+            query = text("""
+                SELECT * FROM alert_history
+                WHERE is_open = TRUE AND portfolio_name = :portfolio_name
+                ORDER BY last_detected_at DESC
+            """)
+            params = {"portfolio_name": portfolio_name}
+        else:
+            query = text("""
+                SELECT * FROM alert_history
+                WHERE is_open = TRUE
+                ORDER BY last_detected_at DESC
+            """)
+            params = {}
+
+        try:
+            with Session(engine) as session:
+                result = session.execute(query, params)
+                rows = result.fetchall()
+                if rows:
+                    columns = result.keys()
+                    return pd.DataFrame(rows, columns=columns)
+        except Exception as e:
+            logger.error(f"Failed to get open alerts: {e}")
+
+        return pd.DataFrame()
+
+
 class BenchmarkReconciler:
     """
     Cross-checks portfolio returns against benchmarks.
@@ -745,6 +926,7 @@ def run_data_quality_check(
 # Singleton instances
 _validator: Optional[DataQualityValidator] = None
 _audit_log: Optional[NAVAuditLog] = None
+_alert_history: Optional[AlertHistory] = None
 
 
 def get_validator() -> DataQualityValidator:
@@ -761,6 +943,14 @@ def get_audit_log() -> NAVAuditLog:
     if _audit_log is None:
         _audit_log = NAVAuditLog()
     return _audit_log
+
+
+def get_alert_history() -> AlertHistory:
+    """Get singleton alert history instance."""
+    global _alert_history
+    if _alert_history is None:
+        _alert_history = AlertHistory()
+    return _alert_history
 
 
 def get_portfolio_critical_tickers() -> Dict[int, Dict[str, any]]:
