@@ -418,13 +418,21 @@ class PortfolioTracker:
         if previous_nav is None:
             return 100.0
 
-        # Calculate weighted return
+        # NORMALIZE WEIGHTS: Some portfolios have weights that don't sum to 1.0
+        # We must normalize to ensure correct return calculation
+        weights = {h.ticker: float(h.weight) for h in holdings if h.weight}
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            weights = {t: w / total_weight for t, w in weights.items()}
+
+        # Calculate weighted return using normalized weights
         total_return = 0.0
         holdings_with_weight = 0
 
         for h in holdings:
-            if h.weight:
+            if h.ticker in weights:
                 ticker = h.ticker
+                weight = weights[ticker]  # Use normalized weight
                 current_price = prices.get(ticker)
 
                 # Get previous price: from previous_prices, entry_price, or current price
@@ -437,7 +445,7 @@ class PortfolioTracker:
 
                 if current_price and prev_price and prev_price > 0:
                     position_return = (current_price / prev_price) - 1
-                    total_return += float(h.weight) * position_return
+                    total_return += weight * position_return
                     holdings_with_weight += 1
 
         return previous_nav * (1 + total_return)

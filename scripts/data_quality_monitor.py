@@ -885,6 +885,45 @@ def check_missing_ticker_data(
     return issues
 
 
+def check_equalweight_has_no_shares(
+    portfolios: List,
+    tracker,
+) -> List[Dict]:
+    """
+    Ensure EqualWeight portfolios don't have shares populated.
+
+    EqualWeight portfolios use weight-based NAV calculation (shares=None).
+    If shares are populated, the NAV calculation switches to share-based,
+    causing methodology divergence and incorrect returns.
+
+    This check catches portfolios where shares were incorrectly calculated.
+    """
+    issues = []
+    today = date.today()
+
+    for portfolio in portfolios:
+        # Only check EqualWeight portfolios
+        if "_EqualWeight" not in portfolio.name:
+            continue
+
+        holdings = tracker.get_holdings(portfolio.id, today)
+        if not holdings:
+            continue
+
+        holdings_with_shares = [h for h in holdings if h.shares is not None]
+        if holdings_with_shares:
+            tickers = [h.ticker for h in holdings_with_shares]
+            issues.append({
+                "portfolio": portfolio.name,
+                "type": "EQUALWEIGHT_HAS_SHARES",
+                "severity": "error",
+                "message": f"EqualWeight portfolio has shares for {len(tickers)} tickers (should be None): {', '.join(tickers[:3])}{'...' if len(tickers) > 3 else ''}",
+                "tickers_with_shares": tickers,
+            })
+
+    return issues
+
+
 def generate_report(issues: List[Dict]) -> str:
     """Generate human-readable report."""
     if not issues:
@@ -1224,6 +1263,9 @@ def run_monitor(
 
     logger.info("Checking NAV baseline accuracy (shares x price = NAV)...")
     all_issues.extend(check_nav_baseline_accuracy(portfolios, tracker, tolerance_pct=0.5))
+
+    logger.info("Checking EqualWeight portfolios for incorrect shares...")
+    all_issues.extend(check_equalweight_has_no_shares(portfolios, tracker))
 
     # Generate report
     report = generate_report(all_issues)
