@@ -48,7 +48,8 @@ jobs:
         run: |
           python scripts/data_quality_monitor.py \
             --days ${{ github.event.inputs.days || '7' }} \
-            --email "$ALERT_EMAIL"
+            --email "$ALERT_EMAIL" \
+            --auto-repair
 
       - name: Upload results as artifact
         if: always()

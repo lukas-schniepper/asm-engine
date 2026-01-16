@@ -1191,11 +1191,185 @@ def generate_html_report(issues: List[Dict], result: Dict) -> str:
     return html
 
 
+def auto_repair_nav_issues(issues: List[Dict], tracker) -> List[Dict]:
+    """
+    Automatically repair NAV issues for EqualWeight portfolios.
+
+    This function recalculates NAV for portfolios with MTD_RECONCILIATION_MISMATCH
+    errors, which typically occur due to timing issues or calculation bugs.
+
+    Args:
+        issues: List of issues from the data quality checks
+        tracker: PortfolioTracker instance
+
+    Returns:
+        List of issues that were successfully repaired
+    """
+    from datetime import datetime
+    from AlphaMachine_core.tracking import Variants
+    from AlphaMachine_core.db import get_session
+    from sqlalchemy import text
+    from AlphaMachine_core.data_manager import StockDataManager
+    import pandas as pd
+
+    repaired = []
+    dm = StockDataManager()
+
+    # Group issues by portfolio
+    portfolio_issues = {}
+    for issue in issues:
+        if issue.get("type") == "MTD_RECONCILIATION_MISMATCH" and "_EqualWeight" in issue.get("portfolio", ""):
+            portfolio_name = issue["portfolio"]
+            if portfolio_name not in portfolio_issues:
+                portfolio_issues[portfolio_name] = []
+            portfolio_issues[portfolio_name].append(issue)
+
+    for portfolio_name, port_issues in portfolio_issues.items():
+        try:
+            logger.info(f"Auto-repairing NAV for {portfolio_name}...")
+
+            # Find the portfolio
+            portfolio = tracker.get_portfolio_by_name(portfolio_name)
+            if not portfolio:
+                logger.warning(f"  Portfolio not found: {portfolio_name}")
+                continue
+
+            # Find the earliest issue date
+            issue_dates = [datetime.strptime(i["date"], "%Y-%m-%d").date() for i in port_issues]
+            earliest_date = min(issue_dates)
+
+            # Get the baseline NAV from the day before the earliest issue
+            baseline_df = tracker.get_nav_series(
+                portfolio.id, Variants.RAW,
+                end_date=earliest_date - timedelta(days=1)
+            )
+
+            if baseline_df.empty:
+                logger.warning(f"  No baseline NAV found for {portfolio_name}")
+                continue
+
+            baseline_nav = float(baseline_df["nav"].iloc[-1])
+            baseline_date = baseline_df.index[-1].date() if hasattr(baseline_df.index[-1], 'date') else baseline_df.index[-1]
+            logger.info(f"  Using baseline NAV: {baseline_nav:.2f} from {baseline_date}")
+
+            # Get holdings for the date range
+            from utils.trading_calendar import get_trading_days
+            trading_days = get_trading_days(earliest_date, date.today())
+
+            all_tickers = set()
+            for d in trading_days:
+                holdings = tracker.get_holdings(portfolio.id, d)
+                all_tickers.update(h.ticker for h in holdings)
+
+            if not all_tickers:
+                logger.warning(f"  No holdings found for {portfolio_name}")
+                continue
+
+            # Load price data
+            price_dicts = dm.get_price_data(
+                list(all_tickers),
+                (earliest_date - timedelta(days=7)).strftime("%Y-%m-%d"),
+                date.today().strftime("%Y-%m-%d"),
+            )
+            price_df = pd.DataFrame(price_dicts)
+            if price_df.empty:
+                logger.warning(f"  No price data available for {portfolio_name}")
+                continue
+
+            price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
+
+            # Initialize previous prices from baseline date
+            dates_before = price_df[price_df["trade_date"] < earliest_date]["trade_date"].unique()
+            previous_prices = None
+            if len(dates_before) > 0:
+                latest_prev_date = max(dates_before)
+                prev_day_prices = price_df[price_df["trade_date"] == latest_prev_date]
+                if "adjusted_close" in prev_day_prices.columns:
+                    previous_prices = dict(zip(
+                        prev_day_prices["ticker"],
+                        prev_day_prices["adjusted_close"].fillna(prev_day_prices["close"])
+                    ))
+                else:
+                    previous_prices = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
+
+            # Recalculate NAV for each trading day
+            previous_nav = baseline_nav
+            initial_nav = baseline_nav
+            nav_fixed = 0
+
+            for trade_date in trading_days:
+                holdings = tracker.get_holdings(portfolio.id, trade_date)
+                if not holdings:
+                    continue
+
+                date_prices = price_df[price_df["trade_date"] == trade_date]
+                if date_prices.empty:
+                    continue
+
+                if "adjusted_close" in date_prices.columns:
+                    price_data = dict(zip(
+                        date_prices["ticker"],
+                        date_prices["adjusted_close"].fillna(date_prices["close"])
+                    ))
+                else:
+                    price_data = dict(zip(date_prices["ticker"], date_prices["close"]))
+
+                # Calculate normalized weights
+                weights = {}
+                for h in holdings:
+                    if h.weight:
+                        weights[h.ticker] = float(h.weight)
+                    else:
+                        weights[h.ticker] = 1.0 / len(holdings)
+
+                total_weight = sum(weights.values())
+                if total_weight > 0:
+                    weights = {t: w / total_weight for t, w in weights.items()}
+
+                # Calculate weighted return
+                total_return = 0.0
+                for ticker, weight in weights.items():
+                    curr_price = price_data.get(ticker)
+                    prev_price = previous_prices.get(ticker) if previous_prices else None
+
+                    if curr_price and prev_price and prev_price > 0:
+                        position_return = (curr_price / prev_price) - 1
+                        total_return += weight * position_return
+
+                # Calculate new NAV
+                raw_nav = previous_nav * (1 + total_return)
+                daily_return = (raw_nav / previous_nav) - 1 if previous_nav else 0.0
+                cumulative_return = (raw_nav / initial_nav) - 1 if initial_nav else 0.0
+
+                # Record the corrected NAV
+                tracker.record_nav(
+                    portfolio_id=portfolio.id,
+                    trade_date=trade_date,
+                    variant=Variants.RAW,
+                    nav=raw_nav,
+                    daily_return=daily_return,
+                    cumulative_return=cumulative_return,
+                )
+
+                previous_nav = raw_nav
+                previous_prices = price_data
+                nav_fixed += 1
+
+            logger.info(f"  Fixed {nav_fixed} NAV records for {portfolio_name}")
+            repaired.extend(port_issues)
+
+        except Exception as e:
+            logger.error(f"Error auto-repairing {portfolio_name}: {e}")
+
+    return repaired
+
+
 def run_monitor(
     portfolio_name: Optional[str] = None,
     days_back: int = 7,
     output_json: bool = False,
     email_recipient: Optional[str] = None,
+    auto_repair: bool = False,
 ) -> Dict:
     """
     Run comprehensive data quality monitoring.
@@ -1205,6 +1379,7 @@ def run_monitor(
         days_back: Number of days to check
         email_recipient: Email address to send alerts (on failure)
         output_json: If True, return JSON-serializable dict
+        auto_repair: If True, automatically repair NAV issues for EqualWeight portfolios
 
     Returns:
         Dictionary with monitoring results
@@ -1266,6 +1441,21 @@ def run_monitor(
 
     logger.info("Checking EqualWeight portfolios for incorrect shares...")
     all_issues.extend(check_equalweight_has_no_shares(portfolios, tracker))
+
+    # Auto-repair if enabled
+    repaired_issues = []
+    if auto_repair and all_issues:
+        errors_before = len([i for i in all_issues if i.get("severity") == "error"])
+        if errors_before > 0:
+            logger.info(f"\nAuto-repair enabled. Attempting to fix {errors_before} error(s)...")
+            repaired_issues = auto_repair_nav_issues(all_issues, tracker)
+            if repaired_issues:
+                logger.info(f"Successfully repaired {len(repaired_issues)} issue(s)")
+                # Remove repaired issues from all_issues
+                repaired_keys = [(i["portfolio"], i["date"], i["type"]) for i in repaired_issues]
+                all_issues = [i for i in all_issues
+                              if (i.get("portfolio"), i.get("date"), i.get("type")) not in repaired_keys]
+                logger.info(f"Remaining issues after repair: {len(all_issues)}")
 
     # Generate report
     report = generate_report(all_issues)
@@ -1377,6 +1567,11 @@ def main():
         action="store_true",
         help="Send email even if no issues found (daily digest)",
     )
+    parser.add_argument(
+        "--auto-repair",
+        action="store_true",
+        help="Automatically repair NAV issues for EqualWeight portfolios",
+    )
 
     args = parser.parse_args()
 
@@ -1388,6 +1583,7 @@ def main():
         days_back=args.days,
         output_json=args.json,
         email_recipient=email_recipient,
+        auto_repair=getattr(args, 'auto_repair', False),
     )
 
     # Send daily digest even if no issues (if requested)

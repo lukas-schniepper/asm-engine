@@ -112,6 +112,7 @@ def recalculate_nav_weight_based(
     start_date: date,
     end_date: date,
     dry_run: bool = False,
+    baseline_nav: Optional[float] = None,
 ) -> dict:
     """
     Recalculate NAV for a portfolio using weight-based methodology.
@@ -172,10 +173,28 @@ def recalculate_nav_weight_based(
 
     price_df["trade_date"] = pd.to_datetime(price_df["trade_date"]).dt.date
 
-    # Track NAV history
-    previous_nav = None
-    initial_nav = None
+    # Track NAV history - use baseline_nav if provided
+    previous_nav = baseline_nav
+    initial_nav = baseline_nav if baseline_nav else None
     previous_prices = None
+
+    if baseline_nav:
+        logger.info(f"  Using baseline NAV: {baseline_nav:.2f}")
+
+    # CRITICAL FIX: Initialize previous_prices from the most recent trading day BEFORE start_date
+    # This ensures we calculate correct returns on the first day of recalculation
+    dates_before = price_df[price_df["trade_date"] < start_date]["trade_date"].unique()
+    if len(dates_before) > 0:
+        latest_prev_date = max(dates_before)
+        prev_day_prices = price_df[price_df["trade_date"] == latest_prev_date]
+        if "adjusted_close" in prev_day_prices.columns:
+            previous_prices = dict(zip(
+                prev_day_prices["ticker"],
+                prev_day_prices["adjusted_close"].fillna(prev_day_prices["close"])
+            ))
+        else:
+            previous_prices = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
+        logger.info(f"  Initialized previous_prices from {latest_prev_date}: {len(previous_prices)} tickers")
 
     # Process each trading day
     for trade_date in trading_days:
@@ -202,31 +221,33 @@ def recalculate_nav_weight_based(
 
         # Calculate NAV using weight-based method with NORMALIZED weights
         # The tracker.calculate_raw_nav doesn't normalize, so we do it manually here
+
+        # Get weights and normalize them to sum to 1.0
+        weights = {}
+        for h in holdings:
+            if h.weight:
+                weights[h.ticker] = float(h.weight)
+            else:
+                weights[h.ticker] = 1.0 / len(holdings)  # Default to equal weight
+
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            weights = {t: w / total_weight for t, w in weights.items()}
+
+        # Calculate weighted return
+        total_return = 0.0
+        for ticker, weight in weights.items():
+            current_price = price_data.get(ticker)
+            prev_price = previous_prices.get(ticker) if previous_prices else None
+
+            if current_price and prev_price and prev_price > 0:
+                position_return = (current_price / prev_price) - 1
+                total_return += weight * position_return
+
+        # On first day, initialize NAV to 100 then apply any return if we have previous prices
         if previous_nav is None:
-            raw_nav = 100.0
+            raw_nav = 100.0 * (1 + total_return) if previous_prices else 100.0
         else:
-            # Get weights and normalize them to sum to 1.0
-            weights = {}
-            for h in holdings:
-                if h.weight:
-                    weights[h.ticker] = float(h.weight)
-                else:
-                    weights[h.ticker] = 1.0 / len(holdings)  # Default to equal weight
-
-            total_weight = sum(weights.values())
-            if total_weight > 0:
-                weights = {t: w / total_weight for t, w in weights.items()}
-
-            # Calculate weighted return
-            total_return = 0.0
-            for ticker, weight in weights.items():
-                current_price = price_data.get(ticker)
-                prev_price = previous_prices.get(ticker) if previous_prices else None
-
-                if current_price and prev_price and prev_price > 0:
-                    position_return = (current_price / prev_price) - 1
-                    total_return += weight * position_return
-
             raw_nav = previous_nav * (1 + total_return)
 
         # First day check
@@ -294,26 +315,53 @@ def main():
         if confirm.lower() != 'y':
             return 1
 
-    # Get date range
-    start_date = portfolio.start_date
+    # Get date range - find the first date with holdings
+    from AlphaMachine_core.db import get_session
+    from sqlalchemy import text
+    from AlphaMachine_core.tracking import Variants
+
+    with get_session() as session:
+        result = session.execute(text('''
+            SELECT MIN(effective_date) FROM portfolio_holdings WHERE portfolio_id = :pid
+        '''), {'pid': portfolio.id})
+        first_holdings_date = result.scalar()
+
+    if not first_holdings_date:
+        logger.error("No holdings found for this portfolio")
+        return 1
+
+    # Start from the first trading day on or after the holdings became effective
+    start_date = first_holdings_date
     end_date = date.today()
+
+    # Get the previous NAV (before first holdings date) to use as baseline
+    existing_nav_df = tracker.get_nav_series(portfolio.id, Variants.RAW, end_date=first_holdings_date - timedelta(days=1))
+    if not existing_nav_df.empty:
+        baseline_nav = float(existing_nav_df["nav"].iloc[-1])
+        baseline_date = existing_nav_df.index[-1].date() if hasattr(existing_nav_df.index[-1], 'date') else existing_nav_df.index[-1]
+        logger.info(f"Found baseline NAV: {baseline_nav:.2f} from {baseline_date}")
+    else:
+        baseline_nav = None
+        logger.info("No baseline NAV found - will start fresh at 100")
 
     logger.info(f"\n{'='*60}")
     logger.info(f"Fixing EqualWeight portfolio: {portfolio.name}")
     logger.info(f"{'='*60}")
+    logger.info(f"First holdings date: {first_holdings_date}")
+    logger.info(f"Recalculating from: {start_date} to {end_date}")
 
     # Step 1: Clear shares from holdings
     logger.info("\nStep 1: Clearing shares from holdings...")
     shares_cleared = clear_shares_from_holdings(portfolio.id, dry_run=args.dry_run)
 
-    # Step 2: Delete existing NAV records
+    # Step 2: Delete existing NAV records only from first holdings date onwards
     logger.info("\nStep 2: Deleting existing NAV records...")
     nav_deleted = delete_nav_records(portfolio.id, start_date, end_date, dry_run=args.dry_run)
     logger.info(f"  {'Would delete' if args.dry_run else 'Deleted'} {nav_deleted} NAV records")
 
     # Step 3: Recalculate NAV using weight-based method
     logger.info("\nStep 3: Recalculating NAV (weight-based)...")
-    stats = recalculate_nav_weight_based(tracker, portfolio, start_date, end_date, dry_run=args.dry_run)
+    stats = recalculate_nav_weight_based(tracker, portfolio, start_date, end_date, dry_run=args.dry_run, baseline_nav=baseline_nav)
 
     logger.info(f"\n{'='*60}")
     logger.info("Summary:")
