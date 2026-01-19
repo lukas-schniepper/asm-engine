@@ -92,6 +92,7 @@ FORCE_EQUAL_WEIGHT = False
 # === Constraints & Stabilität ===
 MAX_TURNOVER = 0.20
 MAX_SECTOR_WEIGHT = 0.30
+ENABLE_SECTOR_LIMITS = True  # Set to False to disable sector exposure constraints
 
 # === Zielbedingungen für Optimierung ===
 MIN_CAGR = 0.10

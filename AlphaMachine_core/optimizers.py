@@ -8,6 +8,188 @@ from scipy.spatial.distance import pdist
 from typing import Literal
 
 
+def fetch_sector_mapping(tickers: list[str]) -> dict[str, str]:
+    """
+    Fetch ticker -> sector mapping from TickerInfo table.
+
+    Args:
+        tickers: List of ticker symbols to look up
+
+    Returns:
+        Dictionary mapping ticker -> sector. Tickers without sector data
+        are mapped to "Unknown".
+    """
+    from AlphaMachine_core.db import get_session
+    from AlphaMachine_core.models import TickerInfo
+    from sqlmodel import select
+
+    tickers_set = set(tickers)
+    sector_map = {}
+
+    with get_session() as session:
+        for ti in session.exec(select(TickerInfo)).all():
+            if ti.ticker in tickers_set:
+                sector_map[ti.ticker] = ti.sector if ti.sector else "Unknown"
+
+    # Fill missing tickers with "Unknown"
+    for t in tickers:
+        if t not in sector_map:
+            sector_map[t] = "Unknown"
+
+    return sector_map
+
+
+def build_sector_constraints(tickers: list, sector_map: dict, max_sector_weight: float) -> list:
+    """
+    Build SLSQP inequality constraints for sector exposure limits.
+
+    For SLSQP, inequality constraints must satisfy: constraint(w) >= 0
+    So for max_sector_weight limit: max_sector_weight - sum(weights_in_sector) >= 0
+
+    Args:
+        tickers: List of ticker symbols (ordered as in weight array)
+        sector_map: Dictionary mapping ticker -> sector
+        max_sector_weight: Maximum allowed weight per sector (e.g., 0.30)
+
+    Returns:
+        List of constraint dictionaries for scipy.optimize.minimize
+    """
+    # Group ticker indices by sector
+    sector_to_indices = {}
+    for i, ticker in enumerate(tickers):
+        sector = sector_map.get(ticker, "Unknown")
+        sector_to_indices.setdefault(sector, []).append(i)
+
+    constraints = []
+    for sector, indices in sector_to_indices.items():
+        # Use factory function to avoid closure issues
+        def make_constraint(idx_list, limit):
+            return lambda w: limit - sum(w[i] for i in idx_list)
+
+        constraints.append({
+            "type": "ineq",
+            "fun": make_constraint(indices, max_sector_weight)
+        })
+
+    return constraints
+
+
+def adjust_weights_for_sector_limits(
+    weights: pd.Series,
+    sector_map: dict,
+    max_sector_weight: float,
+    max_iterations: int = 10
+) -> pd.Series:
+    """
+    Iteratively scale down over-concentrated sectors.
+
+    Used as fallback when SLSQP fails or for HRP method which doesn't
+    use scipy.optimize.
+
+    Args:
+        weights: Series of weights indexed by ticker
+        sector_map: Dictionary mapping ticker -> sector
+        max_sector_weight: Maximum allowed weight per sector
+        max_iterations: Maximum adjustment iterations
+
+    Returns:
+        Adjusted weights Series (normalized to sum to 1)
+    """
+    weights = weights.copy()
+
+    for _ in range(max_iterations):
+        # Calculate current sector exposures
+        sector_weights = {}
+        for ticker, weight in weights.items():
+            sector = sector_map.get(ticker, "Unknown")
+            sector_weights[sector] = sector_weights.get(sector, 0) + weight
+
+        # Find sectors exceeding limit
+        violations = {s: w for s, w in sector_weights.items() if w > max_sector_weight + 1e-6}
+
+        if not violations:
+            break
+
+        # Scale down tickers in violating sectors
+        for sector, current in violations.items():
+            scale = max_sector_weight / current
+            for ticker in weights.index:
+                if sector_map.get(ticker, "Unknown") == sector:
+                    weights[ticker] *= scale
+
+        # Renormalize to sum to 1
+        weights /= weights.sum()
+
+    return weights
+
+
+def calculate_sector_allocation(
+    weights: pd.Series,
+    sector_map: dict[str, str],
+) -> dict[str, float]:
+    """
+    Calculate sector allocation from portfolio weights.
+
+    Args:
+        weights: Series of weights indexed by ticker
+        sector_map: Dictionary mapping ticker -> sector
+
+    Returns:
+        Dictionary mapping sector -> total weight, sorted by weight descending
+    """
+    sector_weights = {}
+    for ticker, weight in weights.items():
+        sector = sector_map.get(ticker, "Unknown")
+        sector_weights[sector] = sector_weights.get(sector, 0) + weight
+
+    # Sort by weight descending
+    return dict(sorted(sector_weights.items(), key=lambda x: x[1], reverse=True))
+
+
+def print_sector_allocation_table(
+    weights: pd.Series,
+    sector_map: dict[str, str],
+    max_sector_weight: float = None,
+) -> dict[str, float]:
+    """
+    Print a formatted table showing sector allocation.
+
+    Args:
+        weights: Series of weights indexed by ticker
+        sector_map: Dictionary mapping ticker -> sector
+        max_sector_weight: Optional limit to highlight violations
+
+    Returns:
+        Dictionary of sector allocations
+    """
+    sector_alloc = calculate_sector_allocation(weights, sector_map)
+
+    print("\n" + "=" * 50)
+    print("📊 SECTOR ALLOCATION")
+    print("=" * 50)
+    print(f"{'Sector':<25} {'Weight':>10} {'Status':>12}")
+    print("-" * 50)
+
+    for sector, weight in sector_alloc.items():
+        status = ""
+        if max_sector_weight and weight > max_sector_weight + 1e-6:
+            status = "⚠️ OVER"
+        elif max_sector_weight and weight > max_sector_weight * 0.9:
+            status = "⚡ NEAR"
+        else:
+            status = "✓"
+
+        print(f"{sector:<25} {weight:>9.1%} {status:>12}")
+
+    print("-" * 50)
+    print(f"{'TOTAL':<25} {sum(sector_alloc.values()):>9.1%}")
+    if max_sector_weight:
+        print(f"{'Sector Limit':<25} {max_sector_weight:>9.1%}")
+    print("=" * 50 + "\n")
+
+    return sector_alloc
+
+
 def get_cov_matrix(
     returns: pd.DataFrame,
     method: Literal["ledoit-wolf", "constant-corr", "factor-model"] = "ledoit-wolf",
@@ -108,6 +290,8 @@ def optimize_portfolio(
     force_equal_weight: bool = False,
     debug_label: str = "",
     num_stocks: int = None,
+    sector_map: dict[str, str] = None,
+    max_sector_weight: float = None,
 ) -> pd.Series:
 
     #print("⚙️ Optimizer Call")
@@ -195,16 +379,29 @@ def optimize_portfolio(
                 port_vol = np.sqrt(w.T @ cov @ w)
                 return -port_return / port_vol if port_vol > 0 else np.inf
 
-        cons = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
+        # Build constraints list: equality constraint (weights sum to 1) + sector constraints
+        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+
+        # Add sector constraints if provided
+        if sector_map and max_sector_weight:
+            sector_constraints = build_sector_constraints(tickers.tolist(), sector_map, max_sector_weight)
+            cons.extend(sector_constraints)
+
         bounds = [(min_weight, max_weight)] * len(tickers)
         x0 = np.ones(len(tickers)) / len(tickers)
         x0 = np.clip(x0, min_weight, max_weight)   # innerhalb der [min_weight, max_weight] bringen
-        x0 = x0 / x0.sum()        
-        
+        x0 = x0 / x0.sum()
+
         result = minimize(
-            objective, x0, method="SLSQP", bounds=bounds, constraints=[cons]
+            objective, x0, method="SLSQP", bounds=bounds, constraints=cons
         )
         weights = result.x if result.success else x0
+
+        # If optimization failed and we have sector constraints, try post-hoc adjustment
+        if not result.success and sector_map and max_sector_weight:
+            weights_series = pd.Series(weights, index=tickers)
+            weights_series = adjust_weights_for_sector_limits(weights_series, sector_map, max_sector_weight)
+            weights = weights_series.values
 
     elif method == "hrp":
         corr, link = _safe_linkage_from_returns(returns)
@@ -213,6 +410,12 @@ def optimize_portfolio(
         cov_ = cov.loc[sorted_tickers, sorted_tickers]
         raw_weights = get_recursive_bisection(cov_).reindex(tickers).fillna(0).values
         weights = normalize(raw_weights)
+
+        # HRP doesn't use SLSQP, so apply sector limits post-hoc
+        if sector_map and max_sector_weight:
+            weights_series = pd.Series(weights, index=tickers)
+            weights_series = adjust_weights_for_sector_limits(weights_series, sector_map, max_sector_weight)
+            weights = weights_series.values
 
     else:
         raise ValueError(f"Unbekannte Optimierungsmethode: {method}")
@@ -225,5 +428,9 @@ def optimize_portfolio(
         print(
             f"⚠️ {out_of_bounds} Gewichte liegen außerhalb der erlaubten Bandbreite ({min_weight:.2f}–{max_weight:.2f})"
         )
+
+    # === Sector Exposure Check & Table ===
+    if sector_map and max_sector_weight:
+        print_sector_allocation_table(weights, sector_map, max_sector_weight)
 
     return weights

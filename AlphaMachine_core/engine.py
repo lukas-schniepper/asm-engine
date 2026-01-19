@@ -20,6 +20,8 @@ from AlphaMachine_core.config import (
     BACKTEST_WINDOW_DAYS,
     MIN_WEIGHT,
     MAX_WEIGHT,
+    MAX_SECTOR_WEIGHT,
+    ENABLE_SECTOR_LIMITS,
     REBALANCE_FREQUENCY,
     OPTIMIZE_WEIGHTS,
     OPTIMIZER_METHOD,
@@ -31,6 +33,7 @@ from AlphaMachine_core.config import (
     FIXED_COST_PER_TRADE,
     VARIABLE_COST_PCT,
 )
+from AlphaMachine_core.optimizers import fetch_sector_mapping, calculate_sector_allocation
 
 
 class SharpeBacktestEngine:
@@ -121,7 +124,11 @@ class SharpeBacktestEngine:
         self.variable_cost_pct      = variable_cost_pct
         self.optimization_mode      = optimization_mode if optimization_mode is not None else OPTIMIZATION_MODE
 
-       
+        # Sector limit configuration
+        self.enable_sector_limits = ENABLE_SECTOR_LIMITS
+        self.max_sector_weight = MAX_SECTOR_WEIGHT if ENABLE_SECTOR_LIMITS else None
+        self._sector_map_cache = None  # Will be populated on first rebalance if sector limits enabled
+
         # Cash Handling
         self.current_cash = self.start_balance
 
@@ -370,13 +377,37 @@ class SharpeBacktestEngine:
                     optimizer_output_weights = pd.Series(dtype=float)
                     tickers_from_optimizer = []
 
+                    # Fetch sector mapping once (cached for all rebalances) if sector limits enabled
+                    if self.enable_sector_limits and self._sector_map_cache is None:
+                        self._sector_map_cache = fetch_sector_mapping(self.price_data.columns.tolist())
+
                     if self.optimization_mode == "select-then-optimize":
                         top_sharpe_tickers = select_top_sharpe_tickers(sub_returns[valid_tickers_for_rebal], n_stocks_final_selection)
                         if not top_sharpe_tickers.empty:
-                            optimizer_output_weights = optimize_portfolio(returns=sub_returns[top_sharpe_tickers], method=self.optimizer_method, cov_estimator=self.cov_estimator, min_weight=self.min_weight, max_weight=self.max_weight, force_equal_weight=self.force_equal_weight, num_stocks=len(top_sharpe_tickers))
+                            optimizer_output_weights = optimize_portfolio(
+                                returns=sub_returns[top_sharpe_tickers],
+                                method=self.optimizer_method,
+                                cov_estimator=self.cov_estimator,
+                                min_weight=self.min_weight,
+                                max_weight=self.max_weight,
+                                force_equal_weight=self.force_equal_weight,
+                                num_stocks=len(top_sharpe_tickers),
+                                sector_map=self._sector_map_cache,
+                                max_sector_weight=self.max_sector_weight,
+                            )
                             tickers_from_optimizer = top_sharpe_tickers.tolist()
                     elif self.optimization_mode == "optimize-subset":
-                        optimizer_output_weights = optimize_portfolio(returns=sub_returns[valid_tickers_for_rebal], method=self.optimizer_method, cov_estimator=self.cov_estimator, min_weight=self.min_weight, max_weight=self.max_weight, force_equal_weight=self.force_equal_weight, num_stocks=n_stocks_final_selection)
+                        optimizer_output_weights = optimize_portfolio(
+                            returns=sub_returns[valid_tickers_for_rebal],
+                            method=self.optimizer_method,
+                            cov_estimator=self.cov_estimator,
+                            min_weight=self.min_weight,
+                            max_weight=self.max_weight,
+                            force_equal_weight=self.force_equal_weight,
+                            num_stocks=n_stocks_final_selection,
+                            sector_map=self._sector_map_cache,
+                            max_sector_weight=self.max_sector_weight,
+                        )
                         tickers_from_optimizer = optimizer_output_weights.index.tolist()
                     
                     if optimizer_output_weights.empty or optimizer_output_weights.sum() < 0.99:
@@ -412,6 +443,13 @@ class SharpeBacktestEngine:
                     monthly_alloc_log_list.extend(alloc_log_for_rebal)
 
                     # --- Logging für selection_details (Normales Rebalancing) ---
+                    # Calculate sector allocation for logging
+                    sector_allocation = {}
+                    if self.enable_sector_limits and self._sector_map_cache:
+                        sector_allocation = calculate_sector_allocation(
+                            final_target_weights_series, self._sector_map_cache
+                        )
+
                     self.selection_details.append({
                         "Rebalance Date": pd.to_datetime(rebalance_action_date).strftime('%Y-%m-%d'),
                         "Actual Rebalance Day": pd.to_datetime(rebalance_action_date).strftime('%Y-%m-%d'),
@@ -421,6 +459,7 @@ class SharpeBacktestEngine:
                         "Rebalance Frequency": self.rebalance_freq,
                         "Total Trading Costs": costs_this_rebal_event,
                         "Trading Costs %": (costs_this_rebal_event / portfolio_val_pre_rebal * 100) if portfolio_val_pre_rebal and portfolio_val_pre_rebal > 0 else 0.0,
+                        "Sector Allocation": sector_allocation,
                         # Optional: "Target Equity Quote": target_equity_alloc_quote*100
                     })
 
@@ -509,9 +548,12 @@ class SharpeBacktestEngine:
                                         min_weight=self.min_weight, max_weight=self.max_weight,
                                         force_equal_weight=self.force_equal_weight,
                                         debug_label="NextMonth A (select-then-optimize)",
-                                        num_stocks=len(nm_top_tickers_idx))
+                                        num_stocks=len(nm_top_tickers_idx),
+                                        sector_map=self._sector_map_cache,
+                                        max_sector_weight=self.max_sector_weight,
+                                    )
                                     nm_selected_tickers_for_portfolio = nm_top_tickers_idx.tolist()
-                            
+
                             elif self.optimization_mode == "optimize-subset":
                                 nm_final_optimizer_weights = optimize_portfolio(
                                     returns=nm_sub_returns[nm_valid_tickers_in_sub],
@@ -519,7 +561,10 @@ class SharpeBacktestEngine:
                                     min_weight=self.min_weight, max_weight=self.max_weight,
                                     force_equal_weight=self.force_equal_weight,
                                     debug_label="NextMonth B (optimize-subset)",
-                                    num_stocks=n_stocks_nm)
+                                    num_stocks=n_stocks_nm,
+                                    sector_map=self._sector_map_cache,
+                                    max_sector_weight=self.max_sector_weight,
+                                )
                                 nm_selected_tickers_for_portfolio = nm_final_optimizer_weights.index.tolist()
 
                             if not nm_final_optimizer_weights.empty:
@@ -555,6 +600,10 @@ class SharpeBacktestEngine:
         # true_daily_portfolio_pnl wird in _calculate_performance_metrics gesetzt
         if hasattr(self, 'true_daily_portfolio_pnl') and not self.true_daily_portfolio_pnl.empty:
              self.true_daily_portfolio_pnl = self.true_daily_portfolio_pnl.loc[self.user_start_date:]
+
+        # Print sector allocation summary if sector limits are enabled
+        if self.enable_sector_limits:
+            self.print_sector_allocation_summary()
 
         return self.portfolio_value
         
@@ -836,3 +885,78 @@ class SharpeBacktestEngine:
             market_pnl_series.loc[date] = daily_market_pnl
         
         return market_pnl_series.fillna(0)
+
+    def print_sector_allocation_summary(self):
+        """
+        Print a summary table showing sector allocation for each rebalance.
+        """
+        if not self.selection_details:
+            print("No rebalance data available.")
+            return
+
+        print("\n" + "=" * 80)
+        print("📊 SECTOR ALLOCATION HISTORY")
+        print("=" * 80)
+
+        # Collect all sectors across all rebalances
+        all_sectors = set()
+        for detail in self.selection_details:
+            if detail.get("Rebalance Date") != "SUMMARY" and "Sector Allocation" in detail:
+                all_sectors.update(detail["Sector Allocation"].keys())
+
+        all_sectors = sorted(all_sectors)
+
+        if not all_sectors:
+            print("No sector allocation data available (sector limits may be disabled).")
+            return
+
+        # Print header
+        header = f"{'Date':<12}"
+        for sector in all_sectors:
+            # Truncate long sector names
+            sector_short = sector[:10] if len(sector) > 10 else sector
+            header += f" {sector_short:>10}"
+        print(header)
+        print("-" * len(header))
+
+        # Print each rebalance
+        for detail in self.selection_details:
+            if detail.get("Rebalance Date") == "SUMMARY":
+                continue
+            if "Sector Allocation" not in detail:
+                continue
+
+            sector_alloc = detail["Sector Allocation"]
+            row = f"{detail['Rebalance Date']:<12}"
+
+            for sector in all_sectors:
+                weight = sector_alloc.get(sector, 0)
+                row += f" {weight:>9.1%}"
+
+            print(row)
+
+        print("=" * 80)
+
+        # Print average sector allocation
+        print("\n📈 AVERAGE SECTOR ALLOCATION:")
+        print("-" * 40)
+
+        sector_totals = {s: [] for s in all_sectors}
+        for detail in self.selection_details:
+            if detail.get("Rebalance Date") == "SUMMARY":
+                continue
+            if "Sector Allocation" not in detail:
+                continue
+            for sector in all_sectors:
+                sector_totals[sector].append(detail["Sector Allocation"].get(sector, 0))
+
+        for sector in all_sectors:
+            if sector_totals[sector]:
+                avg = sum(sector_totals[sector]) / len(sector_totals[sector])
+                max_val = max(sector_totals[sector])
+                min_val = min(sector_totals[sector])
+                print(f"  {sector:<20} Avg: {avg:>6.1%}  Min: {min_val:>6.1%}  Max: {max_val:>6.1%}")
+
+        if self.max_sector_weight:
+            print(f"\n  Sector Limit: {self.max_sector_weight:.0%}")
+        print("=" * 80 + "\n")
