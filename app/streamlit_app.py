@@ -600,6 +600,7 @@ def show_backtester_ui():
         "Drawdowns",
         "Trading Costs",
         "Rebalance",
+        "Sector Allocation",
         "Paramter",
         "Logs"
     ])
@@ -890,9 +891,67 @@ def show_backtester_ui():
         else:
             st.info("Keine Rebalance-Detaildaten vorhanden.")
 
-
-    # Tab 7: Parameters
+    # Tab 7: Sector Allocation
     with tabs[10]:
+        st.subheader("📊 Sector Allocation per Rebalance")
+
+        if not hasattr(engine_baseline, 'selection_details') or not engine_baseline.selection_details:
+            st.info("No sector allocation data available.")
+        else:
+            # Build sector allocation table from selection_details
+            sector_data = []
+            all_sectors = set()
+
+            for detail in engine_baseline.selection_details:
+                if detail.get("Rebalance Date") == "SUMMARY":
+                    continue
+                if "Sector Allocation" in detail and detail["Sector Allocation"]:
+                    all_sectors.update(detail["Sector Allocation"].keys())
+                    sector_data.append({
+                        "Date": detail["Rebalance Date"],
+                        **{s: detail["Sector Allocation"].get(s, 0) for s in detail["Sector Allocation"]}
+                    })
+
+            if sector_data:
+                df_sectors = pd.DataFrame(sector_data)
+
+                # Format percentages
+                sector_cols = [c for c in df_sectors.columns if c != "Date"]
+                for col in sector_cols:
+                    df_sectors[col] = df_sectors[col].apply(lambda x: f"{x:.1%}" if pd.notna(x) and x > 0 else "-")
+
+                st.dataframe(df_sectors, use_container_width=True, hide_index=True)
+
+                # Show sector limit info
+                if hasattr(engine_baseline, 'max_sector_weight') and engine_baseline.max_sector_weight:
+                    st.info(f"📏 Sector Limit: {engine_baseline.max_sector_weight:.0%}")
+
+                # Average sector allocation
+                st.subheader("📈 Average Sector Allocation")
+                avg_data = []
+                for detail in engine_baseline.selection_details:
+                    if detail.get("Rebalance Date") == "SUMMARY":
+                        continue
+                    if "Sector Allocation" in detail and detail["Sector Allocation"]:
+                        for sector, weight in detail["Sector Allocation"].items():
+                            avg_data.append({"Sector": sector, "Weight": weight})
+
+                if avg_data:
+                    df_avg = pd.DataFrame(avg_data)
+                    df_avg_grouped = df_avg.groupby("Sector")["Weight"].agg(["mean", "min", "max"]).reset_index()
+                    df_avg_grouped.columns = ["Sector", "Avg", "Min", "Max"]
+                    df_avg_grouped = df_avg_grouped.sort_values("Avg", ascending=False)
+
+                    # Format as percentages
+                    for col in ["Avg", "Min", "Max"]:
+                        df_avg_grouped[col] = df_avg_grouped[col].apply(lambda x: f"{x:.1%}")
+
+                    st.dataframe(df_avg_grouped, use_container_width=True, hide_index=True)
+            else:
+                st.info("Sector limits are disabled or no sector data available.")
+
+    # Tab 8: Parameters
+    with tabs[11]:
         st.subheader("⚙️ Ausgewählte Backtest-Parameter")
         df_params = pd.DataFrame(ui_params.items(),
                                 columns=["Parameter", "Wert"])
@@ -900,8 +959,8 @@ def show_backtester_ui():
         st.dataframe(fmt_df(df_params), use_container_width=True)
 
 
-    # Tab 8: Logs
-    with tabs[11]:
+    # Tab 9: Logs
+    with tabs[12]:
         st.subheader("🪵 Logs")
         for line in (engine_baseline.ticker_coverage_logs +
                     engine_baseline.log_lines):
@@ -2807,7 +2866,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
     st.table(df_year.astype({"Year": int}).reset_index(drop=True))
 
 def render_engine_tabs(engine):
-    tabs = st.tabs(["Dashboard", "Daily", "Monthly", "Yearly", "Drawdown"])
+    tabs = st.tabs(["Dashboard", "Daily", "Monthly", "Yearly", "Drawdown", "Sector Allocation"])
 
     # --- Dashboard ------------------------------------------------
     with tabs[0]:
@@ -2841,6 +2900,66 @@ def render_engine_tabs(engine):
         df_port["Drawdown"] = df_port["Portfolio"] / df_port["Peak"] - 1
         dd = (df_port["Drawdown"]*100).round(2)
         st.line_chart(dd, height=250)
+
+    # --- Sector Allocation ----------------------------------------
+    with tabs[5]:
+        st.subheader("📊 Sector Allocation per Rebalance")
+
+        # Check if sector allocation data is available
+        if not hasattr(engine, 'selection_details') or not engine.selection_details:
+            st.info("No sector allocation data available.")
+        else:
+            # Build sector allocation table from selection_details
+            sector_data = []
+            all_sectors = set()
+
+            for detail in engine.selection_details:
+                if detail.get("Rebalance Date") == "SUMMARY":
+                    continue
+                if "Sector Allocation" in detail and detail["Sector Allocation"]:
+                    all_sectors.update(detail["Sector Allocation"].keys())
+                    sector_data.append({
+                        "Date": detail["Rebalance Date"],
+                        **{s: detail["Sector Allocation"].get(s, 0) for s in detail["Sector Allocation"]}
+                    })
+
+            if sector_data:
+                df_sectors = pd.DataFrame(sector_data)
+
+                # Format percentages
+                sector_cols = [c for c in df_sectors.columns if c != "Date"]
+                for col in sector_cols:
+                    df_sectors[col] = df_sectors[col].apply(lambda x: f"{x:.1%}" if pd.notna(x) and x > 0 else "-")
+
+                st.dataframe(df_sectors, use_container_width=True, hide_index=True)
+
+                # Show sector limit info
+                if hasattr(engine, 'max_sector_weight') and engine.max_sector_weight:
+                    st.info(f"📏 Sector Limit: {engine.max_sector_weight:.0%}")
+
+                # Average sector allocation
+                st.subheader("📈 Average Sector Allocation")
+                avg_data = []
+                for detail in engine.selection_details:
+                    if detail.get("Rebalance Date") == "SUMMARY":
+                        continue
+                    if "Sector Allocation" in detail and detail["Sector Allocation"]:
+                        for sector, weight in detail["Sector Allocation"].items():
+                            avg_data.append({"Sector": sector, "Weight": weight})
+
+                if avg_data:
+                    df_avg = pd.DataFrame(avg_data)
+                    df_avg_grouped = df_avg.groupby("Sector")["Weight"].agg(["mean", "min", "max"]).reset_index()
+                    df_avg_grouped.columns = ["Sector", "Avg", "Min", "Max"]
+                    df_avg_grouped = df_avg_grouped.sort_values("Avg", ascending=False)
+
+                    # Format as percentages
+                    for col in ["Avg", "Min", "Max"]:
+                        df_avg_grouped[col] = df_avg_grouped[col].apply(lambda x: f"{x:.1%}")
+
+                    st.dataframe(df_avg_grouped, use_container_width=True, hide_index=True)
+            else:
+                st.info("Sector limits are disabled or no sector data available.")
 
 
 # =============================================================================
