@@ -313,12 +313,11 @@ def optimize_portfolio(
 
     tickers = returns.columns
 
-    # Wichtige Änderung: Wähle Top N Aktien bei optimize-subset
-    # Prüfe, ob wir im optimize-subset Modus sind (anhand des debug_label)
-    is_optimize_subset = "B - Optimizer selects & weights" in debug_label
+    # Stock selection: when num_stocks is set and we have more candidates than needed
+    # This applies to optimize-subset mode where we need to select which stocks to include
+    needs_stock_selection = num_stocks is not None and num_stocks < len(tickers)
 
-    # Wenn num_stocks gesetzt ist und wir im optimize-subset Modus sind
-    if is_optimize_subset and num_stocks is not None and num_stocks < len(tickers):
+    if needs_stock_selection:
         cov = get_cov_matrix(returns, method=cov_estimator)
         mean_returns = returns.mean().values
 
