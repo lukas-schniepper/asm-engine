@@ -397,8 +397,9 @@ def optimize_portfolio(
         )
         weights = result.x if result.success else x0
 
-        # If optimization failed and we have sector constraints, try post-hoc adjustment
-        if not result.success and sector_map and max_sector_weight:
+        # Always apply post-hoc adjustment to ensure sector limits are strictly enforced
+        # (SLSQP may return success=True but still violate inequality constraints)
+        if sector_map and max_sector_weight:
             weights_series = pd.Series(weights, index=tickers)
             weights_series = adjust_weights_for_sector_limits(weights_series, sector_map, max_sector_weight)
             weights = weights_series.values
