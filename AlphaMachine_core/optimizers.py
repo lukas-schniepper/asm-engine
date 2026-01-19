@@ -347,9 +347,39 @@ def optimize_portfolio(
             prelim_weights = pd.Series(1 / len(tickers), index=tickers)
 
         # Wähle die Top N Aktien basierend auf den vorläufigen Gewichten
-        selected_tickers = (
-            prelim_weights.sort_values(ascending=False).head(num_stocks).index
-        )
+        # WITH SECTOR-AWARE SELECTION to respect sector limits
+        if sector_map and max_sector_weight:
+            # Calculate max stocks per sector based on limit and min_weight
+            # If max_sector_weight=30% and min_weight=1%, max ~30 stocks from one sector
+            # But more practically: limit to proportion of total stocks
+            max_stocks_per_sector = max(1, int(num_stocks * max_sector_weight * 1.2))  # 20% buffer
+
+            # Sort by score descending
+            sorted_candidates = prelim_weights.sort_values(ascending=False)
+
+            selected_tickers = []
+            sector_counts = {}
+
+            for ticker in sorted_candidates.index:
+                if len(selected_tickers) >= num_stocks:
+                    break
+
+                ticker_sector = sector_map.get(ticker, "Unknown")
+                current_count = sector_counts.get(ticker_sector, 0)
+
+                if current_count < max_stocks_per_sector:
+                    selected_tickers.append(ticker)
+                    sector_counts[ticker_sector] = current_count + 1
+
+            selected_tickers = pd.Index(selected_tickers)
+
+            # Log sector distribution
+            print(f"   → Sector-aware selection: {dict(sector_counts)}")
+        else:
+            # Original behavior without sector limits
+            selected_tickers = (
+                prelim_weights.sort_values(ascending=False).head(num_stocks).index
+            )
 
         # Reduziere die Returns auf die ausgewählten Aktien
         returns = returns[selected_tickers]
