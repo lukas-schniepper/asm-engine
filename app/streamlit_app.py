@@ -2641,6 +2641,16 @@ def show_optimizer_ui():
     if "window_days" not in search_space:
         base_kwargs["window_days"] = st.slider("Lookback Tage (fix)", 50, 500, 200, 10, key="fix_win")
 
+    # Sector limits
+    with st.expander("📊 Sektor-Limits"):
+        enable_sector_opt = st.checkbox("Sektor-Limits aktiv", CFG_ENABLE_SECTOR, key="opt_enable_sector")
+        max_sector_w_opt = st.slider(
+            "Max Sektor-Gewicht (%)", 10.0, 100.0, CFG_MAX_SECTOR_W * 100, 5.0,
+            disabled=not enable_sector_opt, key="opt_max_sector"
+        ) / 100.0
+    base_kwargs["enable_sector_limits"] = enable_sector_opt
+    base_kwargs["max_sector_weight"] = max_sector_w_opt
+
     with st.expander("🎯 Objective-Gewichte"):
         kpi_weights = {
             "Sharpe Ratio": st.slider("Sharpe", 0.0, 3.0, 1.0, 0.1),
