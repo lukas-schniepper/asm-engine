@@ -379,8 +379,8 @@ class SharpeBacktestEngine:
                     optimizer_output_weights = pd.Series(dtype=float)
                     tickers_from_optimizer = []
 
-                    # Fetch sector mapping once (cached for all rebalances) if sector limits enabled
-                    if self.enable_sector_limits and self._sector_map_cache is None:
+                    # Fetch sector mapping once (cached for all rebalances) - always fetch for display
+                    if self._sector_map_cache is None:
                         self._sector_map_cache = fetch_sector_mapping(self.price_data.columns.tolist())
 
                     if self.optimization_mode == "select-then-optimize":
@@ -445,9 +445,9 @@ class SharpeBacktestEngine:
                     monthly_alloc_log_list.extend(alloc_log_for_rebal)
 
                     # --- Logging für selection_details (Normales Rebalancing) ---
-                    # Calculate sector allocation for logging
+                    # Calculate sector allocation for logging (always, for display purposes)
                     sector_allocation = {}
-                    if self.enable_sector_limits and self._sector_map_cache:
+                    if self._sector_map_cache:
                         sector_allocation = calculate_sector_allocation(
                             final_target_weights_series, self._sector_map_cache
                         )
