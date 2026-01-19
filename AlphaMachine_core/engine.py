@@ -58,6 +58,8 @@ class SharpeBacktestEngine:
         fixed_cost_per_trade: float = FIXED_COST_PER_TRADE,
         variable_cost_pct: float = VARIABLE_COST_PCT,
         optimization_mode: str = OPTIMIZATION_MODE,
+        max_sector_weight: float = MAX_SECTOR_WEIGHT,
+        enable_sector_limits: bool = ENABLE_SECTOR_LIMITS,
     ):
         self.user_start_date = pd.to_datetime(start_month)
         # User-gewünschtes Startdatum speichern
@@ -124,9 +126,9 @@ class SharpeBacktestEngine:
         self.variable_cost_pct      = variable_cost_pct
         self.optimization_mode      = optimization_mode if optimization_mode is not None else OPTIMIZATION_MODE
 
-        # Sector limit configuration
-        self.enable_sector_limits = ENABLE_SECTOR_LIMITS
-        self.max_sector_weight = MAX_SECTOR_WEIGHT if ENABLE_SECTOR_LIMITS else None
+        # Sector limit configuration (use passed parameters)
+        self.enable_sector_limits = enable_sector_limits
+        self.max_sector_weight = max_sector_weight if enable_sector_limits else None
         self._sector_map_cache = None  # Will be populated on first rebalance if sector limits enabled
 
         # Cash Handling

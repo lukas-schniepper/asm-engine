@@ -34,6 +34,8 @@ from AlphaMachine_core.config import (
     MIN_WEIGHT as CFG_MIN_W,
     MAX_WEIGHT as CFG_MAX_W,
     FORCE_EQUAL_WEIGHT as CFG_FORCE_EQ,
+    MAX_SECTOR_WEIGHT as CFG_MAX_SECTOR_W,
+    ENABLE_SECTOR_LIMITS as CFG_ENABLE_SECTOR,
 )
 
 # ---------- Fix A : RiskOverlay-Helper --------------------------------------
@@ -412,6 +414,14 @@ def show_backtester_ui():
     default_force_eq = opt_params.get("force_equal_weight", CFG_FORCE_EQ)
     force_eq = st.sidebar.checkbox("Force Equal Weight", default_force_eq)
 
+    # — 6b) Sector Limits —
+    st.sidebar.subheader("Sektor-Limits")
+    enable_sector = st.sidebar.checkbox("Sektor-Limits aktiv", CFG_ENABLE_SECTOR)
+    max_sector_w = st.sidebar.slider(
+        "Max Sektor-Gewicht (%)", 10.0, 100.0, CFG_MAX_SECTOR_W * 100, 5.0,
+        disabled=not enable_sector
+    ) / 100.0
+
     # — 7) Trading-Kosten —
     st.sidebar.subheader("Trading-Kosten")
     enable_tc  = st.sidebar.checkbox("Kosten aktiv", CFG_ENABLE_TC)
@@ -510,7 +520,9 @@ def show_backtester_ui():
             fixed_cost_per_trade=fixed_cost,
             variable_cost_pct=var_cost,
             optimization_mode=opt_mode,
-            use_risk_overlay=False,          # <<—— einzig relevante Änderung
+            use_risk_overlay=False,
+            max_sector_weight=max_sector_w,
+            enable_sector_limits=enable_sector,
         )
         engine_baseline.run_with_next_month_allocation()
 
@@ -535,7 +547,9 @@ def show_backtester_ui():
             fixed_cost_per_trade=fixed_cost,
             variable_cost_pct=var_cost,
             optimization_mode=opt_mode,
-            use_risk_overlay=overlay_enabled,  # <<—— nur aktiv, wenn Checkbox gesetzt
+            use_risk_overlay=overlay_enabled,
+            max_sector_weight=max_sector_w,
+            enable_sector_limits=enable_sector,
         )
         engine_overlay.run_with_next_month_allocation()
 
