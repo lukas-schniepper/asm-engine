@@ -2841,6 +2841,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
             best[kpis]
               .rename_axis("KPI")
               .to_frame("Wert")
+              .astype({"Wert": str})
         )
     with col2:
         st.subheader("⚙️ Best-Run Parameter")
@@ -2849,6 +2850,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
               .dropna()
               .rename_axis("Parameter")
               .to_frame("Wert")
+              .astype({"Wert": str})
         )
 
     # ------- E) Performance & Balance pro Jahr --------------------
@@ -2860,7 +2862,7 @@ def show_study_results(study, kpi_weights, price_df, fixed_kwargs, optimizer_con
         "Return (%)":  yearly_ret_pct,
         "Balance":     yearly_bal.round(0).astype(int),
     })
-    df_year["Return (%)"] = df_year["Return (%)"].fillna("")
+    df_year["Return (%)"] = df_year["Return (%)"].fillna(0)
 
     st.subheader("📈 Performance & Balance pro Jahr des Best-Runs")
     st.table(df_year.astype({"Year": int}).reset_index(drop=True))
@@ -2889,7 +2891,7 @@ def render_engine_tabs(engine):
         yearly_bal = engine.portfolio_value.resample("YE").last()
         yearly_ret = yearly_bal.pct_change()*100
         df_year = pd.DataFrame({"Year": yearly_bal.index.year,
-                                "Return (%)": yearly_ret,
+                                "Return (%)": yearly_ret.fillna(0),
                                 "Balance": yearly_bal})
         st.dataframe(df_year.reset_index(drop=True), use_container_width=True)
 
