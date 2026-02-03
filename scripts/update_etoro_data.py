@@ -284,17 +284,37 @@ def scrape_monthly_returns(driver, username: str) -> dict:
 
                     if pre_year_values:
                         print(f"    Pre-year values (current year {current_year}): {pre_year_values}")
-                        # These are the current year's values
-                        # Format: Jan value(s), then YTD (for partial year)
-                        # In January 2026: [1.58, 1.58] = [Jan, YTD]
-                        if len(pre_year_values) >= 1:
-                            # First value is Jan (current month)
-                            for i in range(min(current_month, len(pre_year_values) - 1)):
-                                month_num = f"{i + 1:02d}"
+                        # eToro row format: [YTD, Dec, Nov, ..., Feb, Jan]
+                        # - First value is always YTD (cumulative year-to-date return)
+                        # - Remaining values are monthly returns in reverse chronological order
+                        # - Last value is January, second-to-last is February, etc.
+                        #
+                        # Example in February 2026: [10.2, 2.5, 7.54]
+                        # - 10.2 = YTD (Jan+Feb cumulative) - SKIP this
+                        # - 2.5 = February (current month, might be incomplete)
+                        # - 7.54 = January
+                        #
+                        # We assign from the END backward: last→Jan, second-last→Feb, etc.
+                        if len(pre_year_values) >= 2:
+                            extracted_ytd = pre_year_values[0]
+                            print(f"      Extracted YTD from page: {extracted_ytd}%")
+
+                            # Skip first value (YTD), process remaining from end
+                            monthly_values = pre_year_values[1:]  # Remove YTD
+
+                            # Assign from end: last value = Jan, second-to-last = Feb, etc.
+                            for i, val in enumerate(reversed(monthly_values)):
+                                month_num = f"{i + 1:02d}"  # 01, 02, 03, ...
                                 month_key = f"{current_year}-{month_num}"
-                                result['monthly_returns'][month_key] = pre_year_values[i]
+                                result['monthly_returns'][month_key] = val
                                 month_name = list(month_to_num.keys())[list(month_to_num.values()).index(month_num)]
-                                print(f"      Mapped {current_year}-{month_name} ({month_key}): {pre_year_values[i]}")
+                                print(f"      Mapped {current_year}-{month_name} ({month_key}): {val}")
+
+                            # Store extracted YTD for validation later
+                            result['_extracted_ytd'] = extracted_ytd
+                        elif len(pre_year_values) == 1:
+                            # Only YTD, no individual month values yet
+                            print(f"      Only YTD ({pre_year_values[0]}) found, no monthly values")
 
                     if result['monthly_returns']:
                         print(f"    Successfully parsed {len(result['monthly_returns'])} monthly returns")
@@ -355,6 +375,30 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     positive_months = sum(1 for v in all_monthly if v > 0)
     total_months = len(all_monthly) if all_monthly else 1
     result['profitable_months_pct'] = round((positive_months / total_months) * 100, 1)
+
+    # Validation: warn about suspicious values
+    current_year_returns = {k: v for k, v in result['monthly_returns'].items()
+                           if k.startswith(str(current_year))}
+    for month_key, value in current_year_returns.items():
+        # Individual monthly returns > 25% or < -25% are very unusual
+        if abs(value) > 25:
+            print(f"    ⚠️  WARNING: Suspicious monthly return for {month_key}: {value}%")
+            print(f"       This may be a YTD value incorrectly assigned as monthly return!")
+
+    # Log summary for debugging
+    if current_year_returns:
+        print(f"    {current_year} monthly returns: {current_year_returns}")
+        print(f"    Calculated YTD (compounded): {result['gain_ytd']}%")
+
+        # Compare against extracted YTD if available
+        extracted_ytd = result.pop('_extracted_ytd', None)
+        if extracted_ytd is not None:
+            diff = abs(result['gain_ytd'] - extracted_ytd)
+            if diff > 1.0:  # More than 1 percentage point difference
+                print(f"    ⚠️  WARNING: Calculated YTD ({result['gain_ytd']}%) differs from page YTD ({extracted_ytd}%)")
+                print(f"       Difference: {diff:.2f}pp - possible parsing error!")
+            else:
+                print(f"    ✓  YTD validation passed (page: {extracted_ytd}%, calculated: {result['gain_ytd']}%)")
 
     return result
 
