@@ -379,9 +379,11 @@ class StockDataManager:
                 if date_range_result and date_range_result[0] is not None:
                     data_to_update['actual_start_date'] = date_range_result[0]
                     data_to_update['actual_end_date'] = date_range_result[1]
-                else: 
-                    data_to_update['actual_start_date'] = None
-                    data_to_update['actual_end_date'] = None
+                else:
+                    # No price data yet; use today as placeholder.
+                    # These fields are non-optional (models.py TickerInfo).
+                    data_to_update['actual_start_date'] = dt.date.today()
+                    data_to_update['actual_end_date'] = dt.date.today()
                 
                 db_ticker_info = session.exec(select(TickerInfo).where(TickerInfo.ticker == ticker)).first()
                 if db_ticker_info:
@@ -396,6 +398,60 @@ class StockDataManager:
         except Exception as e: # Breiterer Exception-Fang für yfinance-Info-Probleme
             print(f"WARNING: Fehler _update_ticker_info fuer {ticker}: {e}")
             return False
+
+    def update_missing_ticker_info(self, tickers: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Populate ticker_info for tickers that exist in ticker_period but
+        are missing from ticker_info.  Idempotent and safe to call repeatedly.
+
+        Args:
+            tickers: Explicit list of tickers to check.  If None, checks all
+                     distinct tickers from ticker_period.
+
+        Returns:
+            Dict with 'updated', 'failed', and 'already_exists' counts.
+        """
+        if tickers is None:
+            with get_session() as session:
+                results = session.exec(select(TickerPeriod.ticker).distinct()).all()
+                all_tickers = sorted([str(t) for t in results if t])
+        else:
+            all_tickers = [t.upper() for t in tickers]
+
+        if not all_tickers:
+            return {'updated': 0, 'failed': 0, 'already_exists': 0}
+
+        with get_session() as session:
+            existing = session.exec(select(TickerInfo.ticker)).all()
+            existing_set = set(str(t) for t in existing)
+
+        missing = [t for t in all_tickers if t not in existing_set]
+
+        if not missing:
+            print(f"All {len(all_tickers)} tickers already have ticker_info.")
+            return {'updated': 0, 'failed': 0, 'already_exists': len(existing_set)}
+
+        print(f"Found {len(missing)} tickers missing from ticker_info. Updating...")
+
+        updated = 0
+        failed = 0
+        for i, ticker in enumerate(missing, 1):
+            success = self._update_ticker_info(ticker)
+            if success:
+                updated += 1
+            else:
+                failed += 1
+            if i % 25 == 0:
+                print(f"  Progress: {i}/{len(missing)} ({updated} ok, {failed} failed)")
+
+        print(f"Ticker info update complete: {updated} updated, {failed} failed, "
+              f"{len(existing_set)} already existed.")
+
+        return {
+            'updated': updated,
+            'failed': failed,
+            'already_exists': len(existing_set),
+        }
 
     def get_periods(self, month: str, source: str) -> List[Dict[str, Any]]:
         period_dicts = []

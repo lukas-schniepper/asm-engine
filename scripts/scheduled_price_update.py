@@ -100,6 +100,21 @@ def main():
                 print(f"  ⏭️  {ticker}: {reason}")
 
         # =====================================================================
+        # TICKER INFO UPDATE (sector/industry metadata)
+        # =====================================================================
+        # Populate ticker_info for any tickers missing metadata.
+        # Runs AFTER price update so actual_start_date/actual_end_date
+        # can be computed from the freshly-saved price data.
+        print(f"\n{'='*80}")
+        print("Updating Missing Ticker Info (Sector/Industry Metadata)")
+        print(f"{'='*80}")
+
+        info_result = dm.update_missing_ticker_info()
+        print(f"  New:      {info_result['updated']} tickers")
+        print(f"  Failed:   {info_result['failed']} tickers")
+        print(f"  Existing: {info_result['already_exists']} tickers")
+
+        # =====================================================================
         # PORTFOLIO-CRITICAL PRICE VALIDATION
         # =====================================================================
         # Validate that all tickers held in active portfolios have prices
