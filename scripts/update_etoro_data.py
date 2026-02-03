@@ -382,7 +382,7 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     for month_key, value in current_year_returns.items():
         # Individual monthly returns > 25% or < -25% are very unusual
         if abs(value) > 25:
-            print(f"    ⚠️  WARNING: Suspicious monthly return for {month_key}: {value}%")
+            print(f"    WARNING: Suspicious monthly return for {month_key}: {value}%")
             print(f"       This may be a YTD value incorrectly assigned as monthly return!")
 
     # Log summary for debugging
@@ -395,10 +395,10 @@ def scrape_monthly_returns(driver, username: str) -> dict:
         if extracted_ytd is not None:
             diff = abs(result['gain_ytd'] - extracted_ytd)
             if diff > 1.0:  # More than 1 percentage point difference
-                print(f"    ⚠️  WARNING: Calculated YTD ({result['gain_ytd']}%) differs from page YTD ({extracted_ytd}%)")
+                print(f"    WARNING: Calculated YTD ({result['gain_ytd']}%) differs from page YTD ({extracted_ytd}%)")
                 print(f"       Difference: {diff:.2f}pp - possible parsing error!")
             else:
-                print(f"    ✓  YTD validation passed (page: {extracted_ytd}%, calculated: {result['gain_ytd']}%)")
+                print(f"    OK: YTD validation passed (page: {extracted_ytd}%, calculated: {result['gain_ytd']}%)")
 
     return result
 
