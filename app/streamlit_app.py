@@ -1247,11 +1247,12 @@ def _show_portfolio_holdings_ui():
     st.markdown("Run NAV calculation for this portfolio. **Re-run after changing holdings** to update returns.")
 
     # Date range inputs
+    if "nav_update_start_date" not in st.session_state:
+        st.session_state["nav_update_start_date"] = selected_portfolio["start_date"]
     col_start, col_end = st.columns(2)
     with col_start:
         nav_start_date = st.date_input(
             "Start Date",
-            value=selected_portfolio["start_date"],
             key="nav_update_start_date"
         )
     with col_end:
