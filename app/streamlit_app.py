@@ -463,6 +463,26 @@ def show_backtester_ui():
         st.error("Keine Ticker für diese Auswahl.")
         return
 
+    # --- Check for missing sector data ---
+    try:
+        with get_session() as session:
+            _ti_rows = session.exec(
+                select(TickerInfo.ticker).where(
+                    TickerInfo.ticker.in_(tickers),
+                    TickerInfo.sector.isnot(None),
+                    TickerInfo.sector != '',
+                )
+            ).all()
+            _tickers_with_sector = set(str(t) for t in _ti_rows)
+        _no_sector = sorted(set(tickers) - _tickers_with_sector)
+        if _no_sector:
+            st.warning(
+                f"**{len(_no_sector)} ticker(s) missing sector data:** "
+                f"`{'`, `'.join(_no_sector)}` — treated as *Unknown* for sector constraints."
+            )
+    except Exception:
+        pass
+
     # --- Preisdaten laden ---
     price_df, price_start = load_price_df(dm, tickers, start_date, end_date, window_days)
     st.write(f"⏳ Lade Preisdaten von {price_start} bis {end_date}")
@@ -1151,6 +1171,7 @@ def _show_portfolio_holdings_ui():
 
                     for h in existing:
                         session.delete(h)
+                    session.flush()
 
                     # Add new holdings
                     weight = Decimal("1") / Decimal(str(len(selected_tickers))) if selected_tickers else Decimal("0")
@@ -1164,10 +1185,9 @@ def _show_portfolio_holdings_ui():
                         )
                         session.add(new_holding)
 
-                    session.commit()
-
                 st.success(f"Saved {len(selected_tickers)} holdings for {selected_month}!")
-                st.info("Note: You may need to re-run NAV backfill to update historical returns with the new holdings.")
+                st.info("Holdings changed — please run NAV Update below (start date has been set automatically).")
+                st.session_state["nav_update_start_date"] = effective_date
                 st.rerun()
 
             except Exception as e:
@@ -1188,8 +1208,6 @@ def _show_portfolio_holdings_ui():
                         deleted_count = len(existing)
                         for h in existing:
                             session.delete(h)
-
-                        session.commit()
 
                     st.success(f"Cleared {deleted_count} holdings for {selected_month}!")
                     st.rerun()
@@ -1226,7 +1244,7 @@ def _show_portfolio_holdings_ui():
     # NAV Update Section
     st.markdown("---")
     st.markdown("### NAV Update")
-    st.markdown("Run NAV calculation for this portfolio to see performance immediately.")
+    st.markdown("Run NAV calculation for this portfolio. **Re-run after changing holdings** to update returns.")
 
     # Date range inputs
     col_start, col_end = st.columns(2)
@@ -2257,6 +2275,30 @@ def show_data_ui():
         except Exception as e:
             st.error(f"Fehler Initialisierung StockDataManager: {e}"); st.exception(e); st.stop()
     dm = st.session_state.sdm_instance
+
+    # --- Attention: missing sector data ---
+    try:
+        with get_session() as session:
+            _missing_sector_rows = session.exec(
+                select(TickerPeriod.ticker).distinct().where(
+                    TickerPeriod.ticker.notin_(
+                        select(TickerInfo.ticker).where(
+                            TickerInfo.sector.isnot(None),
+                            TickerInfo.sector != '',
+                        )
+                    )
+                )
+            ).all()
+            _missing_sector = sorted(set(str(t) for t in _missing_sector_rows if t))
+        if _missing_sector:
+            with st.expander(f"Missing sector data for {len(_missing_sector)} ticker(s)", expanded=True):
+                st.warning(
+                    f"The following tickers have no sector information in the database. "
+                    f"Sector constraints will treat them as **Unknown**.\n\n"
+                    f"`{'`, `'.join(_missing_sector)}`"
+                )
+    except Exception:
+        pass  # Don't block the UI if this check fails
 
     mode = st.radio("Modus", ["Add/Update", "View/Delete", "Portfolio Holdings", "Ticker Analysis", "Delete Portfolios/Sources", "Cleanup Unused Tickers"], index=0, key="data_ui_mode_radio_main_v5")
 
