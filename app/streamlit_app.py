@@ -2110,7 +2110,7 @@ def _update_portfolio_nav(tracker, portfolio, trade_date, price_data, prev_price
         holdings = tracker.get_holdings(portfolio.id, trade_date)
 
         if not holdings:
-            return False
+            return False, "No holdings found for this date"
 
         # Get previous NAV for return calculation
         prev_nav_df = tracker.get_nav_series(
@@ -2137,10 +2137,12 @@ def _update_portfolio_nav(tracker, portfolio, trade_date, price_data, prev_price
             previous_raw_nav=previous_raw_nav,
             initial_nav=initial_nav,
         )
-        return True
+        return True, None
 
-    except Exception:
-        return False
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"NAV update failed for {trade_date}: {e}")
+        return False, str(e)
 
 
 def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
@@ -2213,6 +2215,7 @@ def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
 
     successful = 0
     failed = 0
+    failed_reasons = []
 
     # Process each date
     for i, process_date in enumerate(dates_to_process):
@@ -2224,6 +2227,7 @@ def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
 
         if not price_data:
             failed += 1
+            failed_reasons.append(f"{process_date}: No price data")
             progress_bar.progress((i + 1) / len(dates_to_process))
             continue
 
@@ -2236,11 +2240,17 @@ def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
             prev_prices_data = dict(zip(prev_day_prices["ticker"], prev_day_prices["close"]))
 
         # Update NAV
-        success = _update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
+        result = _update_portfolio_nav(tracker, portfolio, process_date, price_data, prev_prices_data)
+        success = result[0] if isinstance(result, tuple) else result
+        error_msg = result[1] if isinstance(result, tuple) and len(result) > 1 else None
         if success:
             successful += 1
         else:
             failed += 1
+            if error_msg:
+                failed_reasons.append(f"{process_date}: {error_msg}")
+            else:
+                failed_reasons.append(f"{process_date}: Unknown error (no holdings?)")
 
         # Update progress
         progress_bar.progress((i + 1) / len(dates_to_process))
@@ -2262,6 +2272,14 @@ def _run_nav_update_with_progress(portfolio_name: str, start_date, end_date):
         st.success(f"NAV Update Complete: {successful} days updated, {failed} days skipped/failed")
     else:
         st.warning(f"NAV Update Complete: No days were successfully updated ({failed} failed/skipped)")
+
+    # Show failure details if any
+    if failed_reasons:
+        with st.expander(f"View {len(failed_reasons)} failure details", expanded=False):
+            for reason in failed_reasons[:20]:  # Limit to first 20
+                st.text(reason)
+            if len(failed_reasons) > 20:
+                st.text(f"... and {len(failed_reasons) - 20} more")
 
 
 # =============================================================================
