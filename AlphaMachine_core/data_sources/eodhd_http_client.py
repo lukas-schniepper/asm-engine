@@ -288,6 +288,7 @@ class EODHDHttpClient:
 
                 # Transform to yfinance-compatible format
                 return {
+                    'name': general.get('Name', None),
                     'sector': general.get('Sector', 'Unknown'),
                     'industry': general.get('Industry', 'Unknown'),
                     'currency': general.get('CurrencyCode', 'USD'),
@@ -314,6 +315,7 @@ class EODHDHttpClient:
     def _get_placeholder_info(self) -> Dict[str, Any]:
         """Return placeholder info when fundamentals API fails"""
         return {
+            'name': None,
             'sector': 'Unknown',
             'industry': 'Unknown',
             'currency': 'USD',

@@ -27,6 +27,7 @@ class TickerInfo(SQLModel, table=True):
     __tablename__ = "ticker_info"  # <-- falls dein DB-Schema so heißt; sonst weglassen
     id: Optional[int]         = Field(default=None, primary_key=True)
     ticker: str               = Field(index=True, description="Ticker-Symbol")
+    name: Optional[str]       = Field(default=None, description="Firmenname")
     sector: Optional[str]     = Field(default=None, description="Branche")
     industry: Optional[str]   = Field(default=None, description="Industrie")
     currency: Optional[str]   = Field(default=None, description="Währung")

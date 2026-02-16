@@ -359,6 +359,7 @@ class StockDataManager:
             
             data_to_update: Dict[str, Any] = {
                 'ticker': ticker,
+                'name': str(info.get('name', ''))[:255] if info.get('name') else None,
                 'sector': str(info.get('sector', 'N/A'))[:255] if info.get('sector') else None,
                 'industry': str(info.get('industry', 'N/A'))[:255] if info.get('industry') else None,
                 'currency': str(info.get('currency', 'N/A'))[:10] if info.get('currency') else None,
