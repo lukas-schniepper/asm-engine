@@ -38,10 +38,17 @@ class EODHDHttpClient:
         """
         Transform yfinance ticker format to EODHD format
 
+        EODHD uses '.' as the separator between symbol and exchange, so dots
+        within the ticker symbol itself (share class notation) must be replaced
+        with hyphens to avoid ambiguity.
+
         Examples:
-            SPY -> SPY.US
-            AAPL -> AAPL.US
+            SPY   -> SPY.US
+            AAPL  -> AAPL.US
             ^GSPC -> GSPC.INDX
+            MOG.A -> MOG-A.US   (Moog Inc Class A)
+            BF.B  -> BF-B.US    (Brown-Forman Class B)
+            BRK.B -> BRK-B.US   (Berkshire Hathaway Class B)
 
         Args:
             ticker: Ticker in yfinance format
@@ -54,6 +61,10 @@ class EODHDHttpClient:
             ticker = ticker[1:]
             # Most indices use .INDX exchange
             return f"{ticker}.INDX"
+
+        # Replace dots with hyphens for share class tickers (e.g. MOG.A -> MOG-A)
+        # EODHD reserves '.' as the symbol/exchange delimiter
+        ticker = ticker.replace('.', '-')
 
         # Default to US exchange for stocks
         return f"{ticker}.US"
