@@ -2,8 +2,11 @@ name: Update eToro Data
 
 on:
   schedule:
-    # Run daily at 06:30 UTC (07:30 Swiss time CET, 08:30 CEST in summer)
-    - cron: '30 6 * * *'
+    # Scrape every 2h from 08:00-16:00 Swiss CEST (06:00-14:00 UTC)
+    # eToro update timing is unpredictable — multiple runs ensure we catch it
+    # Swiss CEST: 08:00, 10:00, 12:00, 14:00, 16:00
+    # Swiss CET:  07:00, 09:00, 11:00, 13:00, 15:00
+    - cron: '0 6,8,10,12,14 * * 1-6'
 
   # Allow manual trigger from GitHub Actions UI
   workflow_dispatch:
