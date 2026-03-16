@@ -121,7 +121,8 @@ def scrape_monthly_returns(driver, username: str) -> dict:
         print(f"    WARNING: Could not extract user_id from page")
 
     # Extract risk score
-    risk_match = re.search(r'Risk Score[^\d]*(\d+)', visible_text, re.IGNORECASE)
+    # "Avg. Risk Score (last 7D)\n5" — the actual value is on the line after the label
+    risk_match = re.search(r'Avg\.?\s*Risk Score\s*\(last\s*7D\)\s*\n\s*(\d+)', visible_text, re.IGNORECASE)
     if risk_match:
         result['risk_score'] = int(risk_match.group(1))
 
