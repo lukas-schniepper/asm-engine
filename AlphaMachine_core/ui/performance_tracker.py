@@ -3483,9 +3483,10 @@ def _render_etoro_compare_tab():
             completed_month_names.append(name)
 
         def _calc_risk_metrics(monthly_returns: dict) -> dict:
-            """Calculate Sharpe, Sortino, Max DD from monthly returns."""
-            # Use all available monthly returns (not just current year)
-            sorted_keys = sorted(monthly_returns.keys())
+            """Calculate Sharpe, Sortino, Max DD from trailing 12 months of returns."""
+            # Use last 12 completed months (TTM) — exclude current month
+            sorted_keys = sorted(k for k in monthly_returns.keys() if k < current_month_key)
+            sorted_keys = sorted_keys[-12:]  # last 12 completed months
             if len(sorted_keys) < 3:
                 return {'sharpe': 0.0, 'sortino': 0.0, 'max_dd': 0.0}
 
@@ -3682,7 +3683,7 @@ def _render_etoro_compare_tab():
         st.markdown(html_table, unsafe_allow_html=True)
 
         # Add explanation
-        st.caption("Sharpe/Sortino/Max DD: calculated from all available monthly returns | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
+        st.caption("Sharpe/Sortino/Max DD: trailing 12 months (TTM) from monthly returns | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
 
         # Section 3: Monthly Returns Chart
         st.markdown("---")
