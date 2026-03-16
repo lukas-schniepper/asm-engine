@@ -3482,7 +3482,7 @@ def _render_etoro_compare_tab():
             completed_month_keys.append(key)
             completed_month_names.append(name)
 
-        METRICS_START_DATE = date(2025, 11, 1)  # fair comparison start date for all investors
+        METRICS_START_DATE = date(2025, 12, 18)  # fair comparison start — first daily snapshot for all investors
 
         # Fetch daily MTD history since Nov 2025 for risk metrics
         @st.cache_data(ttl=300, show_spinner=False)
@@ -3745,7 +3745,7 @@ def _render_etoro_compare_tab():
         st.markdown(html_table, unsafe_allow_html=True)
 
         # Add explanation
-        st.caption("Sharpe/Sortino/Max DD: based on daily returns since Nov 2025 for fair comparison | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
+        st.caption("Sharpe/Sortino/Max DD: based on daily returns since Dec 18 2025 for fair comparison | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
 
         # Section 3: Monthly Returns Chart
         st.markdown("---")
