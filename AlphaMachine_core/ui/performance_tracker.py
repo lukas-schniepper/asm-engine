@@ -3468,39 +3468,90 @@ def _render_etoro_compare_tab():
         all_investors = [my_stats] + top_investors
 
         from datetime import datetime, timedelta
+        import numpy as np
         today = datetime.now()
         current_month_key = today.strftime('%Y-%m')
+        current_year = today.year
 
-        # Calculate last completed month
-        if today.month == 1:
-            last_month_key = f"{today.year - 1}-12"
-            last_month_name = "Dec"
-        else:
-            last_month_key = f"{today.year}-{today.month - 1:02d}"
-            last_month_name = datetime(today.year, today.month - 1, 1).strftime("%b")
+        # Build list of completed months this year (Jan through last completed month)
+        completed_month_keys = []
+        completed_month_names = []
+        for m in range(1, today.month):  # 1 to current_month-1
+            key = f"{current_year}-{m:02d}"
+            name = datetime(current_year, m, 1).strftime("%b")
+            completed_month_keys.append(key)
+            completed_month_names.append(name)
 
-        st.caption(f"MTD = {current_month_key} | {last_month_name} = last completed month | Click investor name to view profile")
+        def _calc_risk_metrics(monthly_returns: dict) -> dict:
+            """Calculate Sharpe, Sortino, Max DD from monthly returns."""
+            # Use all available monthly returns (not just current year)
+            sorted_keys = sorted(monthly_returns.keys())
+            if len(sorted_keys) < 3:
+                return {'sharpe': 0.0, 'sortino': 0.0, 'max_dd': 0.0}
+
+            returns = np.array([monthly_returns[k] for k in sorted_keys]) / 100  # convert to decimal
+
+            mean_r = np.mean(returns)
+            std_r = np.std(returns, ddof=1) if len(returns) > 1 else 0
+
+            # Annualized Sharpe (from monthly)
+            sharpe = (mean_r / std_r * np.sqrt(12)) if std_r > 0 else 0.0
+
+            # Annualized Sortino (from monthly)
+            downside = returns[returns < 0]
+            if len(downside) >= 2:
+                down_std = np.std(downside, ddof=1)
+                sortino = (mean_r / down_std * np.sqrt(12)) if down_std > 0 else 0.0
+            elif len(downside) == 1:
+                sortino = (mean_r / abs(downside[0]) * np.sqrt(12)) if downside[0] != 0 else 0.0
+            else:
+                sortino = 99.9 if mean_r > 0 else 0.0
+
+            # Max drawdown from cumulative returns
+            cumulative = np.cumprod(1 + returns)
+            running_max = np.maximum.accumulate(cumulative)
+            drawdowns = (cumulative - running_max) / running_max
+            max_dd = float(np.min(drawdowns) * 100)  # as percentage
+
+            return {
+                'sharpe': round(float(sharpe), 2),
+                'sortino': round(float(min(sortino, 99.9)), 2),
+                'max_dd': round(max_dd, 1),
+            }
+
+        st.caption(f"MTD = {current_month_key} | Click investor name to view profile")
 
         for inv in all_investors:
             is_me = inv.username.lower() == MY_ETORO_USERNAME.lower()
             # Get MTD from current month's return in monthly_returns
             mtd = inv.monthly_returns.get(current_month_key, 0.0) if inv.monthly_returns else 0.0
-            # Get last completed month's return
-            last_month_return = inv.monthly_returns.get(last_month_key, 0.0) if inv.monthly_returns else 0.0
             profile_url = f"https://www.etoro.com/people/{inv.username}"
-            comparison_data.append({
+
+            # Individual completed months this year
+            month_values = {}
+            for key, name in zip(completed_month_keys, completed_month_names):
+                month_values[f"{name} %"] = inv.monthly_returns.get(key, 0.0) if inv.monthly_returns else 0.0
+
+            # Risk metrics from monthly returns
+            metrics = _calc_risk_metrics(inv.monthly_returns) if inv.monthly_returns else {'sharpe': 0.0, 'sortino': 0.0, 'max_dd': 0.0}
+
+            row_data = {
                 "⭐": "⭐" if is_me else "",
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Profile": profile_url,
                 "Copiers": inv.copiers,
                 "MTD %": mtd,
-                "Last Month %": last_month_return,
                 "YTD %": inv.gain_ytd,
-                "1Y %": inv.gain_1y,
-                "2Y %": inv.gain_2y,
-                "Win %": inv.win_ratio,
-                "Prof.Mo %": inv.profitable_months_pct,
+            }
+            row_data.update(month_values)
+            row_data.update({
+                "Sharpe": metrics['sharpe'],
+                "Sortino": metrics['sortino'],
+                "Max DD": metrics['max_dd'],
+                "Prof.Wk %": inv.win_ratio,
+                "Win Trades %": inv.win_ratio,
             })
+            comparison_data.append(row_data)
 
         # Display comparison table with custom HTML for right-aligned headers and colored returns
         st.markdown("#### Performance Comparison")
@@ -3530,6 +3581,11 @@ def _render_etoro_compare_tab():
                 f'width: 24px; height: 24px; border-radius: 50%; background-color: {bg_color}; '
                 f'color: white; font-size: 12px; font-weight: bold;">{initials}</span>'
             )
+            # Build individual month cells
+            month_cells = ''
+            for name in completed_month_names:
+                month_cells += f'<td style="text-align: right;">{color_value(row.get(f"{name} %", 0.0))}</td>'
+
             html_rows.append(
                 f'<tr>'
                 f'<td style="text-align: center;">{row["⭐"]}</td>'
@@ -3538,12 +3594,13 @@ def _render_etoro_compare_tab():
                 f'{investor_name}</a></td>'
                 f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
                 f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
-                f'<td style="text-align: right;">{color_value(row["Last Month %"])}</td>'
                 f'<td style="text-align: right;">{color_value(row["YTD %"])}</td>'
-                f'<td style="text-align: right;">{color_value(row["1Y %"])}</td>'
-                f'<td style="text-align: right;">{color_value(row["2Y %"])}</td>'
-                f'<td style="text-align: right;">{row["Win %"]:.0f}%</td>'
-                f'<td style="text-align: right;">{row["Prof.Mo %"]:.0f}%</td>'
+                f'{month_cells}'
+                f'<td style="text-align: right;">{row["Sharpe"]:.2f}</td>'
+                f'<td style="text-align: right;">{row["Sortino"]:.2f}</td>'
+                f'<td style="text-align: right;">{color_value(row["Max DD"])}</td>'
+                f'<td style="text-align: right;">{row["Prof.Wk %"]:.0f}%</td>'
+                f'<td style="text-align: right;">{row["Win Trades %"]:.0f}%</td>'
                 f'</tr>'
             )
 
@@ -3557,7 +3614,18 @@ def _render_etoro_compare_tab():
                     f'width: 24px; height: 24px; border-radius: 50%; background-color: #6c757d; '
                     f'color: white; font-size: 10px; font-weight: bold;">IDX</span>'
                 )
-                last_month_return = bm['monthly_returns'].get(last_month_key, 0.0)
+                # Individual month cells for benchmark
+                bm_month_cells = ''
+                for key in completed_month_keys:
+                    val = bm['monthly_returns'].get(key, 0.0)
+                    bm_month_cells += f'<td style="text-align: right;">{color_value(val)}</td>'
+
+                # Use pre-calculated metrics if available
+                bm_metrics = bm.get('metrics') or {}
+                bm_sharpe = bm_metrics.get('sharpe', 0.0)
+                bm_sortino = bm_metrics.get('sortino', 0.0)
+                bm_max_dd = bm_metrics.get('max_dd', 0.0)
+
                 html_rows.append(
                     f'<tr style="background-color: #f8f9fa;">'
                     f'<td style="text-align: center;">📊</td>'
@@ -3565,46 +3633,56 @@ def _render_etoro_compare_tab():
                     f'{bm_avatar}{ticker} (Benchmark)</td>'
                     f'<td style="text-align: right; color: #6c757d;">-</td>'
                     f'<td style="text-align: right;">{color_value(bm["mtd"])}</td>'
-                    f'<td style="text-align: right;">{color_value(last_month_return)}</td>'
                     f'<td style="text-align: right;">{color_value(bm["ytd"])}</td>'
-                    f'<td style="text-align: right;">{color_value(bm["gain_1y"])}</td>'
-                    f'<td style="text-align: right;">{color_value(bm["gain_2y"])}</td>'
+                    f'{bm_month_cells}'
+                    f'<td style="text-align: right;">{bm_sharpe:.2f}</td>'
+                    f'<td style="text-align: right;">{bm_sortino:.2f}</td>'
+                    f'<td style="text-align: right;">{color_value(bm_max_dd)}</td>'
                     f'<td style="text-align: right; color: #6c757d;">-</td>'
                     f'<td style="text-align: right; color: #6c757d;">-</td>'
                     f'</tr>'
                 )
 
+        # Build month header cells
+        month_headers = ''.join(
+            f'<th style="text-align: right;">{name} %</th>'
+            for name in completed_month_names
+        )
+
         html_table = (
             '<style>'
             '.etoro-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
-            '.etoro-table th { text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; }'
+            '.etoro-table th { text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; white-space: nowrap; }'
             '.etoro-table th:first-child { text-align: center; }'
             '.etoro-table th:nth-child(2) { text-align: left; }'
-            '.etoro-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }'
+            '.etoro-table td { padding: 8px 12px; border-bottom: 1px solid #eee; white-space: nowrap; }'
             '.etoro-table tr:hover { background-color: #f5f5f5; }'
             '.etoro-table a:hover { text-decoration: underline; }'
             '</style>'
+            '<div style="overflow-x: auto;">'
             '<table class="etoro-table">'
             '<thead><tr>'
             '<th style="text-align: center;">⭐</th>'
             '<th style="text-align: left;">Investor</th>'
             '<th style="text-align: right;">Copiers</th>'
             '<th style="text-align: right;">MTD %</th>'
-            f'<th style="text-align: right;">{last_month_name} %</th>'
             '<th style="text-align: right;">YTD %</th>'
-            '<th style="text-align: right;">1Y %</th>'
-            '<th style="text-align: right;">2Y %</th>'
-            '<th style="text-align: right;">Win %</th>'
-            '<th style="text-align: right;">Prof.Mo %</th>'
+            f'{month_headers}'
+            '<th style="text-align: right;">Sharpe</th>'
+            '<th style="text-align: right;">Sortino</th>'
+            '<th style="text-align: right;">Max DD</th>'
+            '<th style="text-align: right;">Prof.Wk %</th>'
+            '<th style="text-align: right;">Win Trades %</th>'
             '</tr></thead>'
             '<tbody>' + ''.join(html_rows) + '</tbody>'
             '</table>'
+            '</div>'
         )
 
         st.markdown(html_table, unsafe_allow_html=True)
 
         # Add explanation
-        st.caption("Win %: Percentage of profitable weeks | Prof.Mo %: Percentage of profitable months")
+        st.caption("Sharpe/Sortino/Max DD: calculated from all available monthly returns | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
 
         # Section 3: Monthly Returns Chart
         st.markdown("---")
