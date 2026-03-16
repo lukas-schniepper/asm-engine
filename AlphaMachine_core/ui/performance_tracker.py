@@ -3467,7 +3467,7 @@ def _render_etoro_compare_tab():
         comparison_data = []
         all_investors = [my_stats] + top_investors
 
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, date
         import numpy as np
         today = datetime.now()
         current_month_key = today.strftime('%Y-%m')
@@ -3482,33 +3482,95 @@ def _render_etoro_compare_tab():
             completed_month_keys.append(key)
             completed_month_names.append(name)
 
-        def _calc_risk_metrics(monthly_returns: dict) -> dict:
-            """Calculate Sharpe, Sortino, Max DD from trailing 12 months of returns."""
-            # Use last 12 completed months (TTM) — exclude current month
-            sorted_keys = sorted(k for k in monthly_returns.keys() if k < current_month_key)
-            sorted_keys = sorted_keys[-12:]  # last 12 completed months
-            if len(sorted_keys) < 3:
+        METRICS_START_DATE = date(2025, 11, 1)  # fair comparison start date for all investors
+
+        # Fetch daily MTD history since Nov 2025 for risk metrics
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _fetch_daily_history_for_metrics():
+            """Fetch daily MTD snapshots since Nov 2025 from Supabase for all investors.
+
+            Returns dict: username -> list of daily returns (decimal)
+            """
+            try:
+                from AlphaMachine_core.db import get_session
+                from AlphaMachine_core.models import EToroStats
+                from sqlmodel import select
+
+                with get_session() as session:
+                    query = select(EToroStats).where(
+                        EToroStats.scraped_date >= METRICS_START_DATE
+                    ).order_by(EToroStats.scraped_date)
+                    results = session.exec(query).all()
+
+                    # Organize: username -> sorted list of (date, {month_key: mtd})
+                    raw = {}
+                    for stat in results:
+                        uname = stat.username.lower()
+                        if uname not in raw:
+                            raw[uname] = []
+                        raw[uname].append((stat.scraped_date, stat.monthly_returns or {}))
+
+                    # Reconstruct daily returns per investor
+                    daily_returns = {}
+                    for uname, snapshots in raw.items():
+                        snapshots.sort(key=lambda x: x[0])
+                        returns_list = []
+                        prev_date = None
+                        prev_mtd = None
+                        prev_month_key = None
+
+                        for snap_date, monthly_rets in snapshots:
+                            month_key = snap_date.strftime('%Y-%m')
+                            mtd = monthly_rets.get(month_key, 0.0)
+
+                            if prev_date is not None:
+                                if month_key == prev_month_key:
+                                    # Same month: daily return = MTD diff
+                                    daily_ret = (mtd - prev_mtd) / 100  # decimal
+                                else:
+                                    # New month: MTD is the return since month start
+                                    daily_ret = mtd / 100
+                                returns_list.append(daily_ret)
+
+                            prev_date = snap_date
+                            prev_mtd = mtd
+                            prev_month_key = month_key
+
+                        daily_returns[uname] = returns_list
+
+                    return daily_returns
+            except Exception as e:
+                import logging
+                logging.warning(f"Could not fetch daily history for metrics: {e}")
+                return {}
+
+        daily_returns_by_user = _fetch_daily_history_for_metrics()
+
+        def _calc_risk_metrics_from_daily(username: str) -> dict:
+            """Calculate Sharpe, Sortino, Max DD from daily returns since Nov 2025."""
+            returns = daily_returns_by_user.get(username.lower(), [])
+            if len(returns) < 10:
                 return {'sharpe': 0.0, 'sortino': 0.0, 'max_dd': 0.0}
 
-            returns = np.array([monthly_returns[k] for k in sorted_keys]) / 100  # convert to decimal
+            returns = np.array(returns)
 
             mean_r = np.mean(returns)
-            std_r = np.std(returns, ddof=1) if len(returns) > 1 else 0
+            std_r = np.std(returns, ddof=1)
 
-            # Annualized Sharpe (from monthly)
-            sharpe = (mean_r / std_r * np.sqrt(12)) if std_r > 0 else 0.0
+            # Annualized Sharpe (from daily, ~252 trading days)
+            sharpe = (mean_r / std_r * np.sqrt(252)) if std_r > 0 else 0.0
 
-            # Annualized Sortino (from monthly)
+            # Annualized Sortino (from daily)
             downside = returns[returns < 0]
             if len(downside) >= 2:
                 down_std = np.std(downside, ddof=1)
-                sortino = (mean_r / down_std * np.sqrt(12)) if down_std > 0 else 0.0
+                sortino = (mean_r / down_std * np.sqrt(252)) if down_std > 0 else 0.0
             elif len(downside) == 1:
-                sortino = (mean_r / abs(downside[0]) * np.sqrt(12)) if downside[0] != 0 else 0.0
+                sortino = (mean_r / abs(downside[0]) * np.sqrt(252)) if downside[0] != 0 else 0.0
             else:
                 sortino = 99.9 if mean_r > 0 else 0.0
 
-            # Max drawdown from cumulative returns
+            # Max drawdown from cumulative daily returns
             cumulative = np.cumprod(1 + returns)
             running_max = np.maximum.accumulate(cumulative)
             drawdowns = (cumulative - running_max) / running_max
@@ -3533,8 +3595,8 @@ def _render_etoro_compare_tab():
             for key, name in zip(completed_month_keys, completed_month_names):
                 month_values[f"{name} %"] = inv.monthly_returns.get(key, 0.0) if inv.monthly_returns else 0.0
 
-            # Risk metrics from monthly returns
-            metrics = _calc_risk_metrics(inv.monthly_returns) if inv.monthly_returns else {'sharpe': 0.0, 'sortino': 0.0, 'max_dd': 0.0}
+            # Risk metrics from daily returns (since Nov 2025)
+            metrics = _calc_risk_metrics_from_daily(inv.username)
 
             row_data = {
                 "⭐": "⭐" if is_me else "",
@@ -3683,7 +3745,7 @@ def _render_etoro_compare_tab():
         st.markdown(html_table, unsafe_allow_html=True)
 
         # Add explanation
-        st.caption("Sharpe/Sortino/Max DD: trailing 12 months (TTM) from monthly returns | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
+        st.caption("Sharpe/Sortino/Max DD: based on daily returns since Nov 2025 for fair comparison | Prof.Wk %: Profitable weeks (eToro) | Win Trades %: Win rate on trades (eToro)")
 
         # Section 3: Monthly Returns Chart
         st.markdown("---")
