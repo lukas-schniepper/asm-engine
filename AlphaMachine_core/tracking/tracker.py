@@ -603,12 +603,23 @@ class PortfolioTracker:
         # Calculate and record overlay variants
         for model_name in OVERLAY_REGISTRY.keys():
             try:
-                # Get allocation for today from overlay model
+                # Get TODAY's allocation from overlay model (will be recorded as signal
+                # and used for TOMORROW's return calculation)
                 _, allocation, signals, impacts = self.overlay_adapter.apply_overlay(
                     model=model_name,
                     raw_nav=raw_nav,
                     trade_date=trade_date,
                 )
+
+                # EXECUTION LAG: Use PREVIOUS day's allocation for today's return.
+                # Signal generated on day T-1 (after close) can only be executed on
+                # day T (at close), so today's return is scaled by yesterday's allocation.
+                previous_signal = self._get_previous_signal(model_name, trade_date)
+                if previous_signal and previous_signal.actual_allocation is not None:
+                    execution_allocation = float(previous_signal.actual_allocation)
+                else:
+                    # No previous signal (first day of overlay tracking) — use 100% equity
+                    execution_allocation = 1.0
 
                 # Get previous overlay NAV from database
                 prev_overlay_nav_df = self.get_nav_series(
@@ -623,8 +634,8 @@ class PortfolioTracker:
                     overlay_daily_return = 0.0
                 else:
                     prev_overlay_nav = prev_overlay_nav_df["nav"].iloc[-1]
-                    # Calculate overlay return: raw daily return scaled by allocation
-                    overlay_daily_return = daily_return * allocation
+                    # Calculate overlay return: raw daily return scaled by PREVIOUS day's allocation
+                    overlay_daily_return = daily_return * execution_allocation
                     # Calculate new overlay NAV: previous overlay NAV * (1 + overlay return)
                     adjusted_nav = prev_overlay_nav * (1 + overlay_daily_return)
 
@@ -647,11 +658,10 @@ class PortfolioTracker:
                     "cash_allocation": 1 - allocation,
                 }
 
-                # Record overlay signal
+                # Record overlay signal (today's allocation — will be used tomorrow)
                 # Calculate if trade is required (allocation changed significantly)
-                previous_signal = self._get_previous_signal(model_name, trade_date)
-                if previous_signal:
-                    prev_alloc = float(previous_signal.actual_allocation or 0)
+                if previous_signal and previous_signal.actual_allocation is not None:
+                    prev_alloc = float(previous_signal.actual_allocation)
                     trade_required = abs(allocation - prev_alloc) > 0.05  # 5% threshold
                 else:
                     trade_required = True

@@ -5,9 +5,10 @@ Recalculate Overlay NAV Script.
 Recalculates overlay variant NAVs (conservative, trend_regime_v2) based on raw NAV.
 This fixes the bug where overlay NAVs started at different values than raw NAV.
 
-The correct methodology:
+The correct methodology (with 1-day execution lag):
 - Day 1: overlay_nav = raw_nav (all variants start at same value)
-- Day 2+: overlay_nav = prev_overlay_nav * (1 + raw_daily_return * allocation)
+- Day 2+: overlay_nav = prev_overlay_nav * (1 + raw_daily_return * prev_day_allocation)
+  Signal generated on day T-1 after close → executed at day T close
 
 Usage:
     # Recalculate all portfolios
@@ -34,6 +35,13 @@ sys.path.insert(0, str(project_root))
 
 # Load secrets
 def _load_secrets():
+    # Load from .env.local (has AWS credentials for S3)
+    env_local = project_root / ".env.local"
+    if env_local.exists():
+        from dotenv import load_dotenv
+        load_dotenv(env_local, override=False)
+
+    # Also load from .streamlit/secrets.toml
     secrets_path = project_root / ".streamlit" / "secrets.toml"
     if secrets_path.exists():
         try:
@@ -67,9 +75,9 @@ def recalculate_overlay_navs(
     """
     Recalculate overlay NAVs for a portfolio using raw NAV as base.
 
-    Methodology:
+    Methodology (with 1-day execution lag):
     - Day 1: overlay_nav = raw_nav
-    - Day 2+: overlay_nav = prev_overlay_nav * (1 + raw_daily_return * allocation)
+    - Day 2+: overlay_nav = prev_overlay_nav * (1 + raw_daily_return * prev_day_allocation)
 
     Returns:
         Dict with statistics
@@ -131,13 +139,14 @@ def recalculate_overlay_navs(
             # Track overlay NAV
             prev_overlay_nav = None
             prev_raw_nav = None
+            prev_allocation = None  # For 1-day execution lag
             records_created = 0
 
             for raw_nav_record in raw_navs:
                 trade_date = raw_nav_record.trade_date
                 raw_nav = float(raw_nav_record.nav)
 
-                # Get allocation from overlay model
+                # Get allocation from overlay model (today's signal — used for TOMORROW)
                 try:
                     _, allocation, signals, impacts = overlay_adapter.apply_overlay(
                         model=model_name,
@@ -148,18 +157,23 @@ def recalculate_overlay_navs(
                     logger.warning(f"    {trade_date}: Error getting allocation - {e}")
                     allocation = 0.5  # Default to 50% if error
 
+                # EXECUTION LAG: Use PREVIOUS day's allocation for today's return.
+                # Signal generated on day T-1 (after close) can only be executed on
+                # day T (at close), so today's return is scaled by yesterday's allocation.
+                execution_allocation = prev_allocation if prev_allocation is not None else 1.0
+
                 if prev_overlay_nav is None:
                     # Day 1: overlay NAV equals raw NAV
                     overlay_nav = raw_nav
                     overlay_daily_return = 0.0
                 else:
-                    # Day 2+: apply allocation-scaled return
+                    # Day 2+: apply previous day's allocation-scaled return
                     if prev_raw_nav and prev_raw_nav > 0:
                         raw_daily_return = (raw_nav / prev_raw_nav) - 1
                     else:
                         raw_daily_return = 0.0
 
-                    overlay_daily_return = raw_daily_return * allocation
+                    overlay_daily_return = raw_daily_return * execution_allocation
                     overlay_nav = prev_overlay_nav * (1 + overlay_daily_return)
 
                 # Calculate cumulative return
@@ -182,6 +196,7 @@ def recalculate_overlay_navs(
                 records_created += 1
                 prev_overlay_nav = overlay_nav
                 prev_raw_nav = raw_nav
+                prev_allocation = allocation  # Today's signal becomes tomorrow's execution allocation
 
             if not dry_run:
                 session.commit()

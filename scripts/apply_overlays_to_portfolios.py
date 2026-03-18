@@ -156,9 +156,15 @@ def calculate_overlay_nav(
     if "daily_return" not in merged.columns or merged["daily_return"].isna().all():
         merged["daily_return"] = merged["nav"].pct_change()
 
-    # Calculate overlay return: allocation * raw_return
+    # EXECUTION LAG: Shift allocation by 1 day.
+    # Signal generated on day T (after close) can only be executed on day T+1 (at close),
+    # so day T+1's return is scaled by day T's allocation.
+    # First day defaults to 100% equity (no prior signal).
+    merged["execution_allocation"] = merged["allocation"].shift(1).fillna(1.0)
+
+    # Calculate overlay return: previous day's allocation * today's raw_return
     # (When allocation < 1, excess goes to cash which we assume has 0% return)
-    merged["overlay_return"] = merged["allocation"] * merged["daily_return"].fillna(0)
+    merged["overlay_return"] = merged["execution_allocation"] * merged["daily_return"].fillna(0)
 
     # Calculate overlay NAV from returns
     merged["overlay_nav"] = initial_nav * (1 + merged["overlay_return"]).cumprod()
