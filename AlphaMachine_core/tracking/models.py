@@ -188,10 +188,12 @@ class Variants:
     RAW = "raw"
     CONSERVATIVE = "conservative"
     TREND_REGIME_V2 = "trend_regime_v2"
+    CONSERVATIVE_V2 = "conservative_v2"
+    TREND_REGIME_V2_ASYM = "trend_regime_v2_asym"
 
     @classmethod
     def all(cls) -> list[str]:
-        return [cls.RAW, cls.CONSERVATIVE, cls.TREND_REGIME_V2]
+        return [cls.RAW, cls.CONSERVATIVE, cls.TREND_REGIME_V2, cls.CONSERVATIVE_V2, cls.TREND_REGIME_V2_ASYM]
 
 
 # Constants for period types
