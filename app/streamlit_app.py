@@ -3341,7 +3341,7 @@ def show_portfolio_selection_ui():
                     "conservative": "Cons",
                     "trend_regime_v2": "Trend",
                     "conservative_v2": "Cons V2",
-                    "trend_regime_v2_asym": "Trend A",
+                    "trend_regime_v2_asym": "Trend V2",
                 }.get(variant, variant)
 
                 candidate_name = f"{clean_name(portfolio_name)} ({variant_short})"

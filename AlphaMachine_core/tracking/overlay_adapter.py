@@ -418,28 +418,28 @@ class OverlayConfig:
 OVERLAY_REGISTRY: dict[str, OverlayConfig] = {
     "conservative": OverlayConfig(
         name="conservative",
-        display_name="Conservative Model (OCT16)",
+        display_name="Conservative V1",
         config_key="conservative",
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),
     "trend_regime_v2": OverlayConfig(
         name="trend_regime_v2",
-        display_name="Trend Regime V2.0",
+        display_name="Trend V1",
         config_key="trend_regime_v2",
         calculator=calculate_allocation_trend_regime_v2,
         needs_spy_prices=True,
     ),
     "conservative_v2": OverlayConfig(
         name="conservative_v2",
-        display_name="Conservative V2 (OCT16 Asymmetric)",
+        display_name="Conservative V2",
         config_key="conservative_v2",
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),
     "trend_regime_v2_asym": OverlayConfig(
         name="trend_regime_v2_asym",
-        display_name="Trend Regime V2.0 Asymmetric",
+        display_name="Trend V2",
         config_key="trend_regime_v2_asym",
         calculator=calculate_allocation_trend_regime_v2,
         needs_spy_prices=True,
