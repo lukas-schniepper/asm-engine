@@ -1145,7 +1145,7 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
 
     if not overlay_variants:
         st.info(
-            "Select an overlay variant (Conservative or Trend Regime V2) "
+            "Select an overlay variant (Conservative V1/V2 or Trend V1/V2) "
             "to see allocation history."
         )
         return

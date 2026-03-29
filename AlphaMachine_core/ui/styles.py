@@ -53,7 +53,9 @@ COLORS = {
 VARIANT_COLORS = {
     "raw": "#2563eb",
     "conservative": "#10b981",
-    "trend_regime_v2": "#dc2626",  # Red for better visibility
+    "conservative_v2": "#059669",
+    "trend_regime_v2": "#dc2626",
+    "trend_regime_v2_asym": "#ea580c",
     "spy": "#f59e0b",
 }
 
@@ -381,8 +383,10 @@ def get_variant_display_name(variant: str) -> str:
     """Get display name for a variant."""
     names = {
         "raw": "Raw (100% Equity)",
-        "conservative": "Conservative Model",
-        "trend_regime_v2": "Trend Regime V2.0",
+        "conservative": "Conservative V1",
+        "conservative_v2": "Conservative V2",
+        "trend_regime_v2": "Trend V1",
+        "trend_regime_v2_asym": "Trend V2",
         "spy": "SPY Benchmark",
     }
     return names.get(variant, variant.replace("_", " ").title())
