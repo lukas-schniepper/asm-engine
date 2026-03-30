@@ -20,6 +20,7 @@ class InvestorStats:
     avatar_url: str
     risk_score: int
     copiers: int
+    copy_value: Optional[str]  # AuM text from eToro (e.g. "<$50K", "$500K-$1M")
     gain_1y: float  # 1 year return %
     gain_2y: float  # 2 year return %
     gain_ytd: float  # Year to date return %
@@ -100,6 +101,7 @@ class EToroScraper:
                         'user_id': stat.user_id,
                         'risk_score': stat.risk_score,
                         'copiers': stat.copiers,
+                        'copy_value': stat.copy_value,
                         'gain_1y': stat.gain_1y,
                         'gain_2y': stat.gain_2y,
                         'gain_ytd': stat.gain_ytd,
@@ -141,6 +143,7 @@ class EToroScraper:
                     avatar_url=self._get_avatar_url(inv.get('user_id', 0), 50),
                     risk_score=inv.get('risk_score', 5),
                     copiers=inv.get('copiers', 0),
+                    copy_value=inv.get('copy_value'),
                     gain_1y=inv.get('gain_1y', 0.0),
                     gain_2y=inv.get('gain_2y', 0.0),
                     gain_ytd=inv.get('gain_ytd', 0.0),

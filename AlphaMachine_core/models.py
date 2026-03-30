@@ -87,6 +87,7 @@ class EToroStats(SQLModel, table=True):
     gain_ytd: float = Field(default=0.0, description="Year-to-date return %")
     win_ratio: float = Field(default=50.0, description="Win ratio %")
     profitable_months_pct: float = Field(default=50.0, description="% of profitable months")
+    copy_value: Optional[str] = Field(default=None, description="Copy Value / AuM text from eToro (e.g. '<$50K', '$500K-$1M')")
     monthly_returns: Dict[str, Any] = Field(
         sa_column=Column(JSON, nullable=False),
         description="Monthly returns dict {'2024-01': 1.5, ...}"

@@ -147,6 +147,19 @@ def scrape_monthly_returns(driver, username: str) -> dict:
     if win_match:
         result['win_ratio'] = float(win_match.group(1))
 
+    # Extract Copy Value (AuM) from the Copiers section
+    # eToro shows this with automation-id="new-stats-copiers-aum-value"
+    # Values like "<$50K", "$50K-$100K", "$500K-$1M", "$1.2M", etc.
+    try:
+        aum_elem = driver.find_element(By.CSS_SELECTOR, '[automation-id="new-stats-copiers-aum-value"]')
+        aum_text = aum_elem.text.strip()
+        if aum_text:
+            result['copy_value'] = aum_text
+            print(f"    Copy Value: {aum_text}")
+    except Exception:
+        # Element not found - may not be available for all profiles
+        pass
+
     # Parse monthly returns from eToro stats page
     # eToro shows months in a table with format: Dec Nov Oct Sep Aug Jul Jun May Apr Mar Feb Jan
     # Each month has a corresponding percentage value below it

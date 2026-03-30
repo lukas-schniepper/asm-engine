@@ -3443,7 +3443,8 @@ def _render_etoro_compare_tab():
 
     my_profile_url = f"https://www.etoro.com/people/{my_stats.username}"
     st.markdown(f"**[{my_stats.full_name} (@{my_stats.username})]({my_profile_url})**")
-    st.markdown(f"Risk Score: **{my_stats.risk_score}/10** | Copiers: **{my_stats.copiers:,}**")
+    copy_val = f" | Copy Value: **{my_stats.copy_value}**" if my_stats.copy_value else ""
+    st.markdown(f"Risk Score: **{my_stats.risk_score}/10** | Copiers: **{my_stats.copiers:,}**{copy_val}")
 
     # KPIs for my portfolio
     kpi_cols = st.columns(5)
@@ -3603,6 +3604,7 @@ def _render_etoro_compare_tab():
                 "Investor": f"{inv.full_name} (@{inv.username})",
                 "Profile": profile_url,
                 "Copiers": inv.copiers,
+                "Copy Value": inv.copy_value or "-",
                 "MTD %": mtd,
                 "YTD %": inv.gain_ytd,
             }
@@ -3656,6 +3658,7 @@ def _render_etoro_compare_tab():
                 f'{avatar_html}'
                 f'{investor_name}</a></td>'
                 f'<td style="text-align: right;">{row["Copiers"]:,}</td>'
+                f'<td style="text-align: right;">{row["Copy Value"]}</td>'
                 f'<td style="text-align: right;">{color_value(row["MTD %"])}</td>'
                 f'<td style="text-align: right;">{color_value(row["YTD %"])}</td>'
                 f'{month_cells}'
@@ -3695,6 +3698,7 @@ def _render_etoro_compare_tab():
                     f'<td style="text-align: left; display: flex; align-items: center; gap: 8px;">'
                     f'{bm_avatar}{ticker} (Benchmark)</td>'
                     f'<td style="text-align: right; color: #6c757d;">-</td>'
+                    f'<td style="text-align: right; color: #6c757d;">-</td>'
                     f'<td style="text-align: right;">{color_value(bm["mtd"])}</td>'
                     f'<td style="text-align: right;">{color_value(bm["ytd"])}</td>'
                     f'{bm_month_cells}'
@@ -3715,19 +3719,25 @@ def _render_etoro_compare_tab():
         html_table = (
             '<style>'
             '.etoro-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
-            '.etoro-table th { text-align: right; padding: 8px 12px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; white-space: nowrap; }'
-            '.etoro-table th:first-child { text-align: center; }'
-            '.etoro-table th:nth-child(2) { text-align: left; }'
-            '.etoro-table td { padding: 8px 12px; border-bottom: 1px solid #eee; white-space: nowrap; }'
+            '.etoro-table th { text-align: right; padding: 8px 10px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; white-space: normal; font-size: 12px; line-height: 1.3; vertical-align: bottom; min-width: 50px; }'
+            '.etoro-table th:first-child { text-align: center; min-width: 30px; }'
+            '.etoro-table th:nth-child(2) { text-align: left; min-width: 120px; }'
+            '.etoro-table td { padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }'
             '.etoro-table tr:hover { background-color: #f5f5f5; }'
             '.etoro-table a:hover { text-decoration: underline; }'
+            '@media (max-width: 768px) {'
+            '  .etoro-table { font-size: 12px; }'
+            '  .etoro-table th { padding: 6px 6px; font-size: 11px; min-width: 40px; }'
+            '  .etoro-table td { padding: 6px 6px; }'
+            '}'
             '</style>'
-            '<div style="overflow-x: auto;">'
+            '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">'
             '<table class="etoro-table">'
             '<thead><tr>'
             '<th style="text-align: center;">⭐</th>'
             '<th style="text-align: left;">Investor</th>'
             '<th style="text-align: right;">Copiers</th>'
+            '<th style="text-align: right;">Copy Value</th>'
             '<th style="text-align: right;">MTD %</th>'
             '<th style="text-align: right;">YTD %</th>'
             f'{month_headers}'

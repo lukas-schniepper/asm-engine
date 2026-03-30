@@ -131,6 +131,7 @@ def upload_to_supabase():
                 existing.user_id = inv.get('user_id')
                 existing.risk_score = inv.get('risk_score', 5)
                 existing.copiers = inv.get('copiers', 0)
+                existing.copy_value = inv.get('copy_value')
                 existing.gain_1y = inv.get('gain_1y', 0.0)
                 existing.gain_2y = inv.get('gain_2y', 0.0)
                 existing.gain_ytd = inv.get('gain_ytd', 0.0)
@@ -149,6 +150,7 @@ def upload_to_supabase():
                     user_id=inv.get('user_id'),
                     risk_score=inv.get('risk_score', 5),
                     copiers=inv.get('copiers', 0),
+                    copy_value=inv.get('copy_value'),
                     gain_1y=inv.get('gain_1y', 0.0),
                     gain_2y=inv.get('gain_2y', 0.0),
                     gain_ytd=inv.get('gain_ytd', 0.0),
