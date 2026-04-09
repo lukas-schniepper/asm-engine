@@ -38,12 +38,27 @@ except ImportError:
 
 # Usernames to scrape
 USERNAMES_TO_SCRAPE = [
-    'alphawizzard',     # Your portfolio
-    'thomaspj',         # #1 Thomas Parry Jones
-    'jeppekirkbonde',   # #2 Jeppe Kirk Bonde
-    'triangulacapital', # #3 Pietari Laurila
-    'cphequities',      # #4 Blue Screen Media ApS
-    'fundmanagerzech',  # #5 Zechariah Bin Zheng
+    'alphawizzard',       # Your portfolio
+    'thomaspj',           # #1  Thomas Parry Jones
+    'jeppekirkbonde',     # #2  Jeppe Kirk Bonde
+    'triangulacapital',   # #3  Pietari Laurila
+    'cphequities',        # #4  Blue Screen Media ApS
+    'ai-revolution',      # #5  AI-Revolution
+    'fundmanagerzech',    # #6  Zechariah Bin Zheng
+    'bigtech',            # #7  BigTech
+    'saifsyn',            # #8  saifsyn
+    'smudliczek',         # #9  Smudliczek
+    'goldworldwide',      # #10 GoldWorldWide
+    'inthegame',          # #11 InTheGame
+    'napoleon-x',         # #12 Napoleon-X
+    'defense_investor',   # #13 defense_investor
+    'jaynemesis',         # #14 jaynemesis
+    'michalhla',          # #15 Michalhla
+    'europedefense',      # #16 EuropeDefense
+    'cryptoportfolio',    # #17 CryptoPortfolio
+    'rubymza',            # #18 rubymza
+    'greenbullinvest',    # #19 GreenbullInvest
+    'mick_repo',          # #20 mick_repo
 ]
 
 
