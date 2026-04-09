@@ -3719,7 +3719,7 @@ def _render_etoro_compare_tab():
         html_table = (
             '<style>'
             '.etoro-table { width: 100%; border-collapse: collapse; font-size: 14px; }'
-            '.etoro-table th { text-align: right; padding: 8px 10px; border-bottom: 2px solid #ddd; background-color: #f8f9fa; white-space: normal; font-size: 12px; line-height: 1.3; vertical-align: bottom; min-width: 50px; }'
+            '.etoro-table th { text-align: right; padding: 8px 10px; border-bottom: 2px solid #ddd; background-color: transparent; color: inherit; white-space: normal; font-size: 12px; line-height: 1.3; vertical-align: bottom; min-width: 50px; }'
             '.etoro-table th:first-child { text-align: center; min-width: 30px; }'
             '.etoro-table th:nth-child(2) { text-align: left; min-width: 120px; }'
             '.etoro-table td { padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }'
