@@ -3254,7 +3254,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
 def _fetch_etoro_data():
     """Fetch eToro data with Streamlit caching."""
     from ..data_sources.etoro_scraper import get_etoro_comparison_data
-    return get_etoro_comparison_data("alphawizzard", top_count=5)
+    return get_etoro_comparison_data("alphawizzard", top_count=20)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
