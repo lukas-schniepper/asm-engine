@@ -43,26 +43,26 @@ class EToroScraper:
 
     # Known top investors (for ordering)
     TOP_INVESTORS = [
-        'thomaspj',           # #1  Thomas Parry Jones
-        'jeppekirkbonde',     # #2  Jeppe Kirk Bonde
-        'triangulacapital',   # #3  Pietari Laurila
-        'cphequities',        # #4  Blue Screen Media ApS
-        'ai-revolution',      # #5  AI-Revolution
-        'fundmanagerzech',    # #6  Zechariah Bin Zheng
-        'bigtech',            # #7  BigTech
-        'saifsyn',            # #8  saifsyn
-        'smudliczek',         # #9  Smudliczek
-        'goldworldwide',      # #10 GoldWorldWide
-        'inthegame',          # #11 InTheGame
-        'napoleon-x',         # #12 Napoleon-X
-        'defense_investor',   # #13 defense_investor
-        'jaynemesis',         # #14 jaynemesis
-        'michalhla',          # #15 Michalhla
-        'europedefense',      # #16 EuropeDefense
-        'cryptoportfolio',    # #17 CryptoPortfolio
-        'rubymza',            # #18 rubymza
-        'greenbullinvest',    # #19 GreenbullInvest
-        'mick_repo',          # #20 mick_repo
+        'thomaspj',           # #1  Thomas Parry Jones (33k copiers)
+        'jeppekirkbonde',     # #2  Jeppe Kirk Bonde (26k copiers)
+        'triangulacapital',   # #3  Pietari Laurila (26k copiers)
+        'cphequities',        # #4  Blue Screen Media ApS (15k copiers)
+        'fundmanagerzech',    # #5  Zechariah Bin Zheng (13k copiers)
+        'saifsyn',            # #6  Saif Yousif Al Naqbi (11k copiers)
+        'smudliczek',         # #7  Dan Hamernik (11k copiers)
+        'defense_investor',   # #8  Stewart Fitzell (10k copiers)
+        'jaynemesis',         # #9  Jay Smith (9k copiers)
+        'michalhla',          # #10 Michal Hlavacka (8k copiers)
+        'rubymza',            # #11 Dr. Heloise Greeff (6k copiers)
+        'greenbullinvest',    # #12 Greenbull Investments Sarl (6k copiers)
+        'mick_repo',          # #13 Miska Repo (6k copiers)
+        'amitkup',            # #14 Amit Kupfer (5k copiers)
+        'ingruc',             # #15 Ingvar Rueckemann (5k copiers)
+        'keshavlohiya',       # #16 Keshav Lohiya (5k copiers)
+        'mcgintye',           # #17 Eamonn McGinty (4k copiers)
+        'misterg23',          # #18 George Thomson (4k copiers)
+        'steveli1029',        # #19 Steve Li (4k copiers)
+        'marianopardo',       # #20 Mariano Pardo (3k copiers)
     ]
 
     # Cache for live data (loaded once per session)
