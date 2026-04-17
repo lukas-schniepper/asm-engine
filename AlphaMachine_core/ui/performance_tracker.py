@@ -1788,6 +1788,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         "raw": "Raw",
         "conservative": "Cons.",
         "trend_regime_v2": "Trend",
+        "hb1": "HB1",
     }
 
     # Build returns data organized by portfolio -> variant
@@ -1931,7 +1932,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         try:
             from ..tracking.s3_adapter import S3DataLoader
             s3_loader = S3DataLoader()
-            for model in ["conservative", "trend_regime_v2"]:
+            for model in ["conservative", "trend_regime_v2", "hb1"]:
                 try:
                     alloc_df = s3_loader.load_allocation_history(model)
                     if not alloc_df.empty:
@@ -1976,14 +1977,18 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                             row[col_name] = "-"
 
                         # Add allocation columns for overlay variants if enabled
-                        if show_allocations and variant in ["conservative", "trend_regime_v2"]:
+                        if show_allocations and variant in ["conservative", "trend_regime_v2", "hb1"]:
                             abbrev = variant_abbrev.get(variant, variant)
                             if variant in allocation_data:
                                 alloc_df = allocation_data[variant]
                                 if day in alloc_df.index:
                                     try:
-                                        target_alloc = float(alloc_df.loc[day, "target_allocation"])
-                                        actual_alloc = float(alloc_df.loc[day, "allocation"])
+                                        if variant == "hb1":
+                                            target_alloc = float(alloc_df.loc[day, "cv1a_target"])
+                                            actual_alloc = float(alloc_df.loc[day, "active_alloc"])
+                                        else:
+                                            target_alloc = float(alloc_df.loc[day, "target_allocation"])
+                                            actual_alloc = float(alloc_df.loc[day, "allocation"])
                                         row[f"{abbrev} Target"] = f"{target_alloc*100:.0f}%"
                                         row[f"{abbrev} Actual"] = f"{actual_alloc*100:.0f}%"
                                     except Exception:

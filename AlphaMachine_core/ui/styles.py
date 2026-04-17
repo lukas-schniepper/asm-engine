@@ -387,6 +387,7 @@ def get_variant_display_name(variant: str) -> str:
         "conservative_v2": "Conservative V2",
         "trend_regime_v2": "Trend V1",
         "trend_regime_v2_asym": "Trend V2",
+        "hb1": "Hysteresis Blend V1",
         "spy": "SPY Benchmark",
     }
     return names.get(variant, variant.replace("_", " ").title())

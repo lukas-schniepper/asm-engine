@@ -267,6 +267,7 @@ class S3DataLoader:
             "trend_regime_v2": "models/v2_regime/allocation_history.csv",
             "conservative_v2": "models/conservative_v2/allocation_history.csv",
             "trend_regime_v2_asym": "models/v2_regime_asymmetric/allocation_history.csv",
+            "hb1": "models/hysteresis_blend/allocation_history.csv",
         }
 
         if model not in model_paths:
@@ -307,6 +308,7 @@ class S3DataLoader:
             "trend_regime_v2": "models/v2_regime/config.json",
             "conservative_v2": "models/conservative_v2/config.json",
             "trend_regime_v2_asym": "models/v2_regime_asymmetric/config.json",
+            "hb1": "models/hysteresis_blend/config.json",
         }
 
         if model not in model_configs:

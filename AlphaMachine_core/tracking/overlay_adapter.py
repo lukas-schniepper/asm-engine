@@ -444,6 +444,18 @@ OVERLAY_REGISTRY: dict[str, OverlayConfig] = {
         calculator=calculate_allocation_trend_regime_v2,
         needs_spy_prices=True,
     ),
+    "hb1": OverlayConfig(
+        name="hb1",
+        display_name="Hysteresis Blend V1",
+        config_key="hb1",
+        # HB1 is a blend of CV1A + TV1 with hysteresis switching on CV1A's target.
+        # The S3 allocation_history.csv is the source of truth; we almost never
+        # reach the fallback calculator. If S3 is unavailable, fall back to the
+        # conservative calculator (CV1A-equivalent) as a safe default - HB1's
+        # conservative mode is structurally identical to CV1A anyway.
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
 }
 
 # Default parameters (used when S3 config is unavailable)
@@ -516,6 +528,24 @@ DEFAULT_PARAMS = {
         "efficient_mom_threshold": 0.5,
         "efficient_mom_boost": 1.1,
         "max_alignment_boost": 1.1,
+    },
+    # HB1 fallback params = CV1A baseline (asymmetric F25). The switching
+    # thresholds 70/35 live in the blend logic itself; if the engine ever
+    # falls back to local calculation for HB1, it will compute the CV1A
+    # allocation, which matches HB1's conservative mode behavior.
+    "hb1": {
+        "base_allocation": 0.55,
+        "max_allocation": 1.0,
+        "oversold_boost": 1.25,
+        "low_vol_multiplier": 1.0,
+        "high_vol_multiplier": 0.55,
+        "extreme_stress_factor": 0.45,
+        "rebalance_threshold": 0.25,
+        "put_call_threshold": 2.25,
+        "slope_steep_boost": 1.25,
+        "slope_very_steep_boost": 1.35,
+        "rsi_oversold": 32,
+        "cot_threshold": 1.5,
     },
 }
 
@@ -662,15 +692,22 @@ class OverlayAdapter:
 
         row = row.iloc[0]
 
-        # Get allocation (prefer 'allocation' column, fall back to 'target_allocation')
-        allocation = row.get("allocation", row.get("target_allocation"))
+        # Get allocation. Prefer 'allocation', fall back to HB1's 'active_alloc',
+        # then to 'target_allocation'. HB1 history does not have an 'allocation'
+        # column — its executed allocation is stored under 'active_alloc'.
+        allocation = row.get("allocation")
+        if allocation is None or pd.isna(allocation):
+            allocation = row.get("active_alloc")
+        if allocation is None or pd.isna(allocation):
+            allocation = row.get("target_allocation")
         if allocation is None or pd.isna(allocation):
             return None
 
         # Build signals dict from available columns
         # Convert numpy types to native Python types for JSON serialization
         signals = {}
-        signal_columns = [c for c in row.index if c not in ["date", "allocation", "target_allocation"]]
+        signal_columns = [c for c in row.index
+                          if c not in ["date", "allocation", "active_alloc", "target_allocation"]]
         for col in signal_columns:
             val = row[col]
             if not pd.isna(val):
