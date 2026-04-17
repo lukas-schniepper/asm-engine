@@ -71,6 +71,7 @@ def recalculate_overlay_navs(
     portfolio_id: int,
     portfolio_name: str,
     dry_run: bool = False,
+    only_models: list[str] | None = None,
 ) -> dict:
     """
     Recalculate overlay NAVs for a portfolio using raw NAV as base.
@@ -119,8 +120,14 @@ def recalculate_overlay_navs(
         # Create overlay adapter for getting allocations
         overlay_adapter = OverlayAdapter()
 
-        # Process each overlay model
-        for model_name in OVERLAY_REGISTRY.keys():
+        # Process each overlay model (optionally filtered)
+        models_to_process = [m for m in OVERLAY_REGISTRY.keys()
+                             if only_models is None or m in only_models]
+        if not models_to_process:
+            logger.warning(f"  No overlay models to process (filter: {only_models})")
+            return stats
+
+        for model_name in models_to_process:
             logger.info(f"\n  Processing {model_name}...")
 
             # Delete existing overlay NAV records
@@ -228,6 +235,13 @@ def main():
         action="store_true",
         help="Preview changes without modifying database",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        action="append",
+        help="Only recalculate the given overlay variant (can be repeated). "
+             "E.g. --model hb1. Default: all registered overlays.",
+    )
     args = parser.parse_args()
 
     logger.info("=" * 60)
@@ -236,6 +250,16 @@ def main():
 
     if args.dry_run:
         logger.info("DRY RUN MODE - No changes will be saved")
+
+    if args.model:
+        logger.info(f"Model filter: {args.model}")
+        # Validate all requested models are registered
+        from AlphaMachine_core.tracking.overlay_adapter import OVERLAY_REGISTRY
+        unknown = [m for m in args.model if m not in OVERLAY_REGISTRY]
+        if unknown:
+            logger.error(f"Unknown overlay model(s): {unknown}. "
+                         f"Registered: {list(OVERLAY_REGISTRY.keys())}")
+            sys.exit(1)
 
     from AlphaMachine_core.tracking import get_tracker
 
@@ -258,7 +282,9 @@ def main():
     for portfolio in portfolios:
         try:
             stats = recalculate_overlay_navs(
-                portfolio.id, portfolio.name, dry_run=args.dry_run
+                portfolio.id, portfolio.name,
+                dry_run=args.dry_run,
+                only_models=args.model,
             )
             all_stats.append(stats)
         except Exception as e:
