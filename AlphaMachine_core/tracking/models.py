@@ -191,11 +191,16 @@ class Variants:
     CONSERVATIVE_V2 = "conservative_v2"
     TREND_REGIME_V2_ASYM = "trend_regime_v2_asym"
     HB1 = "hb1"
+    # New blends added 2026-04-25 (asm-models PR #8 + #9)
+    RB1 = "rb1"                                    # RegimeBlend (CV1A+TV2A on VIX z-score)
+    B_AVERAGE = "b_average"                        # (TV1_target + TV2A_target) / 2
+    A_MAX_UP_MIN_DOWN = "a_max_up_min_down"        # max if both targets up, min if both down
 
     @classmethod
     def all(cls) -> list[str]:
         return [cls.RAW, cls.CONSERVATIVE, cls.TREND_REGIME_V2,
-                cls.CONSERVATIVE_V2, cls.TREND_REGIME_V2_ASYM, cls.HB1]
+                cls.CONSERVATIVE_V2, cls.TREND_REGIME_V2_ASYM, cls.HB1,
+                cls.RB1, cls.B_AVERAGE, cls.A_MAX_UP_MIN_DOWN]
 
 
 # Constants for period types

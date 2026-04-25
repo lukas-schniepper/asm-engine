@@ -35,6 +35,41 @@ def _cached_get_nav_series(portfolio_id: int, variant: str, start_date=None, end
     return tracker.get_nav_series(portfolio_id, variant, start_date, end_date)
 
 
+def _stitched_nav_series(nav_df: pd.DataFrame) -> pd.Series:
+    """Build a continuous equity curve from the stored ``daily_return`` column.
+
+    The ``nav`` column in ``PortfolioDailyNAV`` is normally redundant with
+    ``daily_return`` (i.e. ``nav[t] = nav[t-1] * (1 + daily_return[t])``), but
+    can occasionally contain a baseline reset on a day that was originally
+    written as a portfolio-first-day before earlier rows were backfilled
+    (e.g. SA LARGE & MOBY 15-25 on 2026-02-02). When that happens, plotting
+    the raw ``nav`` column produces a chart that contradicts the KPI Total
+    Return and the Scraper View — both of which compound ``daily_return``.
+
+    This helper returns a NAV series anchored at the first row's recorded
+    ``nav`` and compounded forward from ``daily_return``. For consistent data
+    it equals ``nav_df['nav']`` exactly; for portfolios with a reset it
+    diverges in exactly the way needed to match the KPI / Scraper totals.
+
+    Use ``scripts/audit_nav_daily_return_consistency.py`` to find affected rows.
+    """
+    if nav_df.empty:
+        return pd.Series(dtype=float, name="nav_stitched")
+
+    nav = nav_df["nav"].astype(float)
+    if "daily_return" not in nav_df.columns or len(nav_df) == 1:
+        return nav.rename("nav_stitched")
+
+    rets = nav_df["daily_return"].astype(float).fillna(0.0)
+    # Anchor at the first recorded NAV; do NOT re-apply rets[0] on top of it
+    # (that return is what produced nav[0] in the first place).
+    rets_anchored = rets.copy()
+    rets_anchored.iloc[0] = 0.0
+    stitched = float(nav.iloc[0]) * (1.0 + rets_anchored).cumprod()
+    stitched.name = "nav_stitched"
+    return stitched
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_get_nav_date_range(portfolio_id: int, variant: str):
     """Cached wrapper for tracker.get_nav_date_range()."""
@@ -227,14 +262,18 @@ def _render_performance_tracker():
         st.warning("Please select at least one variant to display.")
         return
 
-    # Load NAV data for selected variants
+    # Load NAV data for selected variants. We deliberately use a stitched
+    # equity curve derived from `daily_return` (the GIPS-compliant performance
+    # signal also used by the KPI Total Return and the Scraper View) rather
+    # than the raw `nav` column, which can contain occasional baseline resets
+    # — see _stitched_nav_series for the rationale.
     nav_data = {}
     for variant in selected_variants:
         nav_df = _cached_get_nav_series(
             selected_portfolio_id, variant, start_date, end_date
         )
         if not nav_df.empty:
-            nav_data[variant] = nav_df["nav"]
+            nav_data[variant] = _stitched_nav_series(nav_df)
 
     if not nav_data:
         st.warning("No NAV data available for the selected date range and variants.")
@@ -491,7 +530,10 @@ def _render_comparison_tab(tracker, portfolio_id, variants, start_date, end_date
                 if nav_df.empty or "nav" not in nav_df.columns:
                     continue
 
-                portfolio_nav = nav_df["nav"]
+                # Use the stitched equity curve so beta/alpha/IR are computed on
+                # the same series the KPI Total Return uses (see
+                # _stitched_nav_series for rationale).
+                portfolio_nav = _stitched_nav_series(nav_df)
                 portfolio_returns = calculate_returns(portfolio_nav)
 
                 # Align with benchmark
@@ -1789,6 +1831,10 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         "conservative": "Cons.",
         "trend_regime_v2": "Trend",
         "hb1": "HB1",
+        # New blends added 2026-04-25
+        "rb1": "RB1",
+        "b_average": "B-Avg",
+        "a_max_up_min_down": "A-MUMD",
     }
 
     # Build returns data organized by portfolio -> variant
@@ -1932,7 +1978,8 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
         try:
             from ..tracking.s3_adapter import S3DataLoader
             s3_loader = S3DataLoader()
-            for model in ["conservative", "trend_regime_v2", "hb1"]:
+            for model in ["conservative", "trend_regime_v2", "hb1",
+                          "rb1", "b_average", "a_max_up_min_down"]:
                 try:
                     alloc_df = s3_loader.load_allocation_history(model)
                     if not alloc_df.empty:
@@ -1977,15 +2024,24 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
                             row[col_name] = "-"
 
                         # Add allocation columns for overlay variants if enabled
-                        if show_allocations and variant in ["conservative", "trend_regime_v2", "hb1"]:
+                        if show_allocations and variant in [
+                            "conservative", "trend_regime_v2", "hb1",
+                            "rb1", "b_average", "a_max_up_min_down",
+                        ]:
                             abbrev = variant_abbrev.get(variant, variant)
                             if variant in allocation_data:
                                 alloc_df = allocation_data[variant]
                                 if day in alloc_df.index:
                                     try:
                                         if variant == "hb1":
+                                            # HB1 schema: cv1a_target + active_alloc
                                             target_alloc = float(alloc_df.loc[day, "cv1a_target"])
                                             actual_alloc = float(alloc_df.loc[day, "active_alloc"])
+                                        elif variant in ("rb1", "b_average", "a_max_up_min_down"):
+                                            # New blends: stateless or stateful active_alloc only
+                                            # (no separate target column — target ≡ active by design)
+                                            actual_alloc = float(alloc_df.loc[day, "active_alloc"])
+                                            target_alloc = actual_alloc
                                         else:
                                             target_alloc = float(alloc_df.loc[day, "target_allocation"])
                                             actual_alloc = float(alloc_df.loc[day, "allocation"])

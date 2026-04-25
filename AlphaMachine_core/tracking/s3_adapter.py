@@ -268,6 +268,10 @@ class S3DataLoader:
             "conservative_v2": "models/conservative_v2/allocation_history.csv",
             "trend_regime_v2_asym": "models/v2_regime_asymmetric/allocation_history.csv",
             "hb1": "models/hysteresis_blend/allocation_history.csv",
+            # New blends added 2026-04-25 (asm-models PR #8 + #9)
+            "rb1": "models/regime_blend/allocation_history.csv",
+            "b_average": "models/b_average_blend/allocation_history.csv",
+            "a_max_up_min_down": "models/a_max_up_min_down_blend/allocation_history.csv",
         }
 
         if model not in model_paths:
@@ -309,6 +313,12 @@ class S3DataLoader:
             "conservative_v2": "models/conservative_v2/config.json",
             "trend_regime_v2_asym": "models/v2_regime_asymmetric/config.json",
             "hb1": "models/hysteresis_blend/config.json",
+            # New blends added 2026-04-25 — config files not currently uploaded to S3,
+            # the daily workflows publish only allocation_history.csv. The S3 fetch
+            # will fail for these; OverlayAdapter.DEFAULT_PARAMS provides fallback.
+            "rb1": "models/regime_blend/config.json",
+            "b_average": "models/b_average_blend/config.json",
+            "a_max_up_min_down": "models/a_max_up_min_down_blend/config.json",
         }
 
         if model not in model_configs:

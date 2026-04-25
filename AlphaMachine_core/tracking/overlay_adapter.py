@@ -456,6 +456,32 @@ OVERLAY_REGISTRY: dict[str, OverlayConfig] = {
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),
+    # New blends added 2026-04-25 (asm-models PR #8 + #9). All three publish
+    # daily allocation_history.csv to S3; the engine reads `active_alloc` via
+    # _get_allocation_from_history (already supported). The local-fallback
+    # calculator is only reached if S3 is unreachable for that day, so we use
+    # CV1A-equivalent (conservative) as a safe defensive default for all three.
+    "rb1": OverlayConfig(
+        name="rb1",
+        display_name="RegimeBlend V1 (CV1A+TV2A on VIX z-score)",
+        config_key="rb1",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    "b_average": OverlayConfig(
+        name="b_average",
+        display_name="B-Average (TV1+TV2A targets)",
+        config_key="b_average",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    "a_max_up_min_down": OverlayConfig(
+        name="a_max_up_min_down",
+        display_name="A-MaxUpMinDown (TV1+TV2A direction-conditional)",
+        config_key="a_max_up_min_down",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
 }
 
 # Default parameters (used when S3 config is unavailable)
@@ -546,6 +572,43 @@ DEFAULT_PARAMS = {
         "slope_very_steep_boost": 1.35,
         "rsi_oversold": 32,
         "cot_threshold": 1.5,
+    },
+    # RB1 fallback = CV1A baseline (same rationale as HB1). The actual RB1
+    # rule (regime-conditional CV1A+TV2A on VIX z-score) is in
+    # asm-models/shared/allocation/regime_blend.py and lives in S3 history;
+    # this fallback is only reached if S3 is unreachable for the day.
+    "rb1": {
+        "base_allocation": 0.55,
+        "max_allocation": 1.0,
+        "oversold_boost": 1.25,
+        "low_vol_multiplier": 1.0,
+        "high_vol_multiplier": 0.55,
+        "extreme_stress_factor": 0.45,
+        "rebalance_threshold": 0.25,
+        "put_call_threshold": 2.25,
+        "slope_steep_boost": 1.25,
+        "slope_very_steep_boost": 1.35,
+        "rsi_oversold": 32,
+        "cot_threshold": 1.5,
+    },
+    # B_AVERAGE and A_MAX_UP_MIN_DOWN are observation-only reference blends.
+    # They use TV1+TV2A targets via the asm-models reference_blends module and
+    # publish daily to S3. Fallback = conservative baseline (rarely reached).
+    "b_average": {
+        "base_allocation": 0.55,
+        "max_allocation": 1.0,
+        "low_vol_multiplier": 1.0,
+        "high_vol_multiplier": 0.55,
+        "extreme_stress_factor": 0.35,
+        "rebalance_threshold": 0.25,
+    },
+    "a_max_up_min_down": {
+        "base_allocation": 0.55,
+        "max_allocation": 1.0,
+        "low_vol_multiplier": 1.0,
+        "high_vol_multiplier": 0.55,
+        "extreme_stress_factor": 0.35,
+        "rebalance_threshold": 0.25,
     },
 }
 

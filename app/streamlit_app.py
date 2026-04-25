@@ -3342,6 +3342,11 @@ def show_portfolio_selection_ui():
                     "trend_regime_v2": "Trend",
                     "conservative_v2": "Cons V2",
                     "trend_regime_v2_asym": "Trend V2",
+                    "hb1": "HB1",
+                    # New blends added 2026-04-25
+                    "rb1": "RB1",
+                    "b_average": "B-Avg",
+                    "a_max_up_min_down": "A-MUMD",
                 }.get(variant, variant)
 
                 candidate_name = f"{clean_name(portfolio_name)} ({variant_short})"
