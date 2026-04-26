@@ -716,9 +716,11 @@ class OverlayAdapter:
         try:
             df = self.s3_loader.load_allocation_history(model)
             if df is not None and not df.empty:
-                # Ensure date column is datetime
+                # Ensure date column is datetime. The trend_regime_v2_asym S3 file
+                # mixes "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DD" rows from different
+                # writer eras, so format="mixed" is required to parse without crashing.
                 if "date" in df.columns:
-                    df["date"] = pd.to_datetime(df["date"])
+                    df["date"] = pd.to_datetime(df["date"], format="mixed")
                 self._allocation_history_cache[model] = df
                 logger.info(f"Loaded allocation history for {model}: {len(df)} rows")
                 return df
