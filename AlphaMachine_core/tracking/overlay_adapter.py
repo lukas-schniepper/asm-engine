@@ -727,6 +727,29 @@ class OverlayAdapter:
 
         return None
 
+    @staticmethod
+    def _extract_target_and_actual(model: str, row: pd.Series) -> tuple[Optional[float], Optional[float]]:
+        """Map a model + S3 history row to (target_allocation, actual_allocation).
+
+        Schema differs per model family — see _get_alloc_columns in
+        AlphaMachine_core/ui/performance_tracker.py for the canonical mapping.
+
+        Returns (target, actual). Either may be None if the column is missing.
+        For RB1 / B_AVERAGE / A_MAX_UP_MIN_DOWN, target ≡ actual by design (no
+        separate rebalance threshold on top of the blend itself).
+        """
+        def _f(name):
+            v = row.get(name)
+            return float(v) if v is not None and not pd.isna(v) else None
+
+        if model == "hb1":
+            return _f("cv1a_target"), _f("active_alloc")
+        if model in ("rb1", "b_average", "a_max_up_min_down"):
+            actual = _f("active_alloc")
+            return actual, actual
+        # Base models (CV1, CV1A, TV1, TV2A): real target/actual split via rebalance threshold
+        return _f("target_allocation"), _f("allocation")
+
     def _get_allocation_from_history(
         self, model: str, trade_date: date
     ) -> Optional[tuple[float, dict]]:
@@ -735,6 +758,12 @@ class OverlayAdapter:
 
         Returns:
             Tuple of (allocation, signals_dict) or None if not found.
+            The returned `allocation` is the ACTUAL (executed) allocation.
+            The signals dict contains a `target_allocation` key with the REAL
+            target (raw rule signal before threshold filtering / mirror logic),
+            which the tracker uses to populate OverlaySignal.target_allocation
+            separately from .actual_allocation. For models where target ≡ actual
+            (RB1, B_AVERAGE, A_MAX_UP_MIN_DOWN) the values are identical.
         """
         history = self._load_allocation_history(model)
         if history is None:
@@ -755,37 +784,50 @@ class OverlayAdapter:
 
         row = row.iloc[0]
 
-        # Get allocation. Prefer 'allocation', fall back to HB1's 'active_alloc',
-        # then to 'target_allocation'. HB1 history does not have an 'allocation'
-        # column — its executed allocation is stored under 'active_alloc'.
-        allocation = row.get("allocation")
-        if allocation is None or pd.isna(allocation):
-            allocation = row.get("active_alloc")
-        if allocation is None or pd.isna(allocation):
-            allocation = row.get("target_allocation")
-        if allocation is None or pd.isna(allocation):
+        # Resolve the REAL target + actual via the variant-specific schema map.
+        target_alloc, actual_alloc = self._extract_target_and_actual(model, row)
+        # If schema didn't yield an actual, fall back to any allocation-ish column.
+        if actual_alloc is None:
+            for col in ("allocation", "active_alloc", "target_allocation"):
+                v = row.get(col)
+                if v is not None and not pd.isna(v):
+                    actual_alloc = float(v)
+                    break
+        if actual_alloc is None:
             return None
+        # If we have actual but no target (e.g., legacy HB1 row missing
+        # cv1a_target), best fallback is target ≡ actual so callers can still
+        # pass non-NULL into the DB. Logged at DEBUG to surface coverage gaps.
+        if target_alloc is None:
+            target_alloc = actual_alloc
+            logger.debug(f"{model} {trade_date}: no real target column found; using target=actual fallback")
 
-        # Build signals dict from available columns
-        # Convert numpy types to native Python types for JSON serialization
-        signals = {}
-        signal_columns = [c for c in row.index
-                          if c not in ["date", "allocation", "active_alloc", "target_allocation"]]
-        for col in signal_columns:
+        # Build signals dict from remaining columns. We INCLUDE target_allocation
+        # in the signals dict so the tracker can read it back for the DB write
+        # (record_overlay_signal calls signals.get("target_allocation")).
+        # Convert numpy types to native Python types for JSON serialization.
+        skip_cols = {"date", "allocation", "active_alloc", "target_allocation", "cv1a_target"}
+        signals: dict = {"target_allocation": float(target_alloc)}
+        for col in row.index:
+            if col in skip_cols:
+                continue
             val = row[col]
-            if not pd.isna(val):
-                # Convert numpy types to native Python types
-                if isinstance(val, (np.integer, np.floating)):
-                    signals[col] = float(val)
-                elif isinstance(val, np.bool_):
-                    signals[col] = bool(val)
-                elif isinstance(val, np.ndarray):
-                    signals[col] = val.tolist()
-                else:
-                    signals[col] = val
+            if pd.isna(val):
+                continue
+            if isinstance(val, (np.integer, np.floating)):
+                signals[col] = float(val)
+            elif isinstance(val, np.bool_):
+                signals[col] = bool(val)
+            elif isinstance(val, np.ndarray):
+                signals[col] = val.tolist()
+            else:
+                signals[col] = val
 
-        logger.info(f"Using S3 allocation for {model} on {trade_date}: {allocation:.4f}")
-        return float(allocation), signals
+        logger.info(
+            f"Using S3 allocation for {model} on {trade_date}: "
+            f"target={target_alloc:.4f}, actual={actual_alloc:.4f}"
+        )
+        return float(actual_alloc), signals
 
     def apply_overlay(
         self,
