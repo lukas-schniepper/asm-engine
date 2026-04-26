@@ -1175,43 +1175,209 @@ def _render_benchmark_comparison_tab(
         st.info("No monthly data available for attribution analysis.")
 
 
+def _get_alloc_columns(variant: str, df: pd.DataFrame) -> tuple[Optional[str], Optional[str]]:
+    """
+    Map a variant to its (target_col, actual_col) names in the S3 allocation_history.csv.
+
+    The allocation_history schema differs per model family:
+      - base models (CV1, CV1A, TV1, TV2A): 'target_allocation' (raw signal) + 'allocation' (post-rebalance-threshold)
+      - HB1 (mirror blend):                  'cv1a_target' (drives switch) + 'active_alloc' (mirror of CV1A or TV1 actual)
+      - RB1, B_AVERAGE, A_MAX_UP_MIN_DOWN:   only 'active_alloc' — these blends are stateless or stateful but have NO
+                                              separate target column (target ≡ active by design — no rebalance threshold
+                                              on top of the blend itself, so the rule's output IS what gets traded)
+    Returns (target_col, actual_col); either may be None if the column isn't present.
+    """
+    if variant == "hb1":
+        return (
+            "cv1a_target" if "cv1a_target" in df.columns else None,
+            "active_alloc" if "active_alloc" in df.columns else None,
+        )
+    if variant in ("rb1", "b_average", "a_max_up_min_down"):
+        if "active_alloc" in df.columns:
+            return ("active_alloc", "active_alloc")
+        return (None, None)
+    # Base models
+    return (
+        "target_allocation" if "target_allocation" in df.columns else None,
+        "allocation" if "allocation" in df.columns else None,
+    )
+
+
 def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date):
-    """Render the Allocation History tab."""
-    from .charts import create_allocation_chart
+    """Render the Allocation History tab.
+
+    Reads allocation history DIRECTLY from S3 (not from the asm-engine DB) so we
+    can show the REAL target_allocation alongside actual_allocation. The DB
+    OverlaySignal table currently stores target == actual (same value), so any
+    chart sourced from the DB cannot distinguish target from actual — that's why
+    this tab pulls from S3 instead.
+
+    For HB1 specifically, "target" means CV1A's target (the switching signal,
+    not HB1's own target — HB1 has no independent target since it's a mirror).
+    For RB1 / B_AVERAGE / A_MAX_UP_MIN_DOWN, target ≡ actual by design (the rule
+    output IS what gets traded; there's no separate rebalance threshold).
+    """
     from ..tracking import Variants
+    from ..tracking.overlay_adapter import OVERLAY_REGISTRY
+    from ..tracking.s3_adapter import S3DataLoader
+    import plotly.graph_objects as go
 
     st.markdown("### Equity Allocation Over Time")
+    st.caption(
+        "Source: live S3 production allocation_history.csv per model. "
+        "Target = raw rule signal. Actual = what got executed after the rebalance "
+        "threshold (or sub-model mirror, for HB1). For RB1 / B-Avg / A-MUMD, "
+        "target ≡ actual by design (no rebalance threshold on top of the blend)."
+    )
 
-    # Only overlay variants have allocation data
     overlay_variants = [v for v in variants if v != Variants.RAW]
-
     if not overlay_variants:
-        st.info(
-            "Select an overlay variant (Conservative V1/V2 or Trend V1/V2) "
-            "to see allocation history."
-        )
+        st.info("Select an overlay variant to see allocation history.")
         return
 
-    for variant in overlay_variants:
-        nav_df = _cached_get_nav_series(portfolio_id, variant, start_date, end_date)
+    display_mode = st.radio(
+        "Show",
+        options=["Both", "Actual only", "Target only"],
+        index=0,
+        horizontal=True,
+        key="alloc_history_display_mode",
+        help=(
+            "BOTH: target (dashed) + actual (filled) overlaid. "
+            "ACTUAL ONLY: what the strategy actually held (post-threshold). "
+            "TARGET ONLY: the raw rule signal before threshold filtering."
+        ),
+    )
 
-        if nav_df.empty or "equity_allocation" not in nav_df.columns:
+    s3_loader = S3DataLoader()
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+
+    for variant in overlay_variants:
+        display_name = (
+            OVERLAY_REGISTRY[variant].display_name
+            if variant in OVERLAY_REGISTRY
+            else variant.replace("_", " ").title()
+        )
+        st.markdown(f"#### {display_name}")
+
+        try:
+            alloc_df = s3_loader.load_allocation_history(variant)
+        except Exception as e:
+            st.warning(f"Could not load {variant} history from S3: {e}")
+            st.markdown("---")
             continue
 
-        st.markdown(f"#### {variant.replace('_', ' ').title()}")
+        if alloc_df is None or alloc_df.empty:
+            st.info(f"No allocation history available for {variant}.")
+            st.markdown("---")
+            continue
 
-        alloc_chart = create_allocation_chart(
-            nav_df["equity_allocation"],
-            title=f"Equity Allocation - {variant.replace('_', ' ').title()}",
-            height=250,
+        # Normalize date column and filter to selected range
+        alloc_df = alloc_df.copy()
+        if "date" in alloc_df.columns:
+            alloc_df["date"] = pd.to_datetime(alloc_df["date"], format="mixed").dt.normalize()
+        else:
+            alloc_df = alloc_df.reset_index().rename(columns={"index": "date"})
+            alloc_df["date"] = pd.to_datetime(alloc_df["date"]).dt.normalize()
+        alloc_df = alloc_df[(alloc_df["date"] >= start_ts) & (alloc_df["date"] <= end_ts)]
+        alloc_df = alloc_df.sort_values("date").reset_index(drop=True)
+
+        if alloc_df.empty:
+            st.info(f"No {variant} data in the selected date range.")
+            st.markdown("---")
+            continue
+
+        target_col, actual_col = _get_alloc_columns(variant, alloc_df)
+        if target_col is None and actual_col is None:
+            st.warning(
+                f"{variant}: neither target nor actual allocation columns found. "
+                f"Available columns: {list(alloc_df.columns)[:10]}"
+            )
+            st.markdown("---")
+            continue
+
+        target_actual_same = (target_col == actual_col)
+        if target_actual_same:
+            st.caption(
+                f"Note: this model has no separate target column — target ≡ actual "
+                f"(both shown here use `{actual_col}`)."
+            )
+
+        # ---- Chart ----
+        fig = go.Figure()
+        if display_mode in ("Both", "Actual only") and actual_col is not None:
+            fig.add_trace(go.Scatter(
+                x=alloc_df["date"],
+                y=alloc_df[actual_col].astype(float) * 100,
+                name="Actual",
+                mode="lines",
+                fill="tozeroy",
+                line={"color": "#2563eb", "width": 2},
+                fillcolor="rgba(37, 99, 235, 0.18)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Actual: %{y:.1f}%<extra></extra>",
+            ))
+        if (
+            display_mode in ("Both", "Target only")
+            and target_col is not None
+            and not (target_actual_same and display_mode == "Both")
+        ):
+            fig.add_trace(go.Scatter(
+                x=alloc_df["date"],
+                y=alloc_df[target_col].astype(float) * 100,
+                name="Target",
+                mode="lines",
+                line={"color": "#dc2626", "width": 1.5, "dash": "dot"},
+                hovertemplate="%{x|%Y-%m-%d}<br>Target: %{y:.1f}%<extra></extra>",
+            ))
+        fig.update_layout(
+            height=300,
+            yaxis_title="Allocation (%)",
+            yaxis_ticksuffix="%",
+            yaxis_range=[0, 105],
+            margin=dict(l=40, r=20, t=20, b=40),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(alloc_chart, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Show current allocation
-        current_alloc = nav_df["equity_allocation"].iloc[-1]
-        col1, col2 = st.columns(2)
-        col1.metric("Current Equity", f"{current_alloc:.1%}")
-        col2.metric("Current Cash", f"{1 - current_alloc:.1%}")
+        # ---- Current allocation summary ----
+        latest_row = alloc_df.iloc[-1]
+        latest_actual = float(latest_row[actual_col]) if actual_col else None
+        latest_target = float(latest_row[target_col]) if target_col else None
+        latest_date = latest_row["date"].date()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("As of", str(latest_date))
+        if latest_actual is not None:
+            c2.metric("Actual equity", f"{latest_actual*100:.1f}%")
+        if latest_target is not None and not target_actual_same:
+            c3.metric("Target equity", f"{latest_target*100:.1f}%")
+            if latest_actual is not None:
+                c4.metric("Δ (actual - target)", f"{(latest_actual - latest_target)*100:+.1f}pp")
+        else:
+            c3.metric("Cash", f"{(1 - (latest_actual or 0))*100:.1f}%")
+
+        # ---- Per-day data table (target + actual side-by-side) ----
+        with st.expander("Show daily allocation table (target vs actual)", expanded=False):
+            table_df = pd.DataFrame({"Date": alloc_df["date"].dt.strftime("%Y-%m-%d")})
+            if target_col is not None:
+                table_df["Target"] = alloc_df[target_col].astype(float).apply(lambda v: f"{v*100:.2f}%")
+            if actual_col is not None and not target_actual_same:
+                table_df["Actual"] = alloc_df[actual_col].astype(float).apply(lambda v: f"{v*100:.2f}%")
+            elif actual_col is not None:
+                # When target ≡ actual, just show one column to avoid noisy duplication
+                table_df["Allocation"] = alloc_df[actual_col].astype(float).apply(lambda v: f"{v*100:.2f}%")
+            if target_col is not None and actual_col is not None and not target_actual_same:
+                diff_pp = (alloc_df[actual_col].astype(float) - alloc_df[target_col].astype(float)) * 100
+                table_df["Δ (pp)"] = diff_pp.apply(lambda v: f"{v:+.2f}")
+                # Flag rows where rebalance threshold was hit (|diff| > ~25pp typical for base models)
+                table_df["Rebalanced?"] = (diff_pp.abs() < 0.5).apply(lambda x: "Yes" if x else "")
+            # Show most-recent days first
+            table_df = table_df.iloc[::-1].reset_index(drop=True)
+            st.dataframe(table_df, use_container_width=True, height=400, hide_index=True)
+            st.caption(
+                f"Showing {len(table_df)} days, most recent first. "
+                f"\"Rebalanced?\" marks days where actual was reset to target (|Δ| < 0.5pp)."
+            )
 
         st.markdown("---")
 
