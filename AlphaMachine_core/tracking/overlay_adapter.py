@@ -781,8 +781,24 @@ class OverlayAdapter:
             row = history.loc[history.index == target_date]
 
         if row.empty:
-            logger.debug(f"No allocation found in history for {model} on {trade_date}")
-            return None
+            # For pure S3-driven blends (rb1, b_average, a_max_up_min_down) there is
+            # no meaningful local fallback — the OVERLAY_REGISTRY entry points to
+            # calculate_allocation_conservative, which would compute the wrong rule.
+            # Forward-fill from the last available S3 row instead, which matches the
+            # blend's own "carry-forward when no sub-model rebalanced" semantics.
+            if model in ("rb1", "b_average", "a_max_up_min_down"):
+                if "date" in history.columns:
+                    earlier = history[history["date"] < target_date]
+                else:
+                    earlier = history.loc[history.index < target_date]
+                if not earlier.empty:
+                    row = earlier.iloc[[-1]]
+                    logger.debug(
+                        f"{model} {trade_date}: no exact S3 row, forward-filling from {row.iloc[0].get('date', earlier.index[-1])}"
+                    )
+            if row.empty:
+                logger.debug(f"No allocation found in history for {model} on {trade_date}")
+                return None
 
         row = row.iloc[0]
 
