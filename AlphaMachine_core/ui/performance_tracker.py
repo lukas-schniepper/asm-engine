@@ -1414,7 +1414,7 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"alloc_history_chart_{variant}")
 
         # ---- Current allocation summary ----
         latest_row = alloc_df.iloc[-1]
@@ -1433,7 +1433,9 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
             c3.metric("Cash", f"{(1 - (latest_actual or 0))*100:.1f}%")
 
         # ---- Per-day data table (target + actual side-by-side) ----
-        with st.expander("Show daily allocation table (target vs actual)", expanded=False):
+        # Variant-prefixed expander label so 8 sibling expanders in the loop
+        # don't collide on Streamlit's auto-generated widget IDs.
+        with st.expander(f"Show daily allocation table for {display_name} (target vs actual)", expanded=False):
             table_df = pd.DataFrame({"Date": alloc_df["date"].dt.strftime("%Y-%m-%d")})
             if target_col is not None:
                 table_df["Target"] = alloc_df[target_col].astype(float).apply(lambda v: f"{v*100:.2f}%")
@@ -1449,7 +1451,7 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
                 table_df["Rebalanced?"] = (diff_pp.abs() < 0.5).apply(lambda x: "Yes" if x else "")
             # Show most-recent days first
             table_df = table_df.iloc[::-1].reset_index(drop=True)
-            st.dataframe(table_df, use_container_width=True, height=400, hide_index=True)
+            st.dataframe(table_df, use_container_width=True, height=400, hide_index=True, key=f"alloc_history_table_{variant}")
             st.caption(
                 f"Showing {len(table_df)} days, most recent first. "
                 f"\"Rebalanced?\" marks days where actual was reset to target (|Δ| < 0.5pp)."
