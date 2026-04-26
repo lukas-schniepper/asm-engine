@@ -666,10 +666,21 @@ class PortfolioTracker:
                 else:
                     trade_required = True
 
+                # Real target/actual split: when apply_overlay sourced from S3
+                # history, _get_allocation_from_history puts the real
+                # target_allocation into the signals dict (see
+                # overlay_adapter._extract_target_and_actual). Fall back to
+                # actual when target isn't available (e.g., local fallback
+                # calculation has no separate target).
+                real_target = signals.get("target_allocation")
+                if real_target is None or (isinstance(real_target, float) and (
+                    real_target != real_target  # NaN check without numpy
+                )):
+                    real_target = allocation
                 self.record_overlay_signal(
                     trade_date=trade_date,
                     model=model_name,
-                    target_allocation=allocation,
+                    target_allocation=float(real_target),
                     actual_allocation=allocation,
                     trade_required=trade_required,
                     signals=signals,

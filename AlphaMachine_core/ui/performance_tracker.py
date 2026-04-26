@@ -1402,9 +1402,14 @@ def _render_signals_tab(tracker, start_date, end_date):
         st.info(f"No signal data available for {selected_model}.")
         return
 
-    # Allocation chart
+    # Allocation chart — target (dotted) overlaid on actual (filled).
+    # After PR #3 (real-target-actual fix), target and actual diverge correctly
+    # for base models and HB1 (where the rebalance threshold or mirror logic
+    # creates a real gap). For RB1 / B-Avg / A-MUMD the two lines coincide
+    # by design (no separate target column). Use the Allocation History tab
+    # for a per-day table + display-mode toggle.
     if "actual_allocation" in signals_df.columns:
-        st.markdown("#### Target Allocation Over Time")
+        st.markdown("#### Allocation Over Time (target vs actual)")
 
         import plotly.graph_objects as go
         fig = go.Figure()
