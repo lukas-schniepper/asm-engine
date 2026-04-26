@@ -781,12 +781,15 @@ class OverlayAdapter:
             row = history.loc[history.index == target_date]
 
         if row.empty:
-            # For pure S3-driven blends (rb1, b_average, a_max_up_min_down) there is
-            # no meaningful local fallback — the OVERLAY_REGISTRY entry points to
-            # calculate_allocation_conservative, which would compute the wrong rule.
-            # Forward-fill from the last available S3 row instead, which matches the
-            # blend's own "carry-forward when no sub-model rebalanced" semantics.
-            if model in ("rb1", "b_average", "a_max_up_min_down"):
+            # For pure S3-driven overlays (hb1, rb1, b_average, a_max_up_min_down)
+            # there is no meaningful local fallback — the OVERLAY_REGISTRY entries
+            # point to calculate_allocation_conservative, which would compute the
+            # wrong rule (HB1 mirrors CV1A/TV1 actuals, not Conservative's output).
+            # Forward-fill from the last available S3 row instead. This matches
+            # the chart's behavior (the chart reads S3 directly and just doesn't
+            # plot a point for missing dates), and matches each blend/mirror's
+            # own "carry-forward when no sub-model rebalanced" semantics.
+            if model in ("hb1", "rb1", "b_average", "a_max_up_min_down"):
                 if "date" in history.columns:
                     earlier = history[history["date"] < target_date]
                 else:
