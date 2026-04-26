@@ -781,25 +781,26 @@ class OverlayAdapter:
             row = history.loc[history.index == target_date]
 
         if row.empty:
-            # For pure S3-driven overlays (hb1, rb1, b_average, a_max_up_min_down)
-            # there is no meaningful local fallback — the OVERLAY_REGISTRY entries
-            # point to calculate_allocation_conservative, which would compute the
-            # wrong rule (HB1 mirrors CV1A/TV1 actuals, not Conservative's output).
-            # Forward-fill from the last available S3 row instead. This matches
-            # the chart's behavior (the chart reads S3 directly and just doesn't
-            # plot a point for missing dates), and matches each blend/mirror's
-            # own "carry-forward when no sub-model rebalanced" semantics.
-            if model in ("hb1", "rb1", "b_average", "a_max_up_min_down"):
-                if "date" in history.columns:
-                    earlier = history[history["date"] < target_date]
-                else:
-                    earlier = history.loc[history.index < target_date]
-                if not earlier.empty:
-                    row = earlier.iloc[[-1]]
-                    logger.debug(
-                        f"{model} {trade_date}: no exact S3 row, forward-filling from {row.iloc[0].get('date', earlier.index[-1])}"
-                    )
-            if row.empty:
+            # When S3 lacks a row for this date (rare — usually because the
+            # daily allocation workflow didn't run on a holiday or had a gap),
+            # forward-fill from the last available S3 row. This:
+            #   1. matches the chart's behavior (the chart reads S3 directly
+            #      and shows a flat line / gap for missing dates), and
+            #   2. correctly represents the strategy's carry-forward semantics
+            #      (no rebalance signal was published, so allocation is unchanged).
+            # The previous behavior was to fall through to the local
+            # calculator, which produced fresh-but-different values for that
+            # one date — making the chart and the NAV math disagree.
+            if "date" in history.columns:
+                earlier = history[history["date"] < target_date]
+            else:
+                earlier = history.loc[history.index < target_date]
+            if not earlier.empty:
+                row = earlier.iloc[[-1]]
+                logger.debug(
+                    f"{model} {trade_date}: no exact S3 row, forward-filling from {row.iloc[0].get('date', earlier.index[-1])}"
+                )
+            else:
                 logger.debug(f"No allocation found in history for {model} on {trade_date}")
                 return None
 
