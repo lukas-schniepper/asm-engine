@@ -1175,6 +1175,81 @@ def _render_benchmark_comparison_tab(
         st.info("No monthly data available for attribution analysis.")
 
 
+# Per-variant explanatory text shown in the Allocation History tab so the
+# operator can tell at a glance how each line in the chart was produced.
+# Keep these short — long paragraphs hide useful tabs below.
+MODEL_DESCRIPTIONS = {
+    "conservative": {
+        "tagline": "CV1 — Conservative v1 (symmetric threshold)",
+        "rule": "RSI / momentum / regime-based rule on SPY features. Rebalances when |target − actual| > ~25pp (symmetric).",
+        "target": "target_allocation = raw rule output for the day",
+        "actual": "allocation = previous actual unless the rebalance threshold fires (then snap to target)",
+        "turnover": "~8 rebalances/yr",
+    },
+    "trend_regime_v2": {
+        "tagline": "TV1 — TrendRegime v2 (symmetric threshold)",
+        "rule": "Enhanced trend rule: volatility regime + stress level + efficient momentum + alignment quality. Symmetric ~25pp rebalance threshold.",
+        "target": "target_allocation = raw enhanced trend signal",
+        "actual": "allocation = post-threshold executed value",
+        "turnover": "~10 rebalances/yr",
+    },
+    "conservative_v2": {
+        "tagline": "CV1A — Conservative v1 asymmetric",
+        "rule": "Same conservative rule as CV1 but with asymmetric rebalance: fast to cut at low alloc (~6pp), slow to re-enter (~18-25pp).",
+        "target": "target_allocation = raw rule output",
+        "actual": "allocation = post-asymmetric-threshold executed value",
+        "turnover": "~8 rebalances/yr",
+    },
+    "trend_regime_v2_asym": {
+        "tagline": "TV2A — TrendRegime v2 asymmetric",
+        "rule": "Same enhanced trend rule as TV1 but with asymmetric rebalance: fast to cut, slow to re-enter. Sister model to TV1.",
+        "target": "target_allocation = raw enhanced trend signal",
+        "actual": "allocation = post-asymmetric-threshold executed value",
+        "turnover": "~9 rebalances/yr",
+    },
+    "hb1": {
+        "tagline": "HB1 — Hysteresis Blend (CV1A + TV1, mirror mode)",
+        "rule": "Daily mode flip on a CV1A_target / trend signal: pick CV1A_actual when in 'conservative' mode, TV1_actual when in 'trend' mode. Hysteresis: needs persistent signal to flip.",
+        "target": "cv1a_target — the switching signal driving the mode (NOT HB1's own target — HB1 has none, it mirrors)",
+        "actual": "active_alloc = whichever sub-model's actual is selected today",
+        "turnover": "~7 rebalances/yr",
+    },
+    "rb1": {
+        "tagline": "RB1 — Regime Blend (CV1A + TV2A, VIX-z-score gated)",
+        "rule": "VIX 252-day z-score: if vix_z < -0.5 (low stress) → 100% TV2A_actual; if vix_z ≥ -0.5 (high stress) → 40% CV1A_actual + 60% TV2A_actual.",
+        "target": "target ≡ actual by design — RB1 has no rebalance threshold on top of the blend",
+        "actual": "active_alloc = w_cv1a · CV1A_actual + w_tv2a · TV2A_actual",
+        "turnover": "~28 rebalances/yr (regime-flip + sub-model rebalance days)",
+    },
+    "b_average": {
+        "tagline": "B_AVERAGE — Democratic blend (TV1 + TV2A actuals)",
+        "rule": "Stateless: alloc = (TV1_actual + TV2A_actual) / 2 every day. Inherits TV1's and TV2A's rebalance smoothing — only changes when at least one sub-model actually rebalances.",
+        "target": "target ≡ actual by design — no rebalance threshold on top of the average",
+        "actual": "active_alloc = mean of TV1 and TV2A actuals",
+        "turnover": "~18 rebalances/yr (v3.0 uses sub-model actuals; v2 used targets at ~164/yr)",
+    },
+    "a_max_up_min_down": {
+        "tagline": "C_DISAGREE_HOLD — consensus-or-follow (variant slot: a_max_up_min_down)",
+        "rule": "Both TV1 and TV2A actually rebalanced same direction today → max-up / min-down (consensus). Only one rebalanced → follow that one's new actual. Both flat or opposing → hold prev_alloc.",
+        "target": "target ≡ actual by design — no rebalance threshold on top of the rule",
+        "actual": "active_alloc = consensus aggressor / single-side mirror / hold (per regime)",
+        "turnover": "~15 rebalances/yr (v3.0 actuals-based; v2 max-up/min-down on targets degenerated to a near-constant on actuals)",
+    },
+}
+
+
+def _render_model_description(variant: str) -> None:
+    """Render the 'How this model works' expander for a given variant."""
+    desc = MODEL_DESCRIPTIONS.get(variant)
+    if desc is None:
+        return
+    with st.expander(f"How {desc['tagline']} works", expanded=False):
+        st.markdown(f"**Rule.** {desc['rule']}")
+        st.markdown(f"**Target line.** {desc['target']}")
+        st.markdown(f"**Actual line.** {desc['actual']}")
+        st.markdown(f"**Turnover.** {desc['turnover']}")
+
+
 def _get_alloc_columns(variant: str, df: pd.DataFrame) -> tuple[Optional[str], Optional[str]]:
     """
     Map a variant to its (target_col, actual_col) names in the S3 allocation_history.csv.
@@ -1259,6 +1334,7 @@ def _render_allocation_tab(tracker, portfolio_id, variants, start_date, end_date
             else variant.replace("_", " ").title()
         )
         st.markdown(f"#### {display_name}")
+        _render_model_description(variant)
 
         try:
             alloc_df = s3_loader.load_allocation_history(variant)

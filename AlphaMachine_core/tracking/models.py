@@ -191,10 +191,13 @@ class Variants:
     CONSERVATIVE_V2 = "conservative_v2"
     TREND_REGIME_V2_ASYM = "trend_regime_v2_asym"
     HB1 = "hb1"
-    # New blends added 2026-04-25 (asm-models PR #8 + #9)
+    # New blends added 2026-04-25 (asm-models PR #8 + #9). 2026-04-26: B_AVG and
+    # A_MUMD switched from sub-model TARGETS to ACTUALS (asm-models v3.0) for
+    # apples-to-apples turnover. Variant slot a_max_up_min_down now implements
+    # C_DISAGREE_HOLD (consensus-or-follow) per sr-quant-dev review.
     RB1 = "rb1"                                    # RegimeBlend (CV1A+TV2A on VIX z-score)
-    B_AVERAGE = "b_average"                        # (TV1_target + TV2A_target) / 2
-    A_MAX_UP_MIN_DOWN = "a_max_up_min_down"        # max if both targets up, min if both down
+    B_AVERAGE = "b_average"                        # (TV1_actual + TV2A_actual) / 2
+    A_MAX_UP_MIN_DOWN = "a_max_up_min_down"        # C_DISAGREE_HOLD on TV1+TV2A actuals
 
     @classmethod
     def all(cls) -> list[str]:
