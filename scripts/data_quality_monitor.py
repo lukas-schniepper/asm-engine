@@ -315,17 +315,17 @@ def reconcile_mtd_from_prices(
     # Get first day of current month
     mtd_start = today.replace(day=1)
 
-    # Collect all tickers from all portfolios
+    # Collect all tickers ever held in MTD (covers mid-month rebalances —
+    # using only `today`'s holdings would miss tickers that were rotated out
+    # earlier in the month and produce false reconciliation failures).
     all_tickers = set()
-    portfolio_holdings = {}
-
     for portfolio in portfolios:
         try:
-            holdings = tracker.get_holdings(portfolio.id, today)
-            if holdings:
-                portfolio_holdings[portfolio.id] = holdings
-                for h in holdings:
-                    all_tickers.add(h.ticker)
+            for d in (mtd_start, today):
+                holdings = tracker.get_holdings(portfolio.id, d)
+                if holdings:
+                    for h in holdings:
+                        all_tickers.add(h.ticker)
         except Exception:
             pass
 
@@ -366,20 +366,8 @@ def reconcile_mtd_from_prices(
             if stored_nav_df.empty:
                 continue
 
-            holdings = portfolio_holdings.get(portfolio.id)
-            if not holdings:
-                continue
-
-            # Get weights (default to equal weight), convert Decimal to float
-            weights = {}
-            for h in holdings:
-                w = h.weight if h.weight else 1.0 / len(holdings)
-                weights[h.ticker] = float(w)
-
-            # Normalize weights
-            total_weight = sum(weights.values())
-            if total_weight > 0:
-                weights = {t: w / total_weight for t, w in weights.items()}
+            # Holdings/weights are looked up per-day inside the loop because
+            # rebalances change them mid-month.
 
             # Calculate expected returns from prices for each day in MTD
             for nav_date in stored_nav_df.index:
@@ -409,6 +397,21 @@ def reconcile_mtd_from_prices(
 
                 if prev_prices.empty:
                     continue
+
+                # Use the holdings that were actually in effect on prev_date:
+                # the stored return for nav_date_dt was computed against those
+                # weights, so the recomputation must use the same ones.
+                holdings_for_day = tracker.get_holdings(portfolio.id, prev_date)
+                if not holdings_for_day:
+                    continue
+
+                weights = {}
+                for h in holdings_for_day:
+                    w = h.weight if h.weight else 1.0 / len(holdings_for_day)
+                    weights[h.ticker] = float(w)
+                total_weight = sum(weights.values())
+                if total_weight > 0:
+                    weights = {t: w / total_weight for t, w in weights.items()}
 
                 # Calculate expected return from prices
                 expected_return = 0.0
@@ -497,13 +500,17 @@ def check_methodology_divergence(
     today = get_last_trading_day(date.today() - timedelta(days=1))
     start_date = today - timedelta(days=days_back)
 
-    # Collect all tickers
+    # Collect all tickers ever held in the lookback window (covers rebalances
+    # mid-window — using only `today`'s holdings would miss tickers that were
+    # rotated out before today and produce false-positive divergences on
+    # pre-rebalance days).
     all_tickers = set()
     for portfolio in portfolios:
-        holdings = tracker.get_holdings(portfolio.id, today)
-        if holdings:
-            for h in holdings:
-                all_tickers.add(h.ticker)
+        for d in (start_date, today):
+            holdings = tracker.get_holdings(portfolio.id, d)
+            if holdings:
+                for h in holdings:
+                    all_tickers.add(h.ticker)
 
     if not all_tickers:
         return issues
@@ -535,19 +542,8 @@ def check_methodology_divergence(
             if nav_df.empty or len(nav_df) < 2:
                 continue
 
-            # Get holdings (we use latest holdings for weight reference)
-            holdings = tracker.get_holdings(portfolio.id, today)
-            if not holdings:
-                continue
-
-            # Build weights dict (normalize)
-            weights = {}
-            for h in holdings:
-                w = float(h.weight) if h.weight else 1.0 / len(holdings)
-                weights[h.ticker] = w
-            total_weight = sum(weights.values())
-            if total_weight > 0:
-                weights = {t: w / total_weight for t, w in weights.items()}
+            # Holdings/weights are looked up per-day inside the loop because
+            # rebalances change them mid-window.
 
             # Compare stored daily return vs weight-based calculation
             divergence_days = []
@@ -557,6 +553,21 @@ def check_methodology_divergence(
                 nav_date_dt = nav_date.date() if hasattr(nav_date, 'date') else nav_date
                 prev_date = nav_df.index[i - 1]
                 prev_date_dt = prev_date.date() if hasattr(prev_date, 'date') else prev_date
+
+                # Use the holdings that were actually in effect on prev_date_dt:
+                # the stored return for nav_date_dt was computed against those
+                # weights, so the recomputation must use the same ones.
+                holdings_for_day = tracker.get_holdings(portfolio.id, prev_date_dt)
+                if not holdings_for_day:
+                    continue
+
+                weights = {}
+                for h in holdings_for_day:
+                    w = float(h.weight) if h.weight else 1.0 / len(holdings_for_day)
+                    weights[h.ticker] = w
+                total_weight = sum(weights.values())
+                if total_weight > 0:
+                    weights = {t: w / total_weight for t, w in weights.items()}
 
                 # Stored return (share-based)
                 stored_return = nav_df.iloc[i]["daily_return"] * 100
