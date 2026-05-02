@@ -168,7 +168,18 @@ def check_nav_anomalies(
         # Get the expected trading days for the lookback period
         # Use min(5, days_back) to avoid false positives when checking fewer days
         expected_trading_days = get_last_n_trading_days(min(5, days_back), end_date)
+
+        # Clamp to days the portfolio actually existed for. Newly-created
+        # portfolios cannot have NAV data for trading days before their
+        # tracking start_date, so counting them as "missing" is a false positive.
+        portfolio_start = getattr(portfolio, 'start_date', None)
+        if portfolio_start:
+            expected_trading_days = [d for d in expected_trading_days if d >= portfolio_start]
+
         expected_count = len(expected_trading_days)
+        if expected_count == 0:
+            # Portfolio is brand-new and has no expected trading days in the window yet.
+            continue
 
         # Count how many of those trading days have NAV data
         nav_dates = set()
