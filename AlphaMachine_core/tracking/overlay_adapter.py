@@ -482,14 +482,26 @@ OVERLAY_REGISTRY: dict[str, OverlayConfig] = {
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),
-    # CDH comparison variants added 2026-05-03. All three publish daily
-    # allocation_history.csv to S3; the engine reads `active_alloc` via
-    # _get_allocation_from_history. Local-fallback calculator is the
-    # conservative default — only reached if S3 is unreachable for that day.
+    # CDH comparison variants. All publish daily allocation_history.csv to S3;
+    # the engine reads `active_alloc` via _get_allocation_from_history. Local-
+    # fallback calculator is the conservative default — only reached if S3 is
+    # unreachable for that day.
+    #   c_dh_directional      added 2026-05-03 (became production rule same day)
+    #   c_dh_max_of_actuals   added 2026-05-03 after rule swap (was production
+    #                         briefly 2026-05-02 -> 2026-05-03)
+    #   c_dh_consensus_follow added 2026-05-03 (legacy C_DISAGREE_HOLD)
+    #   c_dh_agree_15pp       added 2026-05-03 (sweep winner)
     "c_dh_directional": OverlayConfig(
         name="c_dh_directional",
         display_name="Max-Up / Min-Down (directional, up wins on conflict)",
         config_key="c_dh_directional",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    "c_dh_max_of_actuals": OverlayConfig(
+        name="c_dh_max_of_actuals",
+        display_name="Max-of-Actuals (deposed 2026-05-03)",
+        config_key="c_dh_max_of_actuals",
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),
@@ -772,7 +784,8 @@ class OverlayAdapter:
         if model == "hb1":
             return _f("cv1a_target"), _f("active_alloc")
         if model in ("rb1", "b_average", "a_max_up_min_down",
-                      "c_dh_directional", "c_dh_consensus_follow", "c_dh_agree_15pp"):
+                      "c_dh_directional", "c_dh_max_of_actuals",
+                      "c_dh_consensus_follow", "c_dh_agree_15pp"):
             # Stateless or stateful blends with no separate target column:
             # active_alloc is what got executed and what the rule output is
             # by design (no rebalance threshold on top).
@@ -795,7 +808,8 @@ class OverlayAdapter:
             which the tracker uses to populate OverlaySignal.target_allocation
             separately from .actual_allocation. For models where target ≡ actual
             (RB1, B_AVERAGE, A_MAX_UP_MIN_DOWN, c_dh_directional,
-            c_dh_consensus_follow, c_dh_agree_15pp) the values are identical.
+            c_dh_max_of_actuals, c_dh_consensus_follow, c_dh_agree_15pp) the
+            values are identical.
         """
         history = self._load_allocation_history(model)
         if history is None:
