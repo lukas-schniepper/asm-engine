@@ -477,8 +477,33 @@ OVERLAY_REGISTRY: dict[str, OverlayConfig] = {
     ),
     "a_max_up_min_down": OverlayConfig(
         name="a_max_up_min_down",
-        display_name="A-MaxUpMinDown (TV1+TV2A direction-conditional)",
+        display_name="Max of Trend (max(TV1,TV2A) daily)",
         config_key="a_max_up_min_down",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    # CDH comparison variants added 2026-05-03. All three publish daily
+    # allocation_history.csv to S3; the engine reads `active_alloc` via
+    # _get_allocation_from_history. Local-fallback calculator is the
+    # conservative default — only reached if S3 is unreachable for that day.
+    "c_dh_directional": OverlayConfig(
+        name="c_dh_directional",
+        display_name="Max-Up / Min-Down (directional, up wins on conflict)",
+        config_key="c_dh_directional",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    "c_dh_consensus_follow": OverlayConfig(
+        name="c_dh_consensus_follow",
+        display_name="Consensus or Follow (legacy C_DISAGREE_HOLD)",
+        config_key="c_dh_consensus_follow",
+        calculator=calculate_allocation_conservative,
+        needs_spy_prices=False,
+    ),
+    "c_dh_agree_15pp": OverlayConfig(
+        name="c_dh_agree_15pp",
+        display_name="Agree 15pp (take max within 15pp gap; else hold)",
+        config_key="c_dh_agree_15pp",
         calculator=calculate_allocation_conservative,
         needs_spy_prices=False,
     ),

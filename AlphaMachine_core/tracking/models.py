@@ -197,13 +197,21 @@ class Variants:
     # C_DISAGREE_HOLD (consensus-or-follow) per sr-quant-dev review.
     RB1 = "rb1"                                    # RegimeBlend (CV1A+TV2A on VIX z-score)
     B_AVERAGE = "b_average"                        # (TV1_actual + TV2A_actual) / 2
-    A_MAX_UP_MIN_DOWN = "a_max_up_min_down"        # C_DISAGREE_HOLD on TV1+TV2A actuals
+    A_MAX_UP_MIN_DOWN = "a_max_up_min_down"        # MAX_OF_ACTUALS on TV1+TV2A (since 2026-05-02)
+                                                   # Display name: "Max of Trend"
+    # CDH comparison variants added 2026-05-03. Each tracks an alternative
+    # blending rule alongside production a_max_up_min_down so the operator
+    # can compare 4 rules' alpha-portfolio NAVs going forward.
+    C_DH_DIRECTIONAL      = "c_dh_directional"      # Max-Up / Min-Down (directional, up wins on conflict)
+    C_DH_CONSENSUS_FOLLOW = "c_dh_consensus_follow" # Old C_DISAGREE_HOLD rule restored for comparison
+    C_DH_AGREE_15PP       = "c_dh_agree_15pp"       # take max when |TV1-TV2A| <= 15pp; else hold prev
 
     @classmethod
     def all(cls) -> list[str]:
         return [cls.RAW, cls.CONSERVATIVE, cls.TREND_REGIME_V2,
                 cls.CONSERVATIVE_V2, cls.TREND_REGIME_V2_ASYM, cls.HB1,
-                cls.RB1, cls.B_AVERAGE, cls.A_MAX_UP_MIN_DOWN]
+                cls.RB1, cls.B_AVERAGE, cls.A_MAX_UP_MIN_DOWN,
+                cls.C_DH_DIRECTIONAL, cls.C_DH_CONSENSUS_FOLLOW, cls.C_DH_AGREE_15PP]
 
 
 # Constants for period types
