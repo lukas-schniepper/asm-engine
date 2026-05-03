@@ -1,0 +1,3 @@
+[submodule "shared/data"]
+	path = shared/data
+	url = https://github.com/lukas-schniepper/asm-data.git

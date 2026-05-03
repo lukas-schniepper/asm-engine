@@ -238,47 +238,25 @@ def calculate_sortino_ratio(
     annualize: bool = True,
 ) -> float:
     """
-    Calculate Sortino Ratio (only considers downside volatility).
+    Calculate Sortino Ratio — annualized, GIPS-aligned semi-deviation.
 
-    Args:
-        returns: Returns series
-        risk_free_rate: Annual risk-free rate (default 0)
-        annualize: Whether to annualize (default True)
-
-    Returns:
-        Sortino Ratio
+    Thin wrapper around the canonical helper in
+    `shared/data/src/utils/quant_metrics.py` (asm-data submodule).
+    Single source of truth across asm-models, asm-engine, asm-website.
     """
     if len(returns) < 2:
         return 0.0
 
-    # Adjust for daily risk-free rate
-    daily_rf = (1 + risk_free_rate) ** (1 / TRADING_DAYS_PER_YEAR) - 1
-    excess_returns = returns - daily_rf
+    # Lazy-import to avoid hard dependency on asm-data being initialised
+    # at module import time (asm-data is a git submodule that may not be
+    # checked out when this module is imported in a script that doesn't
+    # actually call the function).
+    from shared.data.src.utils.quant_metrics import calculate_sortino as _qm_sortino
 
-    mean_excess = excess_returns.mean()
-
-    # Standard Sortino downside deviation (semi-deviation):
-    #   sqrt( mean( min(0, r - MAR)^2 ) )
-    # Note: the mean is over the FULL sample, not just the negative-return subset.
-    # The previous version restricted to negatives THEN took mean — that's a
-    # biased denominator that can produce Sortino < Sharpe on dispersed-loss
-    # strategies. Fixed 2026-05-03 per sr-quant review.
-    neg_dev = np.minimum(0.0, excess_returns.values)
-    if (neg_dev != 0).sum() < 1:
-        # No downside — return large positive ratio (consistent with prior behaviour)
-        return float(mean_excess * TRADING_DAYS_PER_YEAR * 100) if annualize else float(mean_excess * 100)
-
-    downside_std = float(np.sqrt((neg_dev ** 2).mean()))
-
-    if downside_std == 0 or np.isnan(downside_std):
-        return 0.0
-
-    sortino = mean_excess / downside_std
-
-    if annualize:
-        sortino *= np.sqrt(TRADING_DAYS_PER_YEAR)
-
-    return float(sortino)
+    if not annualize:
+        # Daily-equivalent Sortino — divide the annualized result back.
+        return _qm_sortino(returns, mar=risk_free_rate, no_downside_value=0.0) / np.sqrt(TRADING_DAYS_PER_YEAR)
+    return _qm_sortino(returns, mar=risk_free_rate, no_downside_value=0.0)
 
 
 def calculate_max_drawdown(nav_series: pd.Series) -> float:
