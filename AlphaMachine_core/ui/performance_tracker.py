@@ -758,6 +758,7 @@ def _render_benchmark_comparison_tab(
 ):
     """Render the Benchmark Comparison tab - compare portfolio to EW universe."""
     from ..tracking import Variants
+    from .styles import get_variant_display_name
     from ..tracking.benchmark import (
         compare_portfolio_to_benchmark,
         calculate_stock_attribution,
@@ -792,7 +793,7 @@ def _render_benchmark_comparison_tab(
         "Select portfolio variant to compare",
         options=variants,
         index=0,  # Default to first variant (usually raw)
-        format_func=lambda x: x.replace("_", " ").title(),
+        format_func=get_variant_display_name,
         key="benchmark_variant_select",
     )
 
@@ -1616,7 +1617,7 @@ def _render_risk_analytics_tab(
         create_scatter_regression,
         create_rolling_metrics_chart,
     )
-    from .styles import COLORS
+    from .styles import COLORS, get_variant_display_name
     import numpy as np
 
     st.markdown("### Risk Analytics")
@@ -1660,7 +1661,7 @@ def _render_risk_analytics_tab(
     variant_to_analyze = st.selectbox(
         "Analyze Variant",
         options=variants,
-        format_func=lambda x: x.replace("_", " ").title(),
+        format_func=get_variant_display_name,
         key="risk_variant_select",
     )
 
@@ -1797,7 +1798,7 @@ def _render_drawdown_analysis_tab(
         calculate_drawdown_series,
     )
     from .charts import create_drawdown_highlight_chart
-    from .styles import COLORS
+    from .styles import COLORS, get_variant_display_name
 
     st.markdown("### Drawdown Analysis")
     st.markdown("Comprehensive analysis of portfolio drawdowns including duration, recovery, and time underwater.")
@@ -1806,7 +1807,7 @@ def _render_drawdown_analysis_tab(
     variant_to_analyze = st.selectbox(
         "Analyze Variant",
         options=variants,
-        format_func=lambda x: x.replace("_", " ").title(),
+        format_func=get_variant_display_name,
         key="dd_variant_select",
     )
 
@@ -2716,7 +2717,7 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
 def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
     """Render the Scraper View tab - pivot table of daily returns across all portfolios."""
     from ..tracking import Variants
-    from .styles import format_percentage
+    from .styles import format_percentage, get_variant_display_name
     from datetime import date, timedelta
     import pandas as pd
     import numpy as np
@@ -2772,6 +2773,7 @@ def _render_scraper_view_tab(tracker, sidebar_start_date, sidebar_end_date):
             "Select Variant",
             options=Variants.all(),
             index=0,  # Default to RAW
+            format_func=get_variant_display_name,
             key="scraper_view_variant",
         )
 
