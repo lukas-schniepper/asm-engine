@@ -1229,11 +1229,32 @@ MODEL_DESCRIPTIONS = {
         "turnover": "~18 rebalances/yr (v3.0 uses sub-model actuals; v2 used targets at ~164/yr)",
     },
     "a_max_up_min_down": {
-        "tagline": "C_DISAGREE_HOLD — consensus-or-follow (variant slot: a_max_up_min_down)",
-        "rule": "Both TV1 and TV2A actually rebalanced same direction today → max-up / min-down (consensus). Only one rebalanced → follow that one's new actual. Both flat or opposing → hold prev_alloc.",
+        "tagline": "Max of Trend (TV1+TV2A actuals, max daily — variant slot: a_max_up_min_down)",
+        "rule": "Stateless: alloc = max(TV1_actual, TV2A_actual) every day. Always run with the more bullish trend model. When markets fall, both legs cut on their own — the max of two small numbers is still small, so downside protection is preserved without an explicit min-when-down rule. Production rule for the alpha portfolios since 2026-05-02 (replaced the v3.0 C_DISAGREE_HOLD rule).",
         "target": "target ≡ actual by design — no rebalance threshold on top of the rule",
-        "actual": "active_alloc = consensus aggressor / single-side mirror / hold (per regime)",
-        "turnover": "~15 rebalances/yr (v3.0 actuals-based; v2 max-up/min-down on targets degenerated to a near-constant on actuals)",
+        "actual": "active_alloc = max(TV1_actual, TV2A_actual)",
+        "turnover": "~12 rebalances/yr",
+    },
+    "c_dh_directional": {
+        "tagline": "Max-Up / Min-Down (directional)",
+        "rule": "Track day-over-day direction of each leg. Any leg UP → max(TV1, TV2A). Any leg DOWN → min(TV1, TV2A). Both flat → hold prev. Conflict (one up, one down) → up wins (option B).",
+        "target": "target ≡ actual by design — no rebalance threshold on top of the rule",
+        "actual": "active_alloc = max / min / prev based on direction signal",
+        "turnover": "~16 rebalances/yr",
+    },
+    "c_dh_consensus_follow": {
+        "tagline": "Consensus or Follow (legacy C_DISAGREE_HOLD)",
+        "rule": "The previous production rule (2026-04-26 → 2026-05-02). Both legs rebalanced same direction today → max-up / min-down. Only one rebalanced → follow that leg's actual. Both flat or opposing → hold prev. Restored as a comparison testbed.",
+        "target": "target ≡ actual by design — no rebalance threshold on top of the rule",
+        "actual": "active_alloc = consensus aggressor / single-side mirror / hold",
+        "turnover": "~15 rebalances/yr",
+    },
+    "c_dh_agree_15pp": {
+        "tagline": "Agree 15pp (take max within 15pp; else hold)",
+        "rule": "If |TV1_actual − TV2A_actual| ≤ 15pp → take max(TV1, TV2A). Else → hold prev_alloc until the legs reconcile. The strongest Pareto-dominant candidate from the 2026-05-02 41-rule sweep on the (CAGR, Sortino) frontier.",
+        "target": "target ≡ actual by design — no rebalance threshold on top of the rule",
+        "actual": "active_alloc = max when in agreement, otherwise frozen at last consensus value",
+        "turnover": "~7 rebalances/yr (lowest of the four CDH variants)",
     },
 }
 
@@ -1267,7 +1288,8 @@ def _get_alloc_columns(variant: str, df: pd.DataFrame) -> tuple[Optional[str], O
             "cv1a_target" if "cv1a_target" in df.columns else None,
             "active_alloc" if "active_alloc" in df.columns else None,
         )
-    if variant in ("rb1", "b_average", "a_max_up_min_down"):
+    if variant in ("rb1", "b_average", "a_max_up_min_down",
+                    "c_dh_directional", "c_dh_consensus_follow", "c_dh_agree_15pp"):
         if "active_alloc" in df.columns:
             return ("active_alloc", "active_alloc")
         return (None, None)
@@ -2078,12 +2100,17 @@ def _render_multi_portfolio_comparison_tab(tracker, sidebar_start_date, sidebar_
     variant_abbrev = {
         "raw": "Raw",
         "conservative": "Cons.",
+        "conservative_v2": "Cons.V2",
         "trend_regime_v2": "Trend",
+        "trend_regime_v2_asym": "TrendV2",
         "hb1": "HB1",
-        # New blends added 2026-04-25
         "rb1": "RB1",
         "b_average": "B-Avg",
-        "a_max_up_min_down": "A-MUMD",
+        "a_max_up_min_down": "MaxTr",   # Max of Trend
+        # CDH comparison variants (2026-05-03):
+        "c_dh_directional":      "MUMD",
+        "c_dh_consensus_follow": "C-or-F",
+        "c_dh_agree_15pp":       "Agr15",
     }
 
     # Build returns data organized by portfolio -> variant

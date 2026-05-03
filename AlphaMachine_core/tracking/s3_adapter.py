@@ -272,6 +272,10 @@ class S3DataLoader:
             "rb1": "models/regime_blend/allocation_history.csv",
             "b_average": "models/b_average_blend/allocation_history.csv",
             "a_max_up_min_down": "models/a_max_up_min_down_blend/allocation_history.csv",
+            # CDH comparison variants (added 2026-05-03)
+            "c_dh_directional":      "models/c_dh_directional/allocation_history.csv",
+            "c_dh_consensus_follow": "models/c_dh_consensus_follow/allocation_history.csv",
+            "c_dh_agree_15pp":       "models/c_dh_agree_15pp/allocation_history.csv",
         }
 
         if model not in model_paths:

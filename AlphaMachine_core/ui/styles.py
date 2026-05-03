@@ -56,6 +56,14 @@ VARIANT_COLORS = {
     "conservative_v2": "#059669",
     "trend_regime_v2": "#dc2626",
     "trend_regime_v2_asym": "#ea580c",
+    "hb1": "#fbbf24",
+    "rb1": "#A48E5F",
+    "b_average": "#94a3b8",
+    "a_max_up_min_down": "#3b82f6",       # production C_DH (Max of Trend) — blue
+    # CDH comparison variants (added 2026-05-03):
+    "c_dh_directional":      "#10b981",   # emerald
+    "c_dh_consensus_follow": "#a855f7",   # purple
+    "c_dh_agree_15pp":       "#f97316",   # orange
     "spy": "#f59e0b",
 }
 
@@ -388,6 +396,13 @@ def get_variant_display_name(variant: str) -> str:
         "trend_regime_v2": "Trend V1",
         "trend_regime_v2_asym": "Trend V2",
         "hb1": "Hysteresis Blend V1",
+        "rb1": "Regime Blend V1",
+        "b_average": "B-Average (TV1+TV2A mean)",
+        "a_max_up_min_down": "Max of Trend",
+        # CDH comparison variants (added 2026-05-03):
+        "c_dh_directional":      "Max-Up / Min-Down (directional)",
+        "c_dh_consensus_follow": "Consensus or Follow",
+        "c_dh_agree_15pp":       "Agree 15pp",
         "spy": "SPY Benchmark",
     }
     return names.get(variant, variant.replace("_", " ").title())
