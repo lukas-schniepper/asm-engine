@@ -771,7 +771,11 @@ class OverlayAdapter:
 
         if model == "hb1":
             return _f("cv1a_target"), _f("active_alloc")
-        if model in ("rb1", "b_average", "a_max_up_min_down"):
+        if model in ("rb1", "b_average", "a_max_up_min_down",
+                      "c_dh_directional", "c_dh_consensus_follow", "c_dh_agree_15pp"):
+            # Stateless or stateful blends with no separate target column:
+            # active_alloc is what got executed and what the rule output is
+            # by design (no rebalance threshold on top).
             actual = _f("active_alloc")
             return actual, actual
         # Base models (CV1, CV1A, TV1, TV2A): real target/actual split via rebalance threshold
@@ -790,7 +794,8 @@ class OverlayAdapter:
             target (raw rule signal before threshold filtering / mirror logic),
             which the tracker uses to populate OverlaySignal.target_allocation
             separately from .actual_allocation. For models where target ≡ actual
-            (RB1, B_AVERAGE, A_MAX_UP_MIN_DOWN) the values are identical.
+            (RB1, B_AVERAGE, A_MAX_UP_MIN_DOWN, c_dh_directional,
+            c_dh_consensus_follow, c_dh_agree_15pp) the values are identical.
         """
         history = self._load_allocation_history(model)
         if history is None:

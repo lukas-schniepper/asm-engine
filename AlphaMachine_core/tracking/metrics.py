@@ -257,13 +257,18 @@ def calculate_sortino_ratio(
 
     mean_excess = excess_returns.mean()
 
-    # Downside deviation (only negative returns)
-    negative_returns = excess_returns[excess_returns < 0]
-    if len(negative_returns) < 1:
-        # No downside - return large positive ratio
+    # Standard Sortino downside deviation (semi-deviation):
+    #   sqrt( mean( min(0, r - MAR)^2 ) )
+    # Note: the mean is over the FULL sample, not just the negative-return subset.
+    # The previous version restricted to negatives THEN took mean — that's a
+    # biased denominator that can produce Sortino < Sharpe on dispersed-loss
+    # strategies. Fixed 2026-05-03 per sr-quant review.
+    neg_dev = np.minimum(0.0, excess_returns.values)
+    if (neg_dev != 0).sum() < 1:
+        # No downside — return large positive ratio (consistent with prior behaviour)
         return float(mean_excess * TRADING_DAYS_PER_YEAR * 100) if annualize else float(mean_excess * 100)
 
-    downside_std = np.sqrt((negative_returns ** 2).mean())
+    downside_std = float(np.sqrt((neg_dev ** 2).mean()))
 
     if downside_std == 0 or np.isnan(downside_std):
         return 0.0
