@@ -232,33 +232,6 @@ def calculate_sharpe_ratio(
     return float(sharpe)
 
 
-def _sortino_local_gips(
-    returns: pd.Series,
-    risk_free_rate: float,
-    periods_per_year: int,
-    no_downside_value: float = 0.0,
-) -> float:
-    """Local GIPS-aligned Sortino — used when the asm-data submodule is not
-    available (e.g. deploy without GH_PAT for the private submodule).
-
-    Mirrors `shared/data/src/utils/quant_metrics.calculate_sortino`:
-    semi-dev = sqrt(mean(min(0, r - daily_mar)**2)) over the FULL sample,
-    annualized by sqrt(periods_per_year). Returns annualized Sortino.
-    """
-    r = np.asarray(returns, dtype=float)
-    r = r[~np.isnan(r)]
-    if len(r) < 2:
-        return 0.0
-    daily_mar = (1.0 + risk_free_rate) ** (1.0 / periods_per_year) - 1.0
-    excess = r - daily_mar
-    downside = np.minimum(0.0, excess)
-    semi_dev = float(np.sqrt(np.mean(downside ** 2))) * np.sqrt(periods_per_year)
-    if semi_dev == 0:
-        return float(no_downside_value)
-    ann_excess = float(np.mean(excess) * periods_per_year)
-    return ann_excess / semi_dev
-
-
 def calculate_sortino_ratio(
     returns: pd.Series,
     risk_free_rate: float = 0.0,
@@ -267,33 +240,18 @@ def calculate_sortino_ratio(
     """
     Calculate Sortino Ratio — annualized, GIPS-aligned semi-deviation.
 
-    Prefers the canonical helper in `shared/data/src/utils/quant_metrics.py`
-    (asm-data submodule) so asm-models / asm-engine / asm-website all share
-    one implementation. Falls back to an inline GIPS calculation when the
-    submodule is not checked out (e.g. deploy environments without a GH_PAT
-    for the private submodule), so the Performance Tracker keeps rendering
-    instead of crashing with `No module named 'shared'`.
+    Thin wrapper around the vendored canonical helper in
+    `_canonical_metrics.py` (a byte-equivalent copy of asm-data's
+    `quant_metrics.py`). The file is vendored rather than imported from
+    the submodule because Streamlit Cloud cannot clone the private
+    asm-data repo at deploy time.
     """
     if len(returns) < 2:
         return 0.0
 
-    # Lazy-import: lets this module load even if asm-data isn't checked out.
-    try:
-        from shared.data.src.utils.quant_metrics import calculate_sortino as _qm_sortino
-    except ImportError:
-        logger.warning(
-            "asm-data submodule not available — using local GIPS Sortino fallback. "
-            "To restore the canonical implementation, run `git submodule update --init --recursive` "
-            "(or configure GH_PAT in the deploy environment)."
-        )
-        return _sortino_local_gips(
-            returns,
-            risk_free_rate=risk_free_rate,
-            periods_per_year=TRADING_DAYS_PER_YEAR if annualize else 1,
-        )
+    from ._canonical_metrics import calculate_sortino as _qm_sortino
 
     if not annualize:
-        # Daily-equivalent Sortino — divide the annualized result back.
         return _qm_sortino(returns, mar=risk_free_rate, no_downside_value=0.0) / np.sqrt(TRADING_DAYS_PER_YEAR)
     return _qm_sortino(returns, mar=risk_free_rate, no_downside_value=0.0)
 
