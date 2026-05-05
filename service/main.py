@@ -16,7 +16,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import close_pool, get_pool
-from .routes import backtest, dq, health, jobs, optimize, ping, sortino
+from .routes import backtest, dq, health, jobs, kpi, optimize, ping, sortino
 
 
 @asynccontextmanager
@@ -58,6 +58,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(ping.router)
 app.include_router(sortino.router)
+app.include_router(kpi.router)
 app.include_router(backtest.router)
 app.include_router(optimize.router)
 app.include_router(dq.router)
