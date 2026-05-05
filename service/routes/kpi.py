@@ -314,8 +314,11 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
 
     # Build display series: NAV indexed to 100 at first observation, plus
     # drawdown (peak-to-trough percentage from running max). Used by the
-    # portal's equity-curve and underwater charts.
-    nav_series_arr = (1.0 + inception_returns.to_numpy()).cumprod() * 100.0
+    # portal's equity-curve and underwater charts. Also expose the raw
+    # daily_return array — needed by the Scraper View page for its
+    # spreadsheet-style daily-returns grid.
+    daily_returns_arr = inception_returns.to_numpy()
+    nav_series_arr = (1.0 + daily_returns_arr).cumprod() * 100.0
     nav_indexed_first = 100.0  # implicit baseline before the first compounded day
     nav_full = np.concatenate([[nav_indexed_first], nav_series_arr])
     peaks = np.maximum.accumulate(nav_full)
@@ -324,6 +327,7 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
     # matches the return series exactly).
     nav_indexed = nav_full[1:].tolist()
     drawdown_pct = drawdown_pct_full[1:].tolist()
+    daily_returns_list = daily_returns_arr.tolist()
     dates = [d.date().isoformat() for d in inception_returns.index]
 
     # Risk metrics vs SPY (relational metrics — beta/alpha/IR/TE/VaR/CVaR).
@@ -348,6 +352,7 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
             "dates": dates,
             "navIndexed": nav_indexed,
             "drawdownPct": drawdown_pct,
+            "dailyReturn": daily_returns_list,
         },
         "vsBenchmark": vs_benchmark,
         "vsBenchmarkKpis": benchmark_kpis,
