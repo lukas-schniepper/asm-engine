@@ -181,15 +181,19 @@ st.markdown(
 )
 
 # -----------------------------------------------------------------------------
-# 2a) Host gate — block direct *.streamlit.app access; force CF Access tunnel
+# 2a) Cloudflare Access gate — block direct *.streamlit.app access
 # -----------------------------------------------------------------------------
 # Defense in depth: the primary auth is Cloudflare Access on
-# engine.veloriscapital.com. This check stops casual visitors who discover the
-# raw streamlit.app URL from seeing the password prompt at all.
+# engine.veloriscapital.com. CF Access stamps every authenticated request
+# with Cf-Access-Authenticated-User-Email; direct hits to streamlit.app
+# don't have it, so this check stops casual visitors before the password
+# prompt is even shown. APP_PW gate runs as the second layer below.
 try:
-    _hdr = st.context.headers
-    _host = (_hdr.get("X-Forwarded-Host") or _hdr.get("Host") or "").lower()
-    if "veloriscapital.com" not in _host:
+    _hdr = {k.lower(): v for k, v in st.context.headers.items()}
+    _via_access = bool(_hdr.get("cf-access-authenticated-user-email"))
+    _xfh = (_hdr.get("x-forwarded-host") or "").lower()
+    _via_tunnel = _via_access or "veloriscapital.com" in _xfh
+    if not _via_tunnel:
         st.error("🚫 Access denied. Please use https://engine.veloriscapital.com")
         st.stop()
 except Exception:
