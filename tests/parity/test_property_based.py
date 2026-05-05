@@ -71,13 +71,18 @@ def test_volatility_non_negative(arr) -> None:
 
 @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(arr=arrays(np.float64, st.integers(min_value=20, max_value=2000), elements=RETURN_ELEMENT))
-def test_semi_dev_leq_vol(arr) -> None:
-    """Semi-deviation must always be <= total volatility for MAR=0 with
-    daily mean approximately 0. Tolerance 1e-9 absorbs float noise."""
+def test_semi_dev_bounded(arr) -> None:
+    """Semi-deviation is non-negative and finite. The "semi <= vol" bound
+    that the canonical docstring claims "by construction" only holds when
+    E[r] ≈ MAR — see test_semi_deviation_bounded in
+    test_canonical_invariants.py for the explanation. Property fuzzing
+    routinely generates series with E[r] far from 0, where the inequality
+    fails. The bound on Sortino vs Sharpe still holds; just not on the
+    raw denominators."""
     s = pd.Series(arr)
-    vol = calculate_volatility(s)
     semi = downside_semi_deviation(s)
-    assert semi <= vol + 1e-9, f"semi {semi} > vol {vol}"
+    assert math.isfinite(semi), f"semi non-finite: {semi}"
+    assert semi >= 0.0, f"semi negative: {semi}"
 
 
 @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])

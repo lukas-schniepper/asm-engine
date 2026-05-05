@@ -75,19 +75,22 @@ def test_volatility_non_negative(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", list(REGIMES.keys()))
-def test_semi_deviation_le_volatility(name: str) -> None:
-    """Semi-deviation must always be <= total volatility (semi is the
-    sqrt of mean of squared *negative* deviations only; total vol is sqrt
-    of mean of squared deviations including positives)."""
-    r = REGIMES[name]()
-    vol = calculate_volatility(r)
-    # downside_semi_deviation returns annualized; calculate_volatility
-    # returns annualized — same units.
-    semi = downside_semi_deviation(r)
+def test_semi_deviation_bounded(name: str) -> None:
+    """Semi-deviation is non-negative and finite. The naive "semi <= vol"
+    inequality (which the canonical docstring claims "by construction")
+    only holds when E[r] is close to the MAR. When the mean of returns is
+    far from MAR — e.g. the synthetic-full-drawdown regime where every
+    day is around -1.5% — semi-dev (RMS from MAR=0) can exceed
+    volatility (std around the negative mean). Both quantities are still
+    valid; the relationship between them is just not the simple bound
+    the docstring suggests.
 
-    # When MAR=0, semi <= vol when daily mean is approximately 0.
-    # Strict inequality `semi <= vol` holds modulo tiny float noise.
-    assert semi <= vol + 1e-9, f"Semi {semi} > Vol {vol} on {name}"
+    See `docs/numerical-stability-2026.md` F-note when this is added.
+    """
+    r = REGIMES[name]()
+    semi = downside_semi_deviation(r)
+    assert math.isfinite(semi), f"semi non-finite on {name}"
+    assert semi >= 0.0, f"semi negative on {name}: {semi}"
 
 
 # ---------------------------------------------------------------------------
