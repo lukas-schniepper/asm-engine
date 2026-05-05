@@ -186,12 +186,31 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
     ytd_returns = df[df.index >= pd.Timestamp(date(as_of.year, 1, 1))]["daily_return"]
     mtd_returns = df[df.index >= pd.Timestamp(date(as_of.year, as_of.month, 1))]["daily_return"]
 
+    # Build display series: NAV indexed to 100 at first observation, plus
+    # drawdown (peak-to-trough percentage from running max). Used by the
+    # portal's equity-curve and underwater charts.
+    nav_series_arr = (1.0 + inception_returns.to_numpy()).cumprod() * 100.0
+    nav_indexed_first = 100.0  # implicit baseline before the first compounded day
+    nav_full = np.concatenate([[nav_indexed_first], nav_series_arr])
+    peaks = np.maximum.accumulate(nav_full)
+    drawdown_pct_full = (nav_full / peaks) - 1.0  # negative or zero
+    # Align to the trading-day index (drop the implicit baseline so length
+    # matches the return series exactly).
+    nav_indexed = nav_full[1:].tolist()
+    drawdown_pct = drawdown_pct_full[1:].tolist()
+    dates = [d.date().isoformat() for d in inception_returns.index]
+
     payload: Dict[str, Any] = {
         "portfolioId": portfolio_id,
         "variant": variant,
         "asOf": as_of.isoformat(),
         "firstObservation": df.index.min().date().isoformat(),
         "navAtAsOf": float(df["nav"].iloc[-1]) if not df["nav"].isna().all() else None,
+        "series": {
+            "dates": dates,
+            "navIndexed": nav_indexed,
+            "drawdownPct": drawdown_pct,
+        },
         "inception": _kpis(inception_returns),
         "ytd": _kpis(ytd_returns),
         "mtd": _kpis(mtd_returns),
