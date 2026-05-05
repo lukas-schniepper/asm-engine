@@ -9,6 +9,7 @@ on:
       - 'service/**'
       - 'AlphaMachine_core/**'
       - 'shared/**'
+      - 'tests/parity/**'
       - 'service/requirements.txt'
       - 'railway.json'
       - 'Procfile'
@@ -18,7 +19,9 @@ on:
       - 'service/**'
       - 'AlphaMachine_core/**'
       - 'shared/**'
+      - 'tests/parity/**'
       - 'service/requirements.txt'
+  workflow_dispatch:
 
 jobs:
   test:
