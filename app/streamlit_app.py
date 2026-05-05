@@ -181,27 +181,13 @@ st.markdown(
 )
 
 # -----------------------------------------------------------------------------
-# 2a) Cloudflare Access gate — block direct *.streamlit.app access
+# 2) Passwort-Gate (defense in depth alongside Cloudflare Access)
 # -----------------------------------------------------------------------------
-# Defense in depth: the primary auth is Cloudflare Access on
-# engine.veloriscapital.com. CF Access stamps every authenticated request
-# with Cf-Access-Authenticated-User-Email; direct hits to streamlit.app
-# don't have it, so this check stops casual visitors before the password
-# prompt is even shown. APP_PW gate runs as the second layer below.
-try:
-    _hdr = {k.lower(): v for k, v in st.context.headers.items()}
-    _via_access = bool(_hdr.get("cf-access-authenticated-user-email"))
-    _xfh = (_hdr.get("x-forwarded-host") or "").lower()
-    _via_tunnel = _via_access or "veloriscapital.com" in _xfh
-    if not _via_tunnel:
-        st.error("🚫 Access denied. Please use https://engine.veloriscapital.com")
-        st.stop()
-except Exception:
-    # Older Streamlit (no st.context.headers) — fall through to APP_PW gate
-    pass
-
-# -----------------------------------------------------------------------------
-# 2b) Passwort-Gate (kept as defense in depth alongside Cloudflare Access)
+# Primary defense: Cloudflare Access on engine.veloriscapital.com (per-user
+# OTP auth, audit log, revocable). The APP_PW gate below is the second layer
+# that protects the *.streamlit.app URL against casual visitors who somehow
+# discover it. A Streamlit-level host check was tried but Streamlit Cloud
+# strips Cf-Access-* headers before they reach the app, so it isn't usable.
 # -----------------------------------------------------------------------------
 pwd = st.sidebar.text_input("Passwort", type="password")
 if pwd != st.secrets.get("APP_PW", ""):
