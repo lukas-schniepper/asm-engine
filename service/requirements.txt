@@ -17,3 +17,11 @@ pandas==2.2.3
 
 # Stats / scientific (used by _canonical_metrics + Phase 3+ engines)
 scipy==1.14.1
+
+# AlphaMachine_core.tracking package init eagerly imports models.py which
+# uses sqlmodel. The vendored canonical metrics helper itself only needs
+# numpy/pandas, but Python's package import system runs __init__.py before
+# the submodule, so we need sqlmodel + SQLAlchemy on the install path even
+# though the service code never queries via sqlmodel (it uses asyncpg).
+sqlmodel==0.0.22
+sqlalchemy==2.0.36

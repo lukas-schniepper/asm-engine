@@ -36,44 +36,53 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install service deps
+      - name: Install service + test deps
         run: |
           python -m pip install --upgrade pip
           pip install -r service/requirements.txt
+          pip install pytest hypothesis pyarrow
 
       - name: Syntax check all service modules
         run: |
           python -m compileall -q service
 
+      # Dummy DATABASE_URL — AlphaMachine_core/config.py raises at import time
+      # if it's missing. The parity tests don't actually connect; SQLAlchemy
+      # engine creation is lazy. Production envs (Railway) set the real URL.
       - name: Import smoke test
         env:
           ASM_SERVICE_RUNTIME: ""
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?sslmode=disable"
         run: |
           python -c "from service import config, auth, db, lineage, heartbeat, callback, models; \
-                     from service.routes import health, ping, sortino, backtest, optimize, dq, jobs; \
+                     from service.routes import health, ping, sortino, backtest, optimize, dq, jobs, kpi; \
                      print('OK')"
 
       - name: Verify canonical Sortino import path
+        env:
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?sslmode=disable"
         run: |
           python -c "from AlphaMachine_core.tracking._canonical_metrics import calculate_sortino; \
                      import pandas as pd; \
                      r = calculate_sortino(pd.Series([0.01, -0.02, 0.03])); \
                      print('canonical Sortino OK:', r)"
 
-      - name: Install parity test deps
-        run: |
-          pip install pytest hypothesis pyarrow
-
       - name: Parity — regime invariants
+        env:
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?sslmode=disable"
         run: |
           pytest tests/parity/test_canonical_invariants.py -v --tb=short
 
       - name: Parity — property-based fuzz (100 examples)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?sslmode=disable"
         run: |
           pytest tests/parity/test_property_based.py -v --tb=short
 
       - name: Parity — property-based fuzz (release profile, 1000 examples)
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci?sslmode=disable"
         run: |
           pytest tests/parity/test_property_based.py -v --tb=short --hypothesis-profile=release
