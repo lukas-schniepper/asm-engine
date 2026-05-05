@@ -40,7 +40,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r service/requirements.txt
-          pip install pytest hypothesis pyarrow
+          # Test-only deps. psycopg2-binary is needed because the legacy
+          # AlphaMachine_core/db.py runs SQLAlchemy create_engine() at import
+          # time (loaded transitively when we import _canonical_metrics).
+          # Production has it via Nixpacks pulling root requirements.txt;
+          # service runtime itself uses asyncpg, not psycopg2.
+          pip install pytest hypothesis pyarrow psycopg2-binary
 
       - name: Syntax check all service modules
         run: |
