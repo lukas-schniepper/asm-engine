@@ -131,6 +131,43 @@ SPY_VARIANT = "raw"
 MIN_ALIGNED_DAYS = 30
 
 
+async def _compute_benchmark_kpis_aligned(
+    pool, primary_df: pd.DataFrame, as_of: date,
+) -> Optional[Dict[str, Any]]:
+    """SPY KPIs computed over the SAME window as the primary portfolio.
+
+    Returns { mtd, ytd, inception } where each is the canonical KPI bundle
+    on SPY's daily_return restricted to the primary's date span. Result is
+    None when no SPY data overlaps the primary's window.
+    """
+    spy_rows = await _fetch_nav(
+        pool, SPY_PORTFOLIO_ID, SPY_VARIANT,
+        start=primary_df.index.min().date(), end=as_of,
+    )
+    if not spy_rows:
+        return None
+    spy_df = pd.DataFrame(spy_rows)
+    spy_df["trade_date"] = pd.to_datetime(spy_df["trade_date"])
+    spy_df["daily_return"] = spy_df["daily_return"].astype(float)
+    spy_df = spy_df.set_index("trade_date").sort_index()
+    spy_df = spy_df[spy_df.index <= pd.Timestamp(as_of)]
+    if spy_df.empty:
+        return None
+
+    spy_inception = spy_df["daily_return"]
+    spy_ytd = spy_df[spy_df.index >= pd.Timestamp(date(as_of.year, 1, 1))]["daily_return"]
+    spy_mtd = spy_df[spy_df.index >= pd.Timestamp(date(as_of.year, as_of.month, 1))]["daily_return"]
+
+    return {
+        "mtd": _kpis(spy_mtd),
+        "ytd": _kpis(spy_ytd),
+        "inception": _kpis(spy_inception),
+        "alignedTo": "primary_window",
+        "windowStart": primary_df.index.min().date().isoformat(),
+        "windowEnd": as_of.isoformat(),
+    }
+
+
 async def _compute_vs_spy(pool, primary_df: pd.DataFrame, as_of: date) -> Optional[Dict[str, Any]]:
     """Compute risk metrics vs SPY using empirical (historical) statistics.
 
@@ -295,6 +332,12 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
     # benchmark. Hide the block when fewer than 30 aligned trading days.
     vs_benchmark = await _compute_vs_spy(pool, df, as_of)
 
+    # SPY KPI bundle computed over THE SAME WINDOW as the primary so the
+    # operator can compare apples-to-apples. SPY's "Inception" here means
+    # "SPY since OUR portfolio's first observation", not SPY's own 2019+
+    # inception. MTD/YTD already align by definition (same calendar month/year).
+    benchmark_kpis = await _compute_benchmark_kpis_aligned(pool, df, as_of)
+
     payload: Dict[str, Any] = {
         "portfolioId": portfolio_id,
         "variant": variant,
@@ -307,6 +350,7 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
             "drawdownPct": drawdown_pct,
         },
         "vsBenchmark": vs_benchmark,
+        "vsBenchmarkKpis": benchmark_kpis,
         "inception": _kpis(inception_returns),
         "ytd": _kpis(ytd_returns),
         "mtd": _kpis(mtd_returns),
