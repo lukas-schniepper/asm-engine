@@ -14,8 +14,11 @@ from typing import Any, Dict
 from .config import settings
 
 # Default policy version — bump when the calculation policy changes.
-# Format: "<methodology>+<config>+<cutoff>"
-DEFAULT_POLICY_VERSION = "twr-v1+sortino-mar0+ny-1600"
+# Format: "<methodology>+<config>+<cutoff>+<cagr-basis>"
+# v2 (2026-05-05): CAGR uses GIPS-strict calendar days / 365.25 instead of
+# the canonical helper's trading-days / 252 default. Required for strict
+# GIPS 2020 II.5.A.4 compliance on annualized returns.
+DEFAULT_POLICY_VERSION = "twr-v1+sortino-mar0+ny-1600+cagr-365.25"
 
 
 @dataclass(frozen=True)

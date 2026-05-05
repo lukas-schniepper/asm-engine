@@ -42,12 +42,45 @@ def _cache_key(portfolio_id: int, variant: str, as_of: date) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _gips_cagr(returns: pd.Series, total_return: float) -> float:
+    """GIPS-strict annualized return.
+
+    GIPS 2020 II.5.A.4: annualize using calendar days / 365.25, NOT trading
+    days / 252. Calendar-day basis matches how investors experience
+    compounding (you wait wall-clock time, not just trading time).
+
+    The canonical helper uses len(returns)/252 — fine for vol/Sharpe/Sortino
+    annualization (annualizing variance over the active-trading window) but
+    wrong for return-rate annualization. We override CAGR/Calmar at the
+    service layer accordingly.
+    """
+    if len(returns) < 2:
+        return 0.0
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        # Fallback to canonical's trading-day basis if no date index.
+        from AlphaMachine_core.tracking._canonical_metrics import calculate_cagr as _c
+        return float(_c(returns))
+    start = returns.index.min()
+    end = returns.index.max()
+    days = (end - start).days
+    if days <= 0:
+        return 0.0
+    n_years = days / 365.25
+    if 1.0 + total_return <= 0:
+        return float("nan")
+    return float((1.0 + total_return) ** (1.0 / n_years) - 1.0)
+
+
 def _kpis(returns: pd.Series) -> Dict[str, float]:
-    """Compute the standard KPI bundle for a daily-return series."""
+    """Compute the standard KPI bundle for a daily-return series.
+
+    CAGR and Calmar use GIPS-strict calendar-day annualization
+    (calendar_days / 365.25). All other annualized stats (vol, Sharpe,
+    Sortino) use the canonical sqrt(252) — that's annualizing variance,
+    not time, and is correct on the trading-day basis.
+    """
     from AlphaMachine_core.tracking._canonical_metrics import (
         TRADING_DAYS_PER_YEAR,
-        calculate_cagr,
-        calculate_calmar,
         calculate_max_drawdown,
         calculate_sharpe,
         calculate_sortino,
@@ -68,22 +101,28 @@ def _kpis(returns: pd.Series) -> Dict[str, float]:
             "volatility": 0.0,
             "ulcer_index": 0.0,
             "semi_deviation": 0.0,
+            "trading_days_per_year": int(TRADING_DAYS_PER_YEAR),
+            "annualization_basis": "gips-365.25",
         }
 
     total_return = float(np.prod(1.0 + returns.to_numpy()) - 1.0)
+    cagr = _gips_cagr(returns, total_return)
+    mdd = float(calculate_max_drawdown(returns))
+    calmar = (cagr / abs(mdd)) if (mdd < 0 and np.isfinite(cagr)) else 0.0
 
     return {
         "n_observations": int(len(returns)),
         "total_return": total_return,
-        "cagr": float(calculate_cagr(returns)),
+        "cagr": cagr,
         "sharpe": float(calculate_sharpe(returns)),
         "sortino": float(calculate_sortino(returns, no_downside_value=0.0)),
-        "max_drawdown": float(calculate_max_drawdown(returns)),
-        "calmar": float(calculate_calmar(returns)),
+        "max_drawdown": mdd,
+        "calmar": calmar,
         "volatility": float(calculate_volatility(returns)),
         "ulcer_index": float(calculate_ulcer_index(returns)),
         "semi_deviation": float(downside_semi_deviation(returns)),
         "trading_days_per_year": int(TRADING_DAYS_PER_YEAR),
+        "annualization_basis": "gips-365.25",
     }
 
 
