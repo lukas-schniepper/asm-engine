@@ -59,3 +59,21 @@ jobs:
                      import pandas as pd; \
                      r = calculate_sortino(pd.Series([0.01, -0.02, 0.03])); \
                      print('canonical Sortino OK:', r)"
+
+      - name: Install parity test deps
+        run: |
+          pip install pytest hypothesis pyarrow
+
+      - name: Parity — regime invariants
+        run: |
+          pytest tests/parity/test_canonical_invariants.py -v --tb=short
+
+      - name: Parity — property-based fuzz (100 examples)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          pytest tests/parity/test_property_based.py -v --tb=short
+
+      - name: Parity — property-based fuzz (release profile, 1000 examples)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          pytest tests/parity/test_property_based.py -v --tb=short --hypothesis-profile=release
