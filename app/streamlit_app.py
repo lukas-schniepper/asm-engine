@@ -181,7 +181,23 @@ st.markdown(
 )
 
 # -----------------------------------------------------------------------------
-# 2) Passwort-Gate
+# 2a) Host gate — block direct *.streamlit.app access; force CF Access tunnel
+# -----------------------------------------------------------------------------
+# Defense in depth: the primary auth is Cloudflare Access on
+# engine.veloriscapital.com. This check stops casual visitors who discover the
+# raw streamlit.app URL from seeing the password prompt at all.
+try:
+    _hdr = st.context.headers
+    _host = (_hdr.get("X-Forwarded-Host") or _hdr.get("Host") or "").lower()
+    if "veloriscapital.com" not in _host:
+        st.error("🚫 Access denied. Please use https://engine.veloriscapital.com")
+        st.stop()
+except Exception:
+    # Older Streamlit (no st.context.headers) — fall through to APP_PW gate
+    pass
+
+# -----------------------------------------------------------------------------
+# 2b) Passwort-Gate (kept as defense in depth alongside Cloudflare Access)
 # -----------------------------------------------------------------------------
 pwd = st.sidebar.text_input("Passwort", type="password")
 if pwd != st.secrets.get("APP_PW", ""):
