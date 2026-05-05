@@ -1,0 +1,61 @@
+name: service-test
+
+# Path-filtered: only run when service or canonical-engine code changes.
+# Streamlit-only edits (app/, AlphaMachine_core/ui/) do NOT trigger this.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'service/**'
+      - 'AlphaMachine_core/**'
+      - 'shared/**'
+      - 'service/requirements.txt'
+      - 'railway.json'
+      - 'Procfile'
+      - '.github/workflows/service-test.yml'
+  pull_request:
+    paths:
+      - 'service/**'
+      - 'AlphaMachine_core/**'
+      - 'shared/**'
+      - 'service/requirements.txt'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install service deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r service/requirements.txt
+
+      - name: Syntax check all service modules
+        run: |
+          python -m compileall -q service
+
+      - name: Import smoke test
+        env:
+          ASM_SERVICE_RUNTIME: ""
+        run: |
+          python -c "from service import config, auth, db, lineage, heartbeat, callback, models; \
+                     from service.routes import health, ping, sortino, backtest, optimize, dq, jobs; \
+                     print('OK')"
+
+      - name: Verify canonical Sortino import path
+        run: |
+          python -c "from AlphaMachine_core.tracking._canonical_metrics import calculate_sortino; \
+                     import pandas as pd; \
+                     r = calculate_sortino(pd.Series([0.01, -0.02, 0.03])); \
+                     print('canonical Sortino OK:', r)"

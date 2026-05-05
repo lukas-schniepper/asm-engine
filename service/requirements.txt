@@ -1,0 +1,19 @@
+# Self-contained deps for the FastAPI compute service on Railway.
+# Streamlit Cloud has its own requirements.txt at repo root for the
+# operator UI; this file is independent and lighter.
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+httpx==0.28.1
+
+# Async Postgres (direct connection, port 5432)
+asyncpg==0.30.0
+
+# Canonical engine deps — required for AlphaMachine_core imports
+numpy==2.2.5
+pandas==2.2.3
+
+# Stats / scientific (used by _canonical_metrics + Phase 3+ engines)
+scipy==1.14.1
