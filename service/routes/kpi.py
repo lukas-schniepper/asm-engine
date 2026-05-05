@@ -126,6 +126,95 @@ def _kpis(returns: pd.Series) -> Dict[str, float]:
     }
 
 
+SPY_PORTFOLIO_ID = 20
+SPY_VARIANT = "raw"
+MIN_ALIGNED_DAYS = 30
+
+
+async def _compute_vs_spy(pool, primary_df: pd.DataFrame, as_of: date) -> Optional[Dict[str, Any]]:
+    """Compute risk metrics vs SPY using empirical (historical) statistics.
+
+    Returns None if the SPY series is unavailable or the aligned window is
+    shorter than MIN_ALIGNED_DAYS. The aligned window is the intersection
+    of (primary, SPY) trading dates — strict join, no fill.
+    """
+    spy_rows = await _fetch_nav(
+        pool, SPY_PORTFOLIO_ID, SPY_VARIANT,
+        start=primary_df.index.min().date(), end=as_of,
+    )
+    if not spy_rows:
+        return None
+    spy_df = pd.DataFrame(spy_rows)
+    spy_df["trade_date"] = pd.to_datetime(spy_df["trade_date"])
+    spy_df["daily_return"] = spy_df["daily_return"].astype(float)
+    spy_df = spy_df.set_index("trade_date").sort_index()
+
+    # Inner-join on dates (intersection)
+    aligned = primary_df.join(spy_df, how="inner", lsuffix="_p", rsuffix="_b")
+    aligned = aligned.dropna(subset=["daily_return_p", "daily_return_b"])
+
+    if len(aligned) < MIN_ALIGNED_DAYS:
+        return {
+            "available": False,
+            "reason": f"insufficient_aligned_days ({len(aligned)} < {MIN_ALIGNED_DAYS})",
+            "alignedWindow": {
+                "start": aligned.index.min().date().isoformat() if len(aligned) else None,
+                "end": aligned.index.max().date().isoformat() if len(aligned) else None,
+                "n": int(len(aligned)),
+            },
+        }
+
+    r_p = aligned["daily_return_p"].to_numpy()
+    r_b = aligned["daily_return_b"].to_numpy()
+
+    var_b = float(np.var(r_b, ddof=1))
+    cov_pb = float(np.cov(r_p, r_b, ddof=1)[0, 1])
+    beta = cov_pb / var_b if var_b > 0 else float("nan")
+
+    daily_alpha = float(np.mean(r_p) - beta * np.mean(r_b))
+    alpha_ann = daily_alpha * 252  # arithmetic annualization is conventional for alpha
+
+    excess = r_p - r_b
+    te = float(np.std(excess, ddof=1) * np.sqrt(252))
+    info_ratio = (float(np.mean(excess)) * 252) / te if te > 0 else float("nan")
+
+    # Empirical VaR-95 / CVaR-95 on PRIMARY daily returns (not excess).
+    # Convention: returned as negative numbers (losses).
+    var95 = float(np.percentile(r_p, 5))
+    tail = r_p[r_p <= var95]
+    cvar95 = float(np.mean(tail)) if len(tail) > 0 else var95
+
+    # Up/down capture: ratio of avg returns on days SPY was up vs down.
+    up_mask = r_b > 0
+    down_mask = r_b < 0
+    up_capture = (
+        float(np.mean(r_p[up_mask]) / np.mean(r_b[up_mask]))
+        if up_mask.sum() > 1 and np.mean(r_b[up_mask]) != 0 else float("nan")
+    )
+    down_capture = (
+        float(np.mean(r_p[down_mask]) / np.mean(r_b[down_mask]))
+        if down_mask.sum() > 1 and np.mean(r_b[down_mask]) != 0 else float("nan")
+    )
+
+    return {
+        "available": True,
+        "beta": beta,
+        "alpha_annual": alpha_ann,
+        "info_ratio": info_ratio,
+        "tracking_error_annual": te,
+        "var_95": var95,    # daily, negative
+        "cvar_95": cvar95,  # daily, negative
+        "up_capture": up_capture,
+        "down_capture": down_capture,
+        "alignedWindow": {
+            "start": aligned.index.min().date().isoformat(),
+            "end": aligned.index.max().date().isoformat(),
+            "n": int(len(aligned)),
+        },
+        "method": "empirical",  # not Gaussian — fat-tail safe
+    }
+
+
 async def _fetch_nav(
     pool, portfolio_id: int, variant: str, start: Optional[date] = None, end: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
@@ -200,6 +289,12 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
     drawdown_pct = drawdown_pct_full[1:].tolist()
     dates = [d.date().isoformat() for d in inception_returns.index]
 
+    # Risk metrics vs SPY (relational metrics — beta/alpha/IR/TE/VaR/CVaR).
+    # Per the senior-quant review: empirical (historical) — Gaussian VaR
+    # systematically understates fat-tail risk. SPY is fixed as the Veloris
+    # benchmark. Hide the block when fewer than 30 aligned trading days.
+    vs_benchmark = await _compute_vs_spy(pool, df, as_of)
+
     payload: Dict[str, Any] = {
         "portfolioId": portfolio_id,
         "variant": variant,
@@ -211,6 +306,7 @@ async def kpi_single(req: JobRequest) -> Dict[str, Any]:
             "navIndexed": nav_indexed,
             "drawdownPct": drawdown_pct,
         },
+        "vsBenchmark": vs_benchmark,
         "inception": _kpis(inception_returns),
         "ytd": _kpis(ytd_returns),
         "mtd": _kpis(mtd_returns),
